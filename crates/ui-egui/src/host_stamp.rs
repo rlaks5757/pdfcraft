@@ -11,6 +11,14 @@ use crate::{PdfCraftApp, QuickTool, stamps_ui::MAX_STAMP_BYTES};
 const MAX_SIDE_PT: f64 = 5000.0;
 const MAX_META_BYTES: usize = 64 << 10;
 const MAX_ID_BYTES: usize = 200;
+/// PNG pixel limits. The server draws at most 3 px per point, so a 14400 pt page side is 43200 px
+/// at the very most, but a stamp is a signature or a label: 8192 px a side and 16 Mpx in all
+/// (64 MB decoded as RGBA) stop a small file that expands to gigabytes without limiting real stamps.
+const MAX_SIDE_PX: u32 = 8192;
+const MAX_PIXELS: u64 = 16 << 20;
+
+/// The most bytes a PNG may have; the bridge checks it before copying the bytes into memory.
+pub const MAX_PNG_BYTES: usize = MAX_STAMP_BYTES;
 
 /// What the host asks for.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,7 +71,11 @@ pub(crate) fn validate(id: &str, name: &str, bytes: Vec<u8>, width: f64, height:
         return Err("the stamp metadata is too large".into());
     }
     // Reads the header only; the engine decodes the picture when it is placed.
-    png::Decoder::new(std::io::Cursor::new(&bytes)).read_info().map_err(|e| format!("not a readable PNG: {e}"))?;
+    let reader = png::Decoder::new(std::io::Cursor::new(&bytes)).read_info().map_err(|e| format!("not a readable PNG: {e}"))?;
+    let (w, h) = (reader.info().width, reader.info().height);
+    if w > MAX_SIDE_PX || h > MAX_SIDE_PX || u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(format!("the PNG is too large ({w} x {h} px)"));
+    }
     let name = if name.trim().is_empty() { "Stamp".to_string() } else { name.trim().chars().take(200).collect() };
     Ok(ArmedStamp { id: id.into(), name, png: Arc::new(bytes), width, height, meta: meta.into(), doc: None })
 }
@@ -87,6 +99,16 @@ impl PdfCraftApp {
 
     /// Once a frame: take the host's requests, report placements, and notice when the user left.
     pub(crate) fn host_stamp_tick(&mut self, ctx: &egui::Context) {
+        // First, how a click ended: a command that arrived since must not be taken for it.
+        let outcome = self.views.iter_mut().find_map(|v| v.host_stamp_outcome.take());
+        if let Some(outcome) = outcome
+            && let Some(armed) = self.armed_stamp.take()
+        {
+            match outcome {
+                Ok(page) => self.emit_stamp(StampEvent::Placed { id: armed.id, page }),
+                Err(error) => self.emit_stamp(StampEvent::Failed { id: armed.id, error }),
+            }
+        }
         let commands: Vec<StampCommand> = self.stamp_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for command in commands {
             match command {
@@ -94,10 +116,12 @@ impl PdfCraftApp {
                     // A new request replaces the one still waiting.
                     self.disarm_stamp();
                     let doc = self.active_ids().map(|(_, d)| d);
-                    let armed = match (doc, validate(&id, &name, bytes, width, height, &meta)) {
-                        (None, _) => Err("no document is open".to_string()),
-                        (_, Err(e)) => Err(e),
-                        (doc, Ok(a)) => Ok(ArmedStamp { doc, ..a }),
+                    let allowed = doc.and_then(|d| self.session.get(d)).map(|d| d.allows_annotation());
+                    let armed = match (doc, allowed, validate(&id, &name, bytes, width, height, &meta)) {
+                        (None, _, _) => Err("no document is open".to_string()),
+                        (_, Some(false), _) => Err("the document doesn't allow comments".to_string()),
+                        (_, _, Err(e)) => Err(e),
+                        (doc, _, Ok(a)) => Ok(ArmedStamp { doc, ..a }),
                     };
                     match armed {
                         Ok(a) => {
@@ -115,14 +139,12 @@ impl PdfCraftApp {
                 }
             }
         }
-        // A click placed it: the canvas noted the page and went back to selecting.
-        let placed = self.views.iter_mut().find_map(|v| v.host_stamp_page.take());
-        if let Some(page) = placed
-            && let Some(armed) = self.armed_stamp.take()
-        {
-            self.emit_stamp(StampEvent::Placed { id: armed.id, page });
-        }
         let Some(armed) = self.armed_stamp.as_ref() else { return };
+        // The click's edit may not have been applied yet: its outcome decides, not the tool.
+        let placing = self.views.iter().any(|v| matches!(v.pending_edit, Some(pdfcraft_engine::Edit::AddCustomStamp { extra: Some(_), .. })));
+        if placing {
+            return;
+        }
         if self.dialog.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.quick_tool = QuickTool::Select;
         }
@@ -242,8 +264,8 @@ mod flow_tests {
         send(&mut h, add("b", png()));
         send(&mut h, StampCommand::Cancel { id: "a".into() });
         assert_eq!(h.state().quick_tool, QuickTool::HostStamp, "cancelling a replaced id changes nothing");
-        // The canvas placed it: it notes the page and goes back to selecting.
-        h.state_mut().views[0].host_stamp_page = Some(0);
+        // The edit was accepted: the view notes the page, and the canvas went back to selecting.
+        h.state_mut().views[0].host_stamp_outcome = Some(Ok(0));
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(2);
         assert!(h.state().armed_stamp.is_none());
@@ -275,5 +297,107 @@ mod flow_tests {
         let (mut h, ev) = app(false);
         send(&mut h, add("y", png()));
         assert!(matches!(ev.borrow().as_slice(), [StampEvent::Failed { id, error }] if id == "y" && error.contains("no document")));
+    }
+
+    /// A click edit for the armed stamp, as the canvas queues it.
+    fn click_edit(bytes: Vec<u8>) -> pdfcraft_engine::Edit {
+        pdfcraft_engine::Edit::AddCustomStamp {
+            page: 0,
+            rect: [10.0, 10.0, 60.0, 40.0],
+            name: "Approved".into(),
+            file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: Arc::new(bytes), page: 0 },
+            author: "Ada".into(),
+            extra: Some(("PpmStamp".into(), "{}".into())),
+        }
+    }
+
+    #[test]
+    fn an_accepted_click_is_placed_and_a_refused_one_fails() {
+        let (mut h, ev) = app(true);
+        send(&mut h, add("ok", png()));
+        h.state_mut().views[0].pending_edit = Some(click_edit(png()));
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(3);
+        // The header is fine, the data is cut off: the armed check passes, the engine refuses.
+        let mut broken = png();
+        broken.truncate(broken.len() - 25);
+        send(&mut h, add("broken", broken.clone()));
+        h.state_mut().views[0].pending_edit = Some(click_edit(broken));
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(3);
+        let events = ev.borrow();
+        assert_eq!(events[..3], [StampEvent::Armed { id: "ok".into() }, StampEvent::Placed { id: "ok".into(), page: 0 }, StampEvent::Armed { id: "broken".into() }]);
+        assert!(matches!(&events[3], StampEvent::Failed { id, .. } if id == "broken"), "{events:?}");
+        assert_eq!(events.len(), 4, "no placed after a failure: {events:?}");
+    }
+
+    #[test]
+    fn a_new_request_in_the_frame_after_a_click_does_not_steal_its_report() {
+        let (mut h, ev) = app(true);
+        send(&mut h, add("a", png()));
+        // The click's outcome and the next request are both waiting when the tick runs.
+        h.state_mut().views[0].host_stamp_outcome = Some(Ok(0));
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.state().stamp_inbox.lock().unwrap().push(add("b", png()));
+        h.run_steps(2);
+        assert_eq!(
+            *ev.borrow(),
+            vec![StampEvent::Armed { id: "a".into() }, StampEvent::Placed { id: "a".into(), page: 0 }, StampEvent::Armed { id: "b".into() }]
+        );
+        assert_eq!(h.state().armed_stamp.as_ref().map(|a| a.id.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn a_document_that_forbids_comments_is_refused() {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open("p.pdf", None, Arc::new(pdf()), None).unwrap();
+        let protection = pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            ..Default::default()
+        };
+        session.apply(id, pdfcraft_engine::Edit::Protect(protection)).unwrap();
+        let locked = session.save_bytes(id).unwrap().as_ref().clone();
+        let events: Rc<RefCell<Vec<StampEvent>>> = Rc::default();
+        let sink = events.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("locked.pdf", None, locked).unwrap();
+            app.host_stamp = Some(Box::new(move |e| sink.borrow_mut().push(e.clone())));
+            app
+        });
+        h.run_steps(3);
+        send(&mut h, add("z", png()));
+        assert!(h.state().armed_stamp.is_none());
+        assert!(matches!(events.borrow().as_slice(), [StampEvent::Failed { id, error }] if id == "z" && error.contains("comments")), "{:?}", events.borrow());
+    }
+
+    #[test]
+    fn a_file_opened_by_the_host_ends_the_armed_stamp() {
+        let (mut h, ev) = app(true);
+        send(&mut h, add("a", png()));
+        h.state().startup_inbox.lock().unwrap().push(("b.pdf".into(), pdf()));
+        h.run_steps(3);
+        assert_eq!(*ev.borrow(), vec![StampEvent::Armed { id: "a".into() }, StampEvent::Cancelled { id: "a".into() }]);
+    }
+
+    #[test]
+    fn huge_pixel_dimensions_are_refused_from_the_header_alone() {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, MAX_SIDE_PX + 1, 1);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::One);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&vec![0u8; (MAX_SIDE_PX as usize + 1).div_ceil(8)]).unwrap();
+        drop(w);
+        assert!(validate("r", "n", out, 10.0, 10.0, "{}").unwrap_err().contains("too large"));
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, 8192, 4096);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::One);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&vec![0u8; 1024 * 4096]).unwrap();
+        drop(w);
+        assert!(validate("r", "n", out, 10.0, 10.0, "{}").unwrap_err().contains("too large"), "32 Mpx in all");
     }
 }

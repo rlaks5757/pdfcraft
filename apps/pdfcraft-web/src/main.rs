@@ -311,13 +311,18 @@ mod host {
         let text = |key: &str| get(key).as_string().ok_or_else(|| format!("{key} must be a string"));
         let number = |key: &str| get(key).as_f64().ok_or_else(|| format!("{key} must be a number"));
         let bytes = get("bytes");
-        let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-            array.to_vec()
+        let array = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+            array.clone()
         } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-            js_sys::Uint8Array::new(&bytes).to_vec()
+            js_sys::Uint8Array::new(&bytes)
         } else {
             return Err("bytes must be a Uint8Array or ArrayBuffer".into());
         };
+        // Look at the length before copying anything into wasm memory.
+        if array.length() as usize > pdfcraft_ui_egui::MAX_PNG_BYTES {
+            return Err(format!("the stamp is too large (at most {} MB)", pdfcraft_ui_egui::MAX_PNG_BYTES >> 20));
+        }
+        let bytes = array.to_vec();
         Ok(pdfcraft_ui_egui::StampCommand::Add {
             id: text("id")?,
             name: text("name")?,

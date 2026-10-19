@@ -495,8 +495,9 @@ pub struct DocView {
     select_anchor: Option<usize>,
     /// An edit requested by the view (organize toolbar, keys), applied by the app this frame.
     pub pending_edit: Option<Edit>,
-    /// The page a host-armed stamp was placed on this frame; the app reports it to the host.
-    pub host_stamp_page: Option<usize>,
+    /// How placing a host-armed stamp ended: its page, or why the edit failed. Set when the edit
+    /// is applied; the app reports it to the host.
+    pub host_stamp_outcome: Option<Result<usize, String>>,
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
@@ -769,7 +770,7 @@ impl DocView {
             select_anchor: None,
             organize_range: Default::default(),
             pending_edit: None,
-            host_stamp_page: None,
+            host_stamp_outcome: None,
             edit_lines: HashMap::new(),
             line_editor: None,
             pending_text_open: None,
@@ -3097,7 +3098,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         author: author.clone(),
                         extra: Some(("PpmStamp".into(), hs.meta.clone())),
                     });
-                    view.host_stamp_page = Some(i);
                     stamp_placed = true;
                 }
             }

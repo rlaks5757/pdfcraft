@@ -464,7 +464,23 @@ impl PdfCraftApp {
             (Edit::SetFieldValue { name, .. }, Some(draft)) => *name == draft.name,
             _ => false,
         };
-        if self.apply_edit(edit) {
+        // A host-armed stamp is only "placed" if the edit is accepted.
+        let host_stamp = match &edit {
+            Edit::AddCustomStamp { page, extra: Some(_), .. } => Some(*page),
+            _ => None,
+        };
+        let accepted = self.apply_edit(edit.clone());
+        if let Some(page) = host_stamp {
+            let outcome = if accepted {
+                Ok(page)
+            } else {
+                Err(self.toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_else(|| "the stamp could not be placed".to_string()))
+            };
+            if let Some(view) = self.views.get_mut(i) {
+                view.host_stamp_outcome = Some(outcome);
+            }
+        }
+        if accepted {
             // Tab can wrap to the same field (including another widget of that field).
             // Its new editor was opened before this edit ran, so it still holds the old
             // value. Refresh from the accepted form before Save can commit that stale draft.

@@ -62,7 +62,7 @@ mod search_ui;
 mod sign_ui;
 mod stamps_ui;
 mod host_stamp;
-pub use host_stamp::{HostStampFn, StampCommand, StampEvent, StampInbox};
+pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
 mod zoom_snap;
 /// Header & footer / watermark / background dialog types (tests and automation).
@@ -3024,6 +3024,10 @@ impl eframe::App for PdfCraftApp {
             }
         }
         let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        // A file opened by the host ends a stamp armed for the document before it.
+        if !arrived.is_empty() {
+            self.disarm_stamp();
+        }
         for (name, bytes) in arrived {
             if let Err(e) = self.open_bytes(&name, None, bytes) {
                 self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
@@ -3044,6 +3048,9 @@ impl eframe::App for PdfCraftApp {
             && self.pending_remote_link.is_none()
         {
             let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+            if !startup.is_empty() {
+                self.disarm_stamp();
+            }
             for (name, bytes) in startup {
                 let activate = !self.startup_superseded;
                 if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
