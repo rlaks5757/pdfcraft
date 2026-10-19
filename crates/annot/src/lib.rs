@@ -1678,6 +1678,13 @@ pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -
     Ok(())
 }
 
+/// Store a text value under a private key (e.g. `PpmStamp`) in a comment's dictionary.
+pub fn set_extra(doc: &mut Document, page: usize, index: usize, key: &str, value: &str) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    doc.update_dict(r, |d| d.set(key.as_bytes().to_vec(), PdfString::text(value)))?;
+    Ok(())
+}
+
 /// Mark or unmark a comment with a checkmark. Like Acrobat this adds a hidden state reply with
 /// `/StateModel /Marked` by `author`; the latest one wins. It's private bookkeeping, not a status.
 pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, author: &str, meta: &Meta) -> Result<usize, AnnotError> {

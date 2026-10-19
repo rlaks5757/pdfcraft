@@ -70,6 +70,7 @@ fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    extra: None,
                 },
             )
             .unwrap();
@@ -311,6 +312,7 @@ fn explicit_image_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Original quadrants".into(),
                     file: MarkFile { name: "quadrants.png".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    extra: None,
                 },
             )
             .unwrap();
@@ -338,6 +340,7 @@ fn pdf_page_stamps_keep_displayed_orientation_on_rotated_pages() {
                     name: "Half red".into(),
                     file: MarkFile { name: "half.pdf".into(), bytes: bytes.clone(), page: 0 },
                     author: "Test".into(),
+                    extra: None,
                 },
             )
             .unwrap();
@@ -6047,7 +6050,7 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into() };
+    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), extra: None };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -6105,4 +6108,74 @@ fn undo_never_makes_an_unsaved_document_clean() {
     s.apply(new, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     s.undo(new).unwrap();
     assert!(!s.get(new).unwrap().dirty, "once saved, undo back to the saved state is clean");
+}
+
+/// The `/PpmStamp` texts found in the objects of `bytes`.
+fn ppm_stamp_keys(bytes: &Arc<Vec<u8>>) -> Vec<String> {
+    let doc = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    doc.scan_objects().filter_map(|(_, o)| o.as_dict().and_then(|d| d.get(b"PpmStamp").and_then(|v| v.as_string().map(|s| s.to_text())))).collect()
+}
+
+const PPM_JSON: &str = r#"{"kind":"ppm-stamp","templateId":"t-1","version":2,"values":{"이름":"홍길동","n":3},"sig":"abc123"}"#;
+
+fn add_ppm_stamp(page: usize) -> Edit {
+    Edit::AddCustomStamp {
+        page,
+        rect: [20.0, 200.0, 100.0, 240.0],
+        name: "PPM stamp".into(),
+        file: MarkFile { name: "q.png".into(), bytes: quadrant_png(), page: 0 },
+        author: "Ada".into(),
+        extra: Some(("PpmStamp".into(), PPM_JSON.into())),
+    }
+}
+
+/// The host's `/PpmStamp` text goes in with the stamp as one undo step and survives the saves the
+/// web build makes (`Session::save_bytes`, incremental), a full rewrite, and later edits.
+#[test]
+fn custom_stamp_extra_survives_edits_and_every_save() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, add_ppm_stamp(0)).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert_eq!(ppm_stamp_keys(&saved), vec![PPM_JSON.to_string()], "incremental save");
+    assert_eq!(ppm_stamp_keys(&s.save_full_bytes(id).unwrap()), vec![PPM_JSON.to_string()], "full rewrite");
+
+    // Reopened: move, resize, another comment on another page, style, rotate, delete the other.
+    let mut s2 = Session::new().with_clock(|| 1_700_000_000);
+    let id2 = s2.open("stamped.pdf", None, saved, None).unwrap();
+    s2.apply(id2, Edit::MoveAnnotation { page: 0, index: 0, dx: 15.0, dy: -10.0 }).unwrap();
+    s2.apply(id2, Edit::ResizeAnnotation { page: 0, index: 0, rect: [30.0, 190.0, 150.0, 250.0] }).unwrap();
+    let rect = Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+    let other = NewAnnotation { page: 1, style: Style::default_for(&rect), shape: rect, contents: "other".into(), author: "Ada".into() };
+    s2.apply(id2, Edit::AddAnnotation(other)).unwrap();
+    assert_eq!(ppm_stamp_keys(&s2.save_bytes(id2).unwrap()), vec![PPM_JSON.to_string()], "after move, resize, other comment");
+    s2.apply(id2, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(0.5), width: None, endings: None }).unwrap();
+    s2.apply(id2, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s2.apply(id2, Edit::DeleteAnnotation { page: 1, index: 0 }).unwrap();
+    assert_eq!(ppm_stamp_keys(&s2.save_bytes(id2).unwrap()), vec![PPM_JSON.to_string()], "after style, rotate, delete other");
+    assert_eq!(ppm_stamp_keys(&s2.save_full_bytes(id2).unwrap()), vec![PPM_JSON.to_string()], "full rewrite after edits");
+}
+
+#[test]
+fn custom_stamp_extra_is_one_undo_step() {
+    let (mut s, id) = session_with(1);
+    s.apply(id, add_ppm_stamp(0)).unwrap();
+    s.undo(id).unwrap();
+    assert!(pdfcraft_annot::summaries(&s.get(id).unwrap().editor.as_ref().unwrap().cos).is_empty(), "one undo removes the whole stamp");
+    s.redo(id).unwrap();
+    assert_eq!(ppm_stamp_keys(&s.save_bytes(id).unwrap()), vec![PPM_JSON.to_string()], "redo brings the key back");
+}
+
+/// A file whose cross-reference table is damaged is rebuilt on open and saved by rewriting it:
+/// the key still survives.
+#[test]
+fn custom_stamp_extra_survives_saving_a_repaired_file() {
+    let mut damaged = fixture(1);
+    let at = damaged.windows(9).rposition(|w| w == b"startxref").unwrap();
+    damaged.truncate(at);
+    damaged.extend_from_slice(b"startxref\n999999\n%%EOF\n");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("damaged.pdf", None, Arc::new(damaged), None).unwrap();
+    assert!(s.get(id).unwrap().editor.as_ref().unwrap().cos.reconstructed(), "the fixture must need repair");
+    s.apply(id, add_ppm_stamp(0)).unwrap();
+    assert_eq!(ppm_stamp_keys(&s.save_bytes(id).unwrap()), vec![PPM_JSON.to_string()]);
 }

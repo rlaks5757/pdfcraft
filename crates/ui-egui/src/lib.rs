@@ -61,6 +61,8 @@ mod optimize_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
+mod host_stamp;
+pub use host_stamp::{HostStampFn, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
 mod zoom_snap;
 /// Header & footer / watermark / background dialog types (tests and automation).
@@ -235,6 +237,8 @@ pub enum QuickTool {
     Stamp(pdfcraft_engine::StampKind),
     /// A custom stamp from the library (its index).
     CustomStamp(usize),
+    /// A stamp the host page armed for one placement (`pdfcraft:stamp-add`).
+    HostStamp,
     /// Edit a PDF ▸ Link: draw link areas, select and edit links.
     Link,
     /// Use a certificate ▸ Digitally sign / Certify (visible): drag the signature's rectangle.
@@ -620,6 +624,11 @@ pub struct PdfCraftApp {
     pub host_save: Option<HostSaveFn>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
+    /// Stamp requests from the embedding page, and where to report them (web, see [`StampCommand`]).
+    pub stamp_inbox: StampInbox,
+    pub host_stamp: Option<HostStampFn>,
+    /// The stamp waiting for its one click (never stored in the settings).
+    pub(crate) armed_stamp: Option<host_stamp::ArmedStamp>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// A save waiting behind [`Dialog::OverwriteChanged`] (the web build has no files to check).
@@ -967,6 +976,9 @@ impl PdfCraftApp {
             os_events: None,
             host_save: None,
             host_dirty: None,
+            stamp_inbox: Default::default(),
+            host_stamp: None,
+            armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_overwrite: None,
@@ -3062,6 +3074,7 @@ impl eframe::App for PdfCraftApp {
             control.tick(ctx, self);
             self.control = Some(control);
         }
+        self.host_stamp_tick(ctx);
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         craft_quit::on_close_request(ctx);

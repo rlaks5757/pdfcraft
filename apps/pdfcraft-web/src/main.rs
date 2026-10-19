@@ -66,7 +66,8 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), cc.egui_ctx.clone());
+                        app.host_stamp = Some(bridge.stamp_fn());
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
                         bridge.post_ready();
@@ -131,6 +132,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
+/// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
+///   placement of a PNG stamp, `width` and `height` in PDF points, `meta` the text stored as the
+///   stamp's `/PpmStamp`. `pdfcraft:stamp-cancel` `{ id }` withdraws it.
+/// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
+///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
+///   parent) report how a stamp request went.
 /// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
 /// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 ///
@@ -187,7 +194,8 @@ mod host {
         }
 
         /// Hear `pdfcraft:open` from the parent and queue the file like a `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
+        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, stamps: pdfcraft_ui_egui::StampInbox, ctx: egui::Context) {
+            let bridge = self.clone();
             let parent = self.parent.clone();
             let origin = self.origin.clone();
             let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
@@ -195,8 +203,31 @@ mod host {
                     return;
                 }
                 let data = event.data();
-                if string(&data, "type").as_deref() != Some("pdfcraft:open") {
-                    return;
+                match string(&data, "type").as_deref() {
+                    Some("pdfcraft:open") => {}
+                    Some("pdfcraft:stamp-add") => {
+                        let id = string(&data, "id").unwrap_or_default();
+                        match stamp_add(&data) {
+                            Ok(command) => {
+                                if let Ok(mut q) = stamps.lock() {
+                                    q.push(command);
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(error) => bridge.post_stamp(&pdfcraft_ui_egui::StampEvent::Failed { id, error }),
+                        }
+                        return;
+                    }
+                    Some("pdfcraft:stamp-cancel") => {
+                        if let Some(id) = string(&data, "id") {
+                            if let Ok(mut q) = stamps.lock() {
+                                q.push(pdfcraft_ui_egui::StampCommand::Cancel { id });
+                            }
+                            ctx.request_repaint();
+                        }
+                        return;
+                    }
+                    _ => return,
                 }
                 let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
                 let Ok(bytes) = js_sys::Reflect::get(&data, &JsValue::from_str("bytes")) else { return };
@@ -216,6 +247,29 @@ mod host {
                 // The listener lives as long as the page.
                 on_message.forget();
             }
+        }
+
+        /// Tell the parent how a stamp request went.
+        pub fn post_stamp(&self, event: &pdfcraft_ui_egui::StampEvent) {
+            use pdfcraft_ui_egui::StampEvent as E;
+            let fields = match event {
+                E::Armed { id } => vec![("type", "pdfcraft:stamp-armed".into()), ("id", id.as_str().into())],
+                E::Placed { id, page } => {
+                    vec![("type", "pdfcraft:stamp-placed".into()), ("id", id.as_str().into()), ("page", JsValue::from_f64(*page as f64))]
+                }
+                E::Cancelled { id } => vec![("type", "pdfcraft:stamp-cancelled".into()), ("id", id.as_str().into())],
+                E::Failed { id, error } => {
+                    vec![("type", "pdfcraft:stamp-failed".into()), ("id", id.as_str().into()), ("error", error.as_str().into())]
+                }
+            };
+            if let Some(m) = message(&fields) {
+                let _ = self.post(&m, None);
+            }
+        }
+
+        pub fn stamp_fn(&self) -> pdfcraft_ui_egui::HostStampFn {
+            let bridge = self.clone();
+            Box::new(move |event| bridge.post_stamp(event))
         }
 
         pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
@@ -249,6 +303,29 @@ mod host {
             js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
         }
         Some(m)
+    }
+
+    /// Read a `pdfcraft:stamp-add` message; the error is what the parent is told.
+    fn stamp_add(data: &JsValue) -> Result<pdfcraft_ui_egui::StampCommand, String> {
+        let get = |key: &str| js_sys::Reflect::get(data, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
+        let text = |key: &str| get(key).as_string().ok_or_else(|| format!("{key} must be a string"));
+        let number = |key: &str| get(key).as_f64().ok_or_else(|| format!("{key} must be a number"));
+        let bytes = get("bytes");
+        let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+            array.to_vec()
+        } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
+            js_sys::Uint8Array::new(&bytes).to_vec()
+        } else {
+            return Err("bytes must be a Uint8Array or ArrayBuffer".into());
+        };
+        Ok(pdfcraft_ui_egui::StampCommand::Add {
+            id: text("id")?,
+            name: text("name")?,
+            bytes,
+            width: number("width")?,
+            height: number("height")?,
+            meta: text("meta")?,
+        })
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {

@@ -1376,6 +1376,9 @@ pub enum Edit {
         name: String,
         file: MarkFile,
         author: String,
+        /// A private key and text value stored in the stamp's dictionary, in the same undo step
+        /// (the PPM host's `/PpmStamp` metadata).
+        extra: Option<(String, String)>,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
@@ -2379,7 +2382,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
-        Edit::AddCustomStamp { page, rect, name, file, author } => {
+        Edit::AddCustomStamp { page, rect, name, file, author, extra } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
             let natural = rect[2] == rect[0] && rect[3] == rect[1];
@@ -2396,6 +2399,9 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
+            if let Some((key, value)) = extra {
+                pdfcraft_annot::set_extra(doc, *page, index, key, value)?;
+            }
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,

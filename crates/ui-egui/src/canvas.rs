@@ -495,6 +495,8 @@ pub struct DocView {
     select_anchor: Option<usize>,
     /// An edit requested by the view (organize toolbar, keys), applied by the app this frame.
     pub pending_edit: Option<Edit>,
+    /// The page a host-armed stamp was placed on this frame; the app reports it to the host.
+    pub host_stamp_page: Option<usize>,
     /// Edit text: the lines per page (with the document generation they were read at), and the
     /// line being edited.
     pub(crate) edit_lines: HashMap<usize, (u64, Vec<pdfcraft_engine::TextBlock>)>,
@@ -767,6 +769,7 @@ impl DocView {
             select_anchor: None,
             organize_range: Default::default(),
             pending_edit: None,
+            host_stamp_page: None,
             edit_lines: HashMap::new(),
             line_editor: None,
             pending_text_open: None,
@@ -2731,6 +2734,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         | QuickTool::EditText
         | QuickTool::Stamp(_)
         | QuickTool::CustomStamp(_)
+        | QuickTool::HostStamp
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
@@ -2762,6 +2766,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
+    let host_stamp = if tool == QuickTool::HostStamp { app.armed_stamp.clone() } else { None };
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
@@ -3068,7 +3073,31 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         name: cs.name.clone(),
                         file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
                         author: author.clone(),
+                        extra: None,
                     });
+                    stamp_placed = true;
+                }
+            }
+            if let Some(hs) = host_stamp.as_ref()
+                && allowed
+                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+            {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if resp.clicked() {
+                    // Centred on the click, upright as the page is shown, at the host's size in points.
+                    let (vx, vy) = xf.screen_to_view(p);
+                    let corners = [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
+                    let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
+                    let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
+                        page: i,
+                        rect,
+                        name: hs.name.clone(),
+                        file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: hs.png.clone(), page: 0 },
+                        author: author.clone(),
+                        extra: Some(("PpmStamp".into(), hs.meta.clone())),
+                    });
+                    view.host_stamp_page = Some(i);
                     stamp_placed = true;
                 }
             }
