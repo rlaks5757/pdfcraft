@@ -21,9 +21,10 @@
 //!    published metrics apply, so this is as close to right as a substitution gets.
 //! 3. craft-fonts holds that exact family. Never another family — see [`crate::embedding`].
 //! 4. The descendant font's `/CIDSystemInfo /Ordering` names a script, and craft-fonts has a face
-//!    for it. Today that means Adobe-Japan1.
-//! 5. The ordering names a script we have **no** licensed face for (GB1, CNS1, Korea1). There is
-//!    no honest substitute, so the chain reports none: the caller draws nothing and can say why.
+//!    for it. That means Adobe-Japan1, and Adobe-Korea1 when the build embeds a Korean face.
+//! 5. The ordering names a script we have **no** licensed face for (GB1, CNS1, or Korea1 in a
+//!    build without a Korean face). There is no honest substitute, so the chain reports none: the
+//!    caller draws nothing and can say why.
 //! 6. Otherwise, the nearest of the standard 14 by `/FontDescriptor /Flags` — serif, fixed pitch,
 //!    bold and italic. This step always succeeds, so a simple font is never left without a face.
 
@@ -296,13 +297,30 @@ mod tests {
     fn a_script_with_no_licensed_face_reports_none_rather_than_latin() {
         // The user's Chinese PDF draws nothing. The point of this is that we can now say so,
         // instead of quietly standing Helvetica in and showing the wrong glyphs.
-        for ordering in ["GB1", "CNS1", "Korea1", "KR"] {
+        for ordering in ["GB1", "CNS1"] {
             let s = substitute(&req("SomeCJKFont", false, 0, Some(ordering)));
             assert_eq!(s.face, Face::None, "{ordering}");
             assert_eq!(s.why, Why::NoFaceForScript, "{ordering}");
             assert_eq!(s.face_name(), None);
             assert!(!s.why.is_faithful());
             assert!(s.why.note().contains("no licensed face"), "{ordering}");
+        }
+    }
+
+    #[test]
+    fn korean_depends_on_craft_fonts_and_says_which_it_got() {
+        // Like Japanese: a Korean face is an optional build input (the PPM fork embeds one), so
+        // both outcomes are correct, and neither may be a silent Latin stand-in.
+        for ordering in ["Korea1", "KR"] {
+            let s = substitute(&req("SomeKoreanFont", false, 0, Some(ordering)));
+            if crate::CRAFT_FONTS.iter().any(|f| f.covers("Kore")) {
+                assert_eq!(s.why, Why::ScriptFace, "{ordering}");
+                assert!(matches!(s.face, Face::Craft(_)), "{ordering}");
+                assert!(s.face_name().is_some_and(|n| !n.is_empty()), "{ordering}");
+            } else {
+                assert_eq!(s.why, Why::NoFaceForScript, "{ordering}");
+                assert_eq!(s.face, Face::None, "{ordering}");
+            }
         }
     }
 

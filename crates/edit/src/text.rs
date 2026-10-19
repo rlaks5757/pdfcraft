@@ -1498,7 +1498,7 @@ fn no_hebrew_font() -> EditError {
 fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
     let mut japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     // Hangul takes the Korean face (the Japanese ones have none), when the build embeds one.
-    if text.chars().any(|c| matches!(c, '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' | '\u{ac00}'..='\u{d7af}')) {
+    if text.chars().any(|c| matches!(c, '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' | '\u{a960}'..='\u{a97f}' | '\u{ac00}'..='\u{d7ff}' | '\u{ffa0}'..='\u{ffdc}')) {
         japanese.extend(pdfcraft_fonts::ui_korean_fonts());
     }
     if !text.chars().any(crate::bidi::is_hebrew) {

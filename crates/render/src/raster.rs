@@ -82,8 +82,9 @@ impl RenderConfig {
 /// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
 /// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
 /// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other
-/// font, and when PdfCraft was built without craft-fonts. Only Japanese: the pinned craft-fonts
-/// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
+/// font, and when PdfCraft was built without craft-fonts. Adobe-Korea1 CID fonts take the Korean
+/// face when the build embeds one. No other CJK faces: the pinned craft-fonts has none, and its
+/// later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
 fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
     let FontQuery::Fallback(f) = query else { return None };
     // Adobe-Korea1 text takes the Korean face when the build embeds one.
