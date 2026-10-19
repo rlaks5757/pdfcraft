@@ -158,7 +158,9 @@ fn script_for(ordering: &str) -> Option<&'static str> {
         "Japan1" => Some("Jpan"),
         // Registered orderings we have no openly licensed face for. AGENTS.md 1.1 rules out
         // Source Han and Noto CJK (Source Han rebranded), which is why these have none.
-        "GB1" | "CNS1" | "Korea1" | "KR" => Some(""),
+        "GB1" | "CNS1" => Some(""),
+        // Korean: a craft-fonts face tagged `Kore` (not Adobe's), when the build embeds one.
+        "Korea1" | "KR" => Some("Kore"),
         _ => None,
     }
 }

@@ -86,6 +86,11 @@ impl RenderConfig {
 /// has no other CJK faces, and its later Chinese face is Noto CJK, which AGENTS.md §1.1 rules out.
 fn japanese_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
     let FontQuery::Fallback(f) = query else { return None };
+    // Adobe-Korea1 text takes the Korean face when the build embeds one.
+    if f.character_collection.as_ref()?.family == CidFamily::AdobeKorea1 {
+        let face = *pdfcraft_fonts::ui_korean_fonts().first()?;
+        return Some((Arc::new(face.bytes), 0));
+    }
     if f.character_collection.as_ref()?.family != CidFamily::AdobeJapan1 {
         return None;
     }
