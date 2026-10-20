@@ -66,8 +66,9 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), cc.egui_ctx.clone());
                         app.host_stamp = Some(bridge.stamp_fn());
+                        app.host_compare = Some(bridge.compare_fn());
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
                         bridge.post_ready();
@@ -138,6 +139,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
+/// - `pdfcraft:compare` (from the parent): `{ id, old: { name, bytes }, new: { name, bytes } }`
+///   opens the old file in a background tab and the new file as the active one, then runs the
+///   Compare Files comparison. A window compares once; `pdfcraft:compare-done`
+///   `{ id, replaced, inserted, deleted, visual }` or `pdfcraft:compare-failed` `{ id, error }`
+///   (to the parent) report the outcome. In this mode the Compare panel has no Mark as
+///   comments or Report.
 /// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
 /// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 ///
@@ -194,7 +201,13 @@ mod host {
         }
 
         /// Hear `pdfcraft:open` from the parent and queue the file like a `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, stamps: pdfcraft_ui_egui::StampInbox, ctx: egui::Context) {
+        pub fn listen(
+            &self,
+            inbox: pdfcraft_ui_egui::Inbox,
+            stamps: pdfcraft_ui_egui::StampInbox,
+            compares: pdfcraft_ui_egui::CompareInbox,
+            ctx: egui::Context,
+        ) {
             let bridge = self.clone();
             let parent = self.parent.clone();
             let origin = self.origin.clone();
@@ -215,6 +228,19 @@ mod host {
                                 ctx.request_repaint();
                             }
                             Err(error) => bridge.post_stamp(&pdfcraft_ui_egui::StampEvent::Failed { id, error }),
+                        }
+                        return;
+                    }
+                    Some("pdfcraft:compare") => {
+                        let id = string(&data, "id").unwrap_or_default();
+                        match compare_request(&data) {
+                            Ok(command) => {
+                                if let Ok(mut q) = compares.lock() {
+                                    q.push(command);
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(error) => bridge.post_compare(&pdfcraft_ui_egui::CompareEvent::Failed { id: id.chars().take(128).collect(), error }),
                         }
                         return;
                     }
@@ -267,6 +293,33 @@ mod host {
             }
         }
 
+        /// Tell the parent how a compare request went.
+        pub fn post_compare(&self, event: &pdfcraft_ui_egui::CompareEvent) {
+            use pdfcraft_ui_egui::CompareEvent as E;
+            let count = |n: usize| JsValue::from_f64(n as f64);
+            let fields = match event {
+                E::Done { id, replaced, inserted, deleted, visual } => vec![
+                    ("type", "pdfcraft:compare-done".into()),
+                    ("id", id.as_str().into()),
+                    ("replaced", count(*replaced)),
+                    ("inserted", count(*inserted)),
+                    ("deleted", count(*deleted)),
+                    ("visual", count(*visual)),
+                ],
+                E::Failed { id, error } => {
+                    vec![("type", "pdfcraft:compare-failed".into()), ("id", id.as_str().into()), ("error", error.as_str().into())]
+                }
+            };
+            if let Some(m) = message(&fields) {
+                let _ = self.post(&m, None);
+            }
+        }
+
+        pub fn compare_fn(&self) -> pdfcraft_ui_egui::HostCompareFn {
+            let bridge = self.clone();
+            Box::new(move |event| bridge.post_compare(event))
+        }
+
         pub fn stamp_fn(&self) -> pdfcraft_ui_egui::HostStampFn {
             let bridge = self.clone();
             Box::new(move |event| bridge.post_stamp(event))
@@ -303,6 +356,34 @@ mod host {
             js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
         }
         Some(m)
+    }
+
+    /// Read one `{ name, bytes }` file of a `pdfcraft:compare` message.
+    fn compare_file(data: &JsValue, key: &str) -> Result<(String, Vec<u8>), String> {
+        let file = js_sys::Reflect::get(data, &JsValue::from_str(key)).map_err(|_| format!("{key} is missing"))?;
+        if !file.is_object() {
+            return Err(format!("{key} must be an object"));
+        }
+        let name = string(&file, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
+        let bytes = js_sys::Reflect::get(&file, &JsValue::from_str("bytes")).unwrap_or(JsValue::UNDEFINED);
+        let array = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+            array.clone()
+        } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
+            js_sys::Uint8Array::new(&bytes)
+        } else {
+            return Err(format!("{key}.bytes must be a Uint8Array or ArrayBuffer"));
+        };
+        // Look at the length before copying anything into wasm memory.
+        if array.length() as usize > pdfcraft_ui_egui::MAX_COMPARE_BYTES {
+            return Err(format!("{key} is too large (at most {} MB)", pdfcraft_ui_egui::MAX_COMPARE_BYTES >> 20));
+        }
+        Ok((name.chars().take(200).collect(), array.to_vec()))
+    }
+
+    /// Read a `pdfcraft:compare` message; the error is what the parent is told.
+    fn compare_request(data: &JsValue) -> Result<pdfcraft_ui_egui::CompareCommand, String> {
+        let id = string(data, "id").ok_or_else(|| "id must be a string".to_string())?;
+        Ok(pdfcraft_ui_egui::CompareCommand { id, old: compare_file(data, "old")?, new: compare_file(data, "new")? })
     }
 
     /// Read a `pdfcraft:stamp-add` message; the error is what the parent is told.
