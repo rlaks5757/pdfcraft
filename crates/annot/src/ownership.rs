@@ -162,12 +162,21 @@ fn essence(doc: &Document, d: &Dict) -> Essence {
 pub struct Foreign {
     by_ref: HashMap<ObjRef, (usize, Essence)>,
     inline: Vec<(usize, Essence)>,
+    /// Page geometry (`/MediaBox`, `/CropBox`, `/Rotate`) of the pages holding such comments:
+    /// the server checks it too, since a comment's place on the page depends on it.
+    pages: HashMap<usize, Vec<Option<Object>>>,
+}
+
+fn page_geometry(doc: &Document, page: usize) -> Vec<Option<Object>> {
+    let dict = page_refs(doc).ok().and_then(|p| p.get(page).copied()).and_then(|p| doc.get(p).as_dict().cloned()).unwrap_or_default();
+    [&b"MediaBox"[..], b"CropBox", b"Rotate"].iter().map(|k| dict.get(k).map(|o| (*doc.resolve(o)).clone())).collect()
 }
 
 pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
-    let mut f = Foreign { by_ref: HashMap::new(), inline: Vec::new() };
+    let mut f = Foreign { by_ref: HashMap::new(), inline: Vec::new(), pages: HashMap::new() };
     for s in scan(doc).into_iter().filter(|s| !owned_by(doc, &s.dict, actor)) {
         let e = essence(doc, &s.dict);
+        f.pages.entry(s.page).or_insert_with(|| page_geometry(doc, s.page));
         match s.obj {
             Some(r) => {
                 f.by_ref.insert(r, (s.page, e));
@@ -182,8 +191,11 @@ pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
 /// the answer for any edit that could drop, move or rewrite comments in bulk. It is as strict as
 /// the server's save check on purpose: an edit the server would refuse later must fail now.
 pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotError> {
-    if before.by_ref.is_empty() && before.inline.is_empty() {
+    if before.pages.is_empty() {
         return Ok(());
+    }
+    if before.pages.iter().any(|(page, geometry)| page_geometry(doc, *page) != *geometry) {
+        return Err(AnnotError::ForeignPage);
     }
     let now = scan(doc);
     let by_ref: HashMap<ObjRef, (usize, Essence)> = now.iter().filter_map(|s| s.obj.map(|r| (r, (s.page, essence(doc, &s.dict))))).collect();

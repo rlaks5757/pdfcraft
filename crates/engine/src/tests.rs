@@ -6413,8 +6413,10 @@ mod ownership {
         refused(&mut s, id, Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }, PAGE);
         refused(&mut s, id, Edit::Sanitize, PAGE);
         refused(&mut s, id, Edit::RemoveHidden { which: vec![Hidden::Comments] }, PAGE);
-        // Pages without comments of others' are free: page 2 has none.
-        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        // Rotating changes where a comment sits, which the save check compares too.
+        refused(&mut s, id, Edit::RotatePages { pages: vec![0], degrees: 90 }, PAGE);
+        // Pages without comments of others' are free: page 1 has none.
+        s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
         s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
         // Redaction marks of others are not applied or cleared by you.
         act(&mut s, Some("u-b"), false);
@@ -6593,6 +6595,13 @@ mod ownership {
         }
         raw(&mut s, id, 0, 1, |d| d.set(b"M".to_vec(), pdfcraft_cos::PdfString::text("D:20260101000000Z")));
         assert!(!kept(&s, &before));
+    }
+
+    #[test]
+    fn rotating_a_page_with_someone_elses_comment_is_refused() {
+        let (mut s, id) = two_owners();
+        refused(&mut s, id, Edit::RotatePages { pages: vec![0], degrees: 90 }, PAGE);
+        s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
     }
 
     // ---- fixtures for the server-side save check ----
