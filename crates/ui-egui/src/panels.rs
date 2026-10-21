@@ -516,6 +516,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
+    // Framed by a host page: its Compare panel offers neither comments nor a report.
+    let hosted = app.host_save.is_some();
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     // Prepare a form is open: the Fields panel orders tabs.
@@ -719,7 +721,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         panel_edit = edit;
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
-                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id, hosted),
                     RightPanel::Attachments => {
                         if info.attachments.is_empty() {
                             empty(ui, &t, "paperclip", "This document has no attachments.");

@@ -61,7 +61,9 @@ mod optimize_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
+mod host_compare;
 mod host_stamp;
+pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
 mod zoom_snap;
@@ -627,6 +629,11 @@ pub struct PdfCraftApp {
     /// Stamp requests from the embedding page, and where to report them (web, see [`StampCommand`]).
     pub stamp_inbox: StampInbox,
     pub host_stamp: Option<HostStampFn>,
+    /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
+    pub compare_inbox: CompareInbox,
+    pub host_compare: Option<HostCompareFn>,
+    /// A compare request was taken; one frame compares once.
+    compare_taken: bool,
     /// The stamp waiting for its one click (never stored in the settings).
     pub(crate) armed_stamp: Option<host_stamp::ArmedStamp>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
@@ -977,6 +984,9 @@ impl PdfCraftApp {
             host_save: None,
             host_dirty: None,
             stamp_inbox: Default::default(),
+            compare_inbox: Default::default(),
+            host_compare: None,
+            compare_taken: false,
             host_stamp: None,
             armed_stamp: None,
             close_request: None,
@@ -3082,6 +3092,7 @@ impl eframe::App for PdfCraftApp {
             self.control = Some(control);
         }
         self.host_stamp_tick(ctx);
+        self.host_compare_tick();
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         craft_quit::on_close_request(ctx);

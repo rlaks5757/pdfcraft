@@ -86,7 +86,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 }
 
 /// The Compare panel.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>, id: DocId) -> Option<PanelAction> {
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>, id: DocId, hosted: bool) -> Option<PanelAction> {
     let Some(s) = state.as_ref().filter(|s| s.new == id) else {
         ui.label(egui::RichText::new(tl!("Compare this file with an older version: Compare files… in All tools.")).color(t.text_muted));
         return None;
@@ -118,11 +118,14 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button(tl!("Mark as comments")).clicked() {
-            action = Some(PanelAction::Mark);
-        }
-        if ui.button(tl!("Report…")).clicked() {
-            action = Some(PanelAction::Report);
+        // Marks would edit the host's document and a report is a new tab the host can't save.
+        if !hosted {
+            if ui.button(tl!("Mark as comments")).clicked() {
+                action = Some(PanelAction::Mark);
+            }
+            if ui.button(tl!("Report…")).clicked() {
+                action = Some(PanelAction::Report);
+            }
         }
         if ui.button(tl!("Clear")).clicked() {
             action = Some(PanelAction::Clear);
