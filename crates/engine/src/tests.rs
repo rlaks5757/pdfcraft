@@ -6597,6 +6597,39 @@ mod ownership {
         assert!(!kept(&s, &before));
     }
 
+    /// Hang a chain of `n` arrays under u-b's comment (index 1), each pointing twice at the next
+    /// when `shared`, once when not.
+    fn hang_chain(s: &mut Session, id: DocId, n: usize, shared: bool) {
+        let cos = &mut s.doc_mut(id).unwrap().editor.as_mut().unwrap().cos;
+        let mut next = cos.add(pdfcraft_cos::Object::Int(1));
+        for _ in 0..n {
+            let item = pdfcraft_cos::Object::Ref(next);
+            next = cos.add(pdfcraft_cos::Object::Array(if shared { vec![item.clone(), item] } else { vec![item] }));
+        }
+        raw(s, id, 0, 1, |d| d.set(b"X".to_vec(), pdfcraft_cos::Object::Ref(next)));
+    }
+
+    #[test]
+    fn a_comment_with_a_shared_object_chain_does_not_stall_editing() {
+        let (mut s, id) = two_owners();
+        // [2 0 R 2 0 R] forty levels deep: 2^40 paths, 40 objects.
+        hang_chain(&mut s, id, 40, true);
+        let started = std::time::Instant::now();
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }).unwrap();
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 1, text: "r".into(), author: "A".into() }).unwrap();
+        assert!(started.elapsed().as_secs() < 1, "walking the shared chain took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_comment_reaching_too_deep_makes_edits_fail_closed() {
+        let (mut s, id) = two_owners();
+        // A single line of 5000 objects: far past the depth limit, and no stack to spare for it.
+        hang_chain(&mut s, id, 5000, false);
+        let started = std::time::Instant::now();
+        refused(&mut s, id, Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }, PAGE);
+        assert!(started.elapsed().as_secs() < 1);
+    }
+
     #[test]
     fn rotating_a_page_with_someone_elses_comment_is_refused() {
         let (mut s, id) = two_owners();

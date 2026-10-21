@@ -118,44 +118,99 @@ fn scan(doc: &Document) -> Vec<Seen> {
     out
 }
 
-/// A comment as the file holds it, everything it points to included: references are replaced
-/// by what they point at (a loop stays a reference), except `/P`, the page it sits on, which
-/// the page number stands for, and `/IRT` and `/Parent`, which stay references. Any change to the comment's object graph (`/AP` streams, fonts,
-/// flags, dates) shows. The server hashes the same way, so what it would refuse is refused here.
-type Essence = Object;
+/// Most objects one comment may reach, and how deep: past either the comment counts as changed,
+/// so the edit is refused (a file built to be walked forever must not freeze everyone's editing).
+const MAX_OBJECTS: usize = 20_000;
+const MAX_DEPTH: usize = 100;
+
+/// A hash of a comment as the file holds it, everything it points to included, or `None` when
+/// it reaches too much. Any change to the comment's object graph (`/AP` streams, fonts, flags,
+/// dates) changes the hash; `/P`, the page it sits on, is left out (the page number stands for
+/// it) and `/IRT` and `/Parent` stay plain references (followed, a reply would change whenever
+/// its parent is edited, which the parent's owner may do). An object met again is hashed as the
+/// number of its first visit, not walked again, so shared objects cost nothing.
+type Essence = Option<(u64, u64)>;
+
+/// Two comments are the same only when both hashed.
+fn same(a: &Essence, b: &Essence) -> bool {
+    matches!((a, b), (Some(x), Some(y)) if x == y)
+}
 
 fn essence(doc: &Document, d: &Dict) -> Essence {
-    fn walk(doc: &Document, o: &Object, seen: &mut Vec<ObjRef>) -> Object {
-        match o {
-            Object::Ref(r) => {
-                if seen.contains(r) {
-                    return o.clone();
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    struct Walk<'a> {
+        doc: &'a Document,
+        seen: HashMap<ObjRef, usize>,
+        // Two independent lanes make a 128-bit digest.
+        h: (DefaultHasher, DefaultHasher),
+    }
+    impl Walk<'_> {
+        fn put<T: Hash>(&mut self, v: T) {
+            v.hash(&mut self.h.0);
+            0xA5u8.hash(&mut self.h.1);
+            v.hash(&mut self.h.1);
+        }
+        fn object(&mut self, o: &Object, depth: usize) -> Option<()> {
+            if depth > MAX_DEPTH {
+                return None;
+            }
+            match o {
+                Object::Null => self.put(0u8),
+                Object::Bool(b) => self.put((1u8, *b)),
+                Object::Int(i) => self.put((2u8, *i)),
+                Object::Real(r) => self.put((3u8, r.to_bits())),
+                Object::String(s) => self.put((4u8, &s.bytes)),
+                Object::Name(n) => self.put((5u8, n)),
+                Object::Array(items) => {
+                    self.put((6u8, items.len()));
+                    for i in items {
+                        self.object(i, depth + 1)?;
+                    }
                 }
-                seen.push(*r);
-                let out = walk(doc, &doc.get(*r), seen);
-                seen.pop();
-                out
+                Object::Dict(d) => self.dict(d, depth)?,
+                Object::Stream(st) => {
+                    self.put(7u8);
+                    self.dict(&st.dict, depth)?;
+                    self.put(&st.raw[..]);
+                }
+                Object::Ref(r) => {
+                    if let Some(n) = self.seen.get(r) {
+                        self.put((8u8, *n));
+                    } else {
+                        if self.seen.len() >= MAX_OBJECTS {
+                            return None;
+                        }
+                        self.seen.insert(*r, self.seen.len());
+                        self.put(9u8);
+                        let target = self.doc.get(*r);
+                        self.object(&target, depth + 1)?;
+                    }
+                }
             }
-            Object::Dict(d) => Object::Dict(dict(doc, d, seen)),
-            Object::Array(items) => Object::Array(items.iter().map(|i| walk(doc, i, seen)).collect()),
-            Object::Stream(st) => Object::Stream(pdfcraft_cos::Stream { dict: dict(doc, &st.dict, seen), raw: st.raw.clone() }),
-            other => other.clone(),
+            Some(())
+        }
+        fn dict(&mut self, d: &Dict, depth: usize) -> Option<()> {
+            // In key order, so the digest doesn't depend on how the file lists them.
+            let mut entries: Vec<_> = d.iter().filter(|(k, _)| k.as_slice() != b"P").collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            self.put((10u8, entries.len()));
+            for (k, v) in entries {
+                self.put(k);
+                if matches!(k.as_slice(), b"IRT" | b"Parent") {
+                    self.put(v.as_ref().map(|r| (r.num, r.generation)));
+                } else {
+                    self.object(v, depth + 1)?;
+                }
+            }
+            Some(())
         }
     }
-    fn dict(doc: &Document, d: &Dict, seen: &mut Vec<ObjRef>) -> Dict {
-        let mut out = Dict::new();
-        for (k, v) in d.iter() {
-            match k.as_slice() {
-                b"P" => {}
-                // The links to the comment it answers: followed, a reply would change whenever
-                // its parent is edited, which the parent's owner may do.
-                b"IRT" | b"Parent" => out.set(k.clone(), v.clone()),
-                _ => out.set(k.clone(), walk(doc, v, seen)),
-            }
-        }
-        out
-    }
-    Object::Dict(dict(doc, d, &mut Vec::new()))
+
+    let mut w = Walk { doc, seen: HashMap::new(), h: (DefaultHasher::new(), DefaultHasher::new()) };
+    w.dict(d, 0)?;
+    Some((w.h.0.finish(), w.h.1.finish()))
 }
 
 /// The comments `actor` doesn't own, as they were: what an edit must leave as it was.
@@ -214,12 +269,12 @@ pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotE
     let mut inline: Vec<(usize, Essence)> = now.iter().filter(|s| s.obj.is_none()).map(|s| (s.page, essence(doc, &s.dict))).collect();
     for (r, was) in &before.by_ref {
         // A comment edited into an inline copy (or promoted to a reference) counts as changed.
-        if by_ref.get(r) != Some(was) {
+        if !by_ref.get(r).is_some_and(|now| now.0 == was.0 && same(&now.1, &was.1)) {
             return Err(AnnotError::ForeignPage);
         }
     }
     for was in &before.inline {
-        let Some(at) = inline.iter().position(|n| n == was) else { return Err(AnnotError::ForeignPage) };
+        let Some(at) = inline.iter().position(|n| n.0 == was.0 && same(&n.1, &was.1)) else { return Err(AnnotError::ForeignPage) };
         inline.swap_remove(at);
     }
     Ok(())
