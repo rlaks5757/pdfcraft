@@ -210,6 +210,19 @@ pub struct Ownership {
     pub actor: Option<String>,
     /// Every edit that changes the document is refused.
     pub read_only: bool,
+    /// Which edits the host lets through (see [`EditScope`]).
+    pub scope: EditScope,
+}
+
+/// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditScope {
+    /// Everything the document and its security allow: a stand-alone PdfCraft, or `builder`.
+    #[default]
+    All,
+    /// Comments only (`viewer`): annotations and form filling. Page operations, content editing,
+    /// form building, redaction, watermarks, protection, signing and the like are refused.
+    Viewer,
 }
 
 /// Stable identifier of an open document within a session.
@@ -2369,6 +2382,7 @@ impl EditCtx {
 /// edit in it, so an edit sees the comments the ones before it made.
 fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     owner_guard::check(doc, edit, &cx.ownership)?;
+    owner_guard::check_scope(edit, cx.ownership.scope)?;
     let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| {
         let known = pdfcraft_annot::ownership::known(doc, &a);
         (a, known)
@@ -2978,6 +2992,9 @@ pub enum EditError {
     /// The embedding page opened the document read-only (`pdfcraft:open` `readOnly`).
     #[error("the document is read-only")]
     HostReadOnly,
+    /// The embedding page opened the document as a viewer (`pdfcraft:open` `mode`): comments only.
+    #[error("this change isn't available here: only comments can be made in this view")]
+    HostViewerOnly,
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {
@@ -3753,6 +3770,8 @@ impl Session {
         if cx.ownership.read_only {
             return Err(EditError::HostReadOnly);
         }
+        // Likewise a viewer's limit, also for an edit that would find nothing to do.
+        owner_guard::check_scope(&edit, cx.ownership.scope)?;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
@@ -4977,6 +4996,9 @@ impl Session {
         if d.ownership.read_only {
             return Err(EditError::HostReadOnly);
         }
+        if d.ownership.scope == EditScope::Viewer {
+            return Err(EditError::HostViewerOnly);
+        }
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -4997,6 +5019,9 @@ impl Session {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         if d.ownership.read_only {
             return Err(EditError::HostReadOnly);
+        }
+        if d.ownership.scope == EditScope::Viewer {
+            return Err(EditError::HostViewerOnly);
         }
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {

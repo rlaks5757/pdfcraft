@@ -6186,7 +6186,7 @@ mod ownership {
     use super::*;
 
     fn act(s: &mut Session, actor: Option<&str>, read_only: bool) {
-        s.set_ownership(Ownership { actor: actor.map(str::to_string), read_only });
+        s.set_ownership(Ownership { actor: actor.map(str::to_string), read_only, ..Default::default() });
     }
 
     fn rect_at(page: usize, x: f64) -> Edit {
@@ -6477,13 +6477,48 @@ mod ownership {
         s.apply(id, rect_at(1, 10.0)).unwrap();
     }
 
+    const VIEWER_ONLY: &str = "this change isn't available here: only comments can be made in this view";
+
+    fn viewer(s: &mut Session) {
+        s.set_ownership(Ownership { scope: EditScope::Viewer, ..Default::default() });
+    }
+
+    /// A viewer comments but changes neither pages nor content, alone or inside a `Batch`; the
+    /// default scope (and `builder`) still does everything.
+    #[test]
+    fn a_viewer_scope_refuses_page_and_content_edits_but_not_comments() {
+        let (mut s, id) = session_with(2);
+        viewer(&mut s);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }).unwrap();
+        s.apply(id, Edit::Batch { label: "b".into(), edits: vec![rect_at(1, 10.0)] }).unwrap();
+        refused(&mut s, id, Edit::RotatePages { pages: vec![0], degrees: 90 }, VIEWER_ONLY);
+        refused(&mut s, id, Edit::DeletePages { pages: vec![1] }, VIEWER_ONLY);
+        refused(&mut s, id, Edit::SetInfo { key: "Title".into(), value: "x".into() }, VIEWER_ONLY);
+        refused(&mut s, id, Edit::FlattenFillSign, VIEWER_ONLY);
+        refused(&mut s, id, Edit::Batch { label: "b".into(), edits: vec![rect_at(1, 30.0), Edit::ReversePages { pages: vec![0, 1] }] }, VIEWER_ONLY);
+        s.set_ownership(Ownership { scope: EditScope::All, ..Default::default() });
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    }
+
+    /// A signature is a change to the document too.
+    #[test]
+    fn a_viewer_scope_also_refuses_digital_signing() {
+        let (mut s, id) = session_with(1);
+        viewer(&mut s);
+        let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let me = sign::pkcs12::open(&p12, "test").unwrap();
+        let err = s.sign(id, &me, SignOptions::default()).expect_err("a viewer doesn't sign");
+        assert_eq!(err.to_string(), VIEWER_ONLY);
+    }
+
     #[test]
     fn a_read_only_document_opened_later_is_read_only_too() {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         act(&mut s, Some("u-a"), true);
         let id = s.open("later.pdf", None, Arc::new(fixture(1)), None).unwrap();
         refused(&mut s, id, rect_at(0, 10.0), READ_ONLY);
-        assert_eq!(s.get(id).unwrap().ownership(), &Ownership { actor: Some("u-a".into()), read_only: true });
+        assert_eq!(s.get(id).unwrap().ownership(), &Ownership { actor: Some("u-a".into()), read_only: true, ..Default::default() });
     }
 
     #[test]
