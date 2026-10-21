@@ -59,12 +59,10 @@ fn main() {
                     if query_param("host").as_deref() == Some("parent")
                         && let Some(bridge) = host::Bridge::new()
                     {
-                        // `?author=`: the host's name for the user signs their comments,
-                        // unless they chose a name in PdfCraft (the web default is "Guest").
-                        if let Some(author) = query_param("author").map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
-                            && app.comment_prefs.author == "Guest"
-                        {
-                            app.comment_prefs.author = author.chars().take(200).collect();
+                        // `?author=`: the host's name for the user signs their comments, whatever name the
+                        // shared settings hold; it is neither editable here nor saved.
+                        if let Some(author) = query_param("author") {
+                            app.set_host_author(&author);
                         }
                         bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), app.ownership_inbox.clone(), cc.egui_ctx.clone());
                         app.host_stamp = Some(bridge.stamp_fn());
