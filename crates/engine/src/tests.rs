@@ -6508,6 +6508,97 @@ mod ownership {
         again.apply(id2, Edit::DeleteAnnotation { page: 0, index: 1 }).unwrap();
     }
 
+    /// Export the comments (all of them) in `format`, as a comment file to read back in.
+    fn comment_file(s: &Session, id: DocId, format: DataFormat) -> Arc<Vec<u8>> {
+        Arc::new(s.export_data(id, format, true, false).unwrap())
+    }
+
+    #[test]
+    fn reading_back_a_comment_file_keeps_the_owners() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        let xfdf = comment_file(&s, id, DataFormat::Xfdf);
+        s.apply(id, Edit::ImportData { name: "c.xfdf".into(), bytes: xfdf }).unwrap();
+        let l = page_annots(&s, id, 0);
+        assert_eq!(l.len(), 1, "the same /NM overwrites in place");
+        assert_eq!(owner_text(&l[0]).as_deref(), Some("u-a"), "and the owner stays");
+        assert!(s.get(id).unwrap().can_edit_comment(0, 0));
+    }
+
+    #[test]
+    fn reading_back_a_comment_file_over_someone_elses_comment_is_refused() {
+        let (mut s, id) = two_owners();
+        let xfdf = comment_file(&s, id, DataFormat::Xfdf);
+        refused(&mut s, id, Edit::ImportData { name: "c.xfdf".into(), bytes: xfdf }, PAGE);
+    }
+
+    #[test]
+    fn a_comment_file_cannot_hand_my_comment_to_someone_else() {
+        let (mut s, id) = two_owners();
+        let fdf = comment_file(&s, id, DataFormat::Fdf);
+        let text = String::from_utf8_lossy(&fdf).replace("(u-a)", "(u-z)");
+        assert_ne!(text.as_bytes(), &fdf[..], "the file names the owner");
+        s.apply(id, Edit::ImportData { name: "c.fdf".into(), bytes: Arc::new(text.into_bytes()) }).unwrap();
+        assert_eq!(owner_text(&page_annots(&s, id, 0)[0]).as_deref(), Some("u-a"));
+        assert!(s.get(id).unwrap().can_edit_comment(0, 0));
+    }
+
+    #[test]
+    fn read_only_also_stops_undo_and_redo() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        act(&mut s, Some("u-a"), true);
+        assert_eq!(s.undo(id).unwrap_err().to_string(), READ_ONLY);
+        assert_eq!(s.redo(id).unwrap_err().to_string(), READ_ONLY);
+        assert_eq!(page_annots(&s, id, 0).len(), 1);
+    }
+
+    #[test]
+    fn a_new_actor_cannot_undo_the_old_ones_work() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        act(&mut s, Some("u-b"), false);
+        assert!(s.get(id).unwrap().can_undo().is_none());
+        assert_eq!(page_annots(&s, id, 0).len(), 1);
+    }
+
+    #[test]
+    fn rules_for_the_next_open_leave_the_open_documents_alone() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), true);
+        s.set_open_ownership(Ownership::default());
+        let second = s.open("two.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        assert!(s.get(second).unwrap().editable());
+        assert!(!s.get(id).unwrap().editable(), "the first document stays read-only");
+        assert_eq!(s.get(id).unwrap().ownership().actor.as_deref(), Some("u-a"));
+    }
+
+    #[test]
+    fn a_pdfa_conversion_is_not_refused_for_changes_the_server_ignores() {
+        let (mut s, id) = two_owners();
+        // A foreign comment's flags and appearance are not what the save check compares.
+        raw(&mut s, id, 0, 1, |d| {
+            d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(0));
+            d.set(b"C".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Real(0.5); 3]));
+        });
+        let before = pdfcraft_annot::ownership::foreign_snapshot(&s.get(id).unwrap().editor.as_ref().unwrap().cos, "u-a");
+        raw(&mut s, id, 0, 1, |d| {
+            d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(4));
+            d.remove(b"AP");
+            d.set(b"M".to_vec(), pdfcraft_cos::PdfString::text("D:20260101000000Z"));
+        });
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        assert!(pdfcraft_annot::ownership::check_foreign_kept(cos, &before).is_ok());
+        raw(&mut s, id, 0, 1, |d| {
+            d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("changed"));
+        });
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        assert!(pdfcraft_annot::ownership::check_foreign_kept(cos, &before).is_err());
+    }
+
     // ---- fixtures for the server-side save check ----
 
     fn nm_of(s: &Session, id: DocId, page: usize, index: usize) -> String {

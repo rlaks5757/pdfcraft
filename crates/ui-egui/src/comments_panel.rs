@@ -476,7 +476,7 @@ fn card(
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }
-            if ui.button(tl!("Properties…")).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!("Properties…"))).clicked() {
                 view.comments.props_request = Some((a.page, a.index));
                 ui.close();
             }

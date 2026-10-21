@@ -2369,7 +2369,10 @@ impl EditCtx {
 /// edit in it, so an edit sees the comments the ones before it made.
 fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     owner_guard::check(doc, edit, &cx.ownership)?;
-    let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| (a, pdfcraft_annot::ownership::known(doc)));
+    let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| {
+        let known = pdfcraft_annot::ownership::known(doc, &a);
+        (a, known)
+    });
     run_edit_body(doc, edit, cx)?;
     if let Some((actor, known)) = claim {
         pdfcraft_annot::ownership::claim_new(doc, &known, &actor, &mut || cx.meta().id)?;
@@ -3328,13 +3331,27 @@ impl Session {
         Self::default()
     }
 
-    /// Set who is editing (the embedding page's `actor`, `readOnly`) for every open and later
-    /// document. An actor marks the comments it creates as its own and keeps it from changing
-    /// anyone else's; read-only refuses every edit. [`Ownership::default`] turns both off.
+    /// Set who is editing (the embedding page's `actor`, `readOnly`) for every open document and
+    /// the ones opened later. An actor marks the comments it creates as its own and keeps it from
+    /// changing anyone else's; read-only refuses every edit. [`Ownership::default`] turns both
+    /// off. A document whose actor changes loses its undo history: the new actor must not undo
+    /// the old one's work.
     pub fn set_ownership(&mut self, ownership: Ownership) {
         for doc in &mut self.docs {
+            if doc.ownership.actor != ownership.actor
+                && let Some(editor) = doc.editor.as_mut()
+            {
+                editor.undo.clear();
+                editor.redo.clear();
+            }
             doc.ownership = ownership.clone();
         }
+        self.ownership = ownership;
+    }
+
+    /// [`Session::set_ownership`] for the documents opened from now on only; the ones already
+    /// open keep the rules they were opened under (a held-back second open must not change them).
+    pub fn set_open_ownership(&mut self, ownership: Ownership) {
         self.ownership = ownership;
     }
 
@@ -3916,6 +3933,9 @@ impl Session {
 
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
+        if doc.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
@@ -3931,6 +3951,9 @@ impl Session {
 
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
+        if doc.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
@@ -4951,6 +4974,9 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if d.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -4969,6 +4995,9 @@ impl Session {
         tsa: &dyn pdfcraft_sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if d.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();

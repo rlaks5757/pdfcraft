@@ -4796,6 +4796,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
                             && app.session.get(id).is_some_and(|doc| {
                                 doc.allows_annotation()
+                                    && doc.can_edit_comment(page, annotation)
                                     && doc
                                         .info
                                         .annotations

@@ -1688,7 +1688,7 @@ pub(crate) fn context_menu(
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();
             }
-            if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!("Properties…"))).clicked() {
                 action = Some(CanvasAction::Properties(page, index));
                 ui.close();
             }

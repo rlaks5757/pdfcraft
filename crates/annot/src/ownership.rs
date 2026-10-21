@@ -118,42 +118,85 @@ fn scan(doc: &Document) -> Vec<Seen> {
     out
 }
 
-/// The comments `actor` doesn't own, as they were: what an edit must leave exactly as it was.
+/// The fields of a comment that matter for who it belongs to and what it says: the ones the
+/// server's save check compares (Subtype, Rect, Contents, /T, /PpmOwner, /PpmStamp, QuadPoints,
+/// InkList, the `/NM` of its `/IRT` target). Object numbers, `/AP`, `/M`, `/F`, `/P` and the
+/// like are left out, so a re-serialization (PDF/A conversion) doesn't count as a change.
+#[derive(Clone, Debug, PartialEq)]
+struct Essence {
+    subtype: Option<Vec<u8>>,
+    /// Hundredths of a point, so float noise doesn't count.
+    rect: Option<Vec<i64>>,
+    contents: Option<String>,
+    title: Option<String>,
+    owner: Option<String>,
+    stamp: Option<Object>,
+    quads: Option<Object>,
+    ink: Option<Object>,
+    reply_to: Option<String>,
+}
+
+fn essence(doc: &Document, d: &Dict) -> Essence {
+    let text = |key: &[u8]| d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
+    let deep = |key: &[u8]| {
+        let o = doc.resolve(d.get(key)?);
+        // One level of indirection inside an array (InkList's strokes) is resolved too.
+        Some(match o.as_array() {
+            Some(items) => Object::Array(items.iter().map(|i| (*doc.resolve(i)).clone()).collect()),
+            None => (*o).clone(),
+        })
+    };
+    Essence {
+        subtype: d.name(b"Subtype").map(<[u8]>::to_vec),
+        rect: d.get(b"Rect").map(|o| doc.resolve(o)).and_then(|o| o.as_array().map(|a| a.iter().map(|n| (doc.resolve(n).as_f64().unwrap_or(0.0) * 100.0).round() as i64).collect())),
+        contents: text(b"Contents"),
+        title: text(b"T"),
+        owner: owner_of(doc, d),
+        stamp: deep(b"PpmStamp"),
+        quads: deep(b"QuadPoints"),
+        ink: deep(b"InkList"),
+        reply_to: d.reference(b"IRT").and_then(|r| doc.get(r).as_dict().and_then(|t| name_of(doc, t))),
+    }
+}
+
+/// The comments `actor` doesn't own, as they were: what an edit must leave as it was.
 pub struct Foreign {
-    by_ref: HashMap<ObjRef, (usize, Dict)>,
-    inline: Vec<(usize, Dict)>,
+    by_ref: HashMap<ObjRef, (usize, Essence)>,
+    inline: Vec<(usize, Essence)>,
 }
 
 pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
     let mut f = Foreign { by_ref: HashMap::new(), inline: Vec::new() };
     for s in scan(doc).into_iter().filter(|s| !owned_by(doc, &s.dict, actor)) {
+        let e = essence(doc, &s.dict);
         match s.obj {
             Some(r) => {
-                f.by_ref.insert(r, (s.page, s.dict));
+                f.by_ref.insert(r, (s.page, e));
             }
-            None => f.inline.push((s.page, s.dict)),
+            None => f.inline.push((s.page, e)),
         }
     }
     f
 }
 
-/// Every comment in `before` is still there, on the same page, with the same dictionary: the
-/// answer for any edit that could drop, move or rewrite comments in bulk.
+/// Every comment in `before` is still there, on the same page, with the same essential fields:
+/// the answer for any edit that could drop, move or rewrite comments in bulk. It is the rule the
+/// server holds a saved file to, so what the server accepts isn't refused here.
 pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotError> {
     if before.by_ref.is_empty() && before.inline.is_empty() {
         return Ok(());
     }
     let now = scan(doc);
-    let by_ref: HashMap<ObjRef, (usize, &Dict)> = now.iter().filter_map(|s| s.obj.map(|r| (r, (s.page, &s.dict)))).collect();
-    let mut inline: Vec<(usize, &Dict)> = now.iter().filter(|s| s.obj.is_none()).map(|s| (s.page, &s.dict)).collect();
-    for (r, (page, dict)) in &before.by_ref {
+    let by_ref: HashMap<ObjRef, (usize, Essence)> = now.iter().filter_map(|s| s.obj.map(|r| (r, (s.page, essence(doc, &s.dict))))).collect();
+    let mut inline: Vec<(usize, Essence)> = now.iter().filter(|s| s.obj.is_none()).map(|s| (s.page, essence(doc, &s.dict))).collect();
+    for (r, was) in &before.by_ref {
         // A comment edited into an inline copy (or promoted to a reference) counts as changed.
-        if by_ref.get(r) != Some(&(*page, dict)) {
+        if by_ref.get(r) != Some(was) {
             return Err(AnnotError::ForeignPage);
         }
     }
-    for (page, dict) in &before.inline {
-        let Some(at) = inline.iter().position(|(p, d)| p == page && *d == dict) else { return Err(AnnotError::ForeignPage) };
+    for was in &before.inline {
+        let Some(at) = inline.iter().position(|n| n == was) else { return Err(AnnotError::ForeignPage) };
         inline.swap_remove(at);
     }
     Ok(())
@@ -163,20 +206,25 @@ pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotE
 pub struct Known {
     pages: HashSet<ObjRef>,
     refs: HashSet<ObjRef>,
+    /// Comments of the actor's that were there: an import can overwrite one in place.
+    own: HashSet<ObjRef>,
     /// Entries that were inline: (page, index in `/Annots`, dictionary).
     inline: Vec<(ObjRef, usize, Dict)>,
     names: HashSet<String>,
 }
 
-pub fn known(doc: &Document) -> Known {
-    let mut k = Known { pages: HashSet::new(), refs: HashSet::new(), inline: Vec::new(), names: HashSet::new() };
+pub fn known(doc: &Document, actor: &str) -> Known {
+    let mut k = Known { pages: HashSet::new(), refs: HashSet::new(), own: HashSet::new(), inline: Vec::new(), names: HashSet::new() };
     let Ok(pages) = page_refs(doc) else { return k };
     for p in pages {
         k.pages.insert(p);
         for (index, entry) in annots(doc, p).into_iter().enumerate() {
             match (entry.as_ref(), entry_dict(doc, &entry)) {
-                (Some(r), _) => {
+                (Some(r), d) => {
                     k.refs.insert(r);
+                    if d.is_some_and(|d| is_protected(&d) && owned_by(doc, &d, actor)) {
+                        k.own.insert(r);
+                    }
                 }
                 (None, Some(d)) => k.inline.push((p, index, d)),
                 (None, None) => {}
@@ -208,7 +256,17 @@ pub fn claim_new(doc: &mut Document, before: &Known, actor: &str, fresh_name: &m
         let new_page = !before.pages.contains(&p);
         for (index, entry) in annots(doc, p).into_iter().enumerate() {
             let Some(d) = entry_dict(doc, &entry) else { continue };
+            // The actor's own comment overwritten in place (an XFDF/FDF import with the same /NM)
+            // stays theirs, whatever owner the file said.
+            if let Some(r) = entry.as_ref().filter(|r| before.own.contains(r)) {
+                if is_protected(&d) && !owned_by(doc, &d, actor) {
+                    doc.update_dict(r, |d| d.set(OWNER_KEY.as_bytes().to_vec(), PdfString::text(actor)))?;
+                }
+                continue;
+            }
             let mut is_new = new_page || entry.as_ref().is_none_or(|r| !before.refs.contains(&r));
+            // Best effort: an old inline entry that an edit turned into a reference, or left in
+            // place, is matched by equal dictionary or by position and subtype.
             if is_new && !new_page {
                 let same = |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
                 if let Some(at) = old_inline.iter().position(same) {

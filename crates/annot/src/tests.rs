@@ -1487,7 +1487,7 @@ mod ownership_rules {
     fn new_comments_are_claimed_and_given_their_own_names() {
         let mut doc = fixture();
         let a = note(&mut doc, Some("u-b"), "dup");
-        let known_before = known(&doc);
+        let known_before = known(&doc, "u-a");
         // Two new ones: one with a taken /NM, one without any.
         let c = note(&mut doc, None, "dup");
         let d = add_annotation(&mut doc, &new(0, Shape::Note { at: [200.0, 700.0], icon: NoteIcon::Comment }), &meta("")).unwrap();
@@ -1508,14 +1508,14 @@ mod ownership_rules {
         assert_eq!(text(&l[a], b"NM"), "dup");
         assert_eq!(text(&l[0], b"PpmOwner"), "");
         // Nothing new, nothing claimed.
-        let known_now = known(&doc);
+        let known_now = known(&doc, "u-a");
         assert_eq!(claim_new(&mut doc, &known_now, "u-a", &mut || "x".into()).unwrap(), 0);
     }
 
     #[test]
     fn a_whole_new_page_is_claimed_even_for_inline_comments() {
         let mut doc = fixture();
-        let before = known(&doc);
+        let before = known(&doc, "u-a");
         // A page that was not there, its comment inline.
         let pages = page_refs(&doc).unwrap();
         let page = doc.add(Object::Dict({

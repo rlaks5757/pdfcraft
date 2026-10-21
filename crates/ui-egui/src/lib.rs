@@ -394,9 +394,9 @@ pub struct PageClip {
 /// Files delivered asynchronously: (name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
-/// Who is editing, as the embedding page's latest `pdfcraft:open` said; taken when that open's
-/// file is opened ([`PdfCraftApp::ownership_inbox`]).
-pub type OwnershipInbox = std::sync::Arc<std::sync::Mutex<Option<pdfcraft_engine::Ownership>>>;
+/// Who is editing, one entry per `pdfcraft:open`, in the order of the files in `startup_inbox`;
+/// each applies to its own file only ([`PdfCraftApp::ownership_inbox`]).
+pub type OwnershipInbox = std::sync::Arc<std::sync::Mutex<Vec<pdfcraft_engine::Ownership>>>;
 
 /// Files that failed to arrive asynchronously (a browser `?file=` URL that couldn't be fetched):
 /// `(name, error)`, reported to the user on the next frame (#173).
@@ -621,9 +621,9 @@ pub struct PdfCraftApp {
     /// arrival opens in the background once the user has started working (#171).
     pub startup_inbox: Inbox,
     startup_superseded: bool,
-    /// The embedding page's `actor` and `readOnly`, set with the file it opened. They apply when
-    /// that file is taken from `startup_inbox`, so a held-back open doesn't change the rules for
-    /// the document still showing.
+    /// The embedding page's `actor` and `readOnly` for each file it opened (pushed before the
+    /// file). The nth entry belongs to the nth file taken from `startup_inbox`; documents already
+    /// open keep the rules they were opened under.
     pub ownership_inbox: OwnershipInbox,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
@@ -3070,12 +3070,20 @@ impl eframe::App for PdfCraftApp {
             let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
             if !startup.is_empty() {
                 self.disarm_stamp();
-                // Whoever opened this file also says who edits it.
-                if let Some(ownership) = self.ownership_inbox.lock().ok().and_then(|mut o| o.take()) {
-                    self.session.set_ownership(ownership);
-                }
             }
+            // Whoever opened a file also says who edits it; entries for files not yet here wait.
+            let mut rules: std::collections::VecDeque<_> = self
+                .ownership_inbox
+                .lock()
+                .map(|mut o| {
+                    let take = startup.len().min(o.len());
+                    o.drain(..take).collect()
+                })
+                .unwrap_or_default();
             for (name, bytes) in startup {
+                if let Some(ownership) = rules.pop_front() {
+                    self.session.set_open_ownership(ownership);
+                }
                 let activate = !self.startup_superseded;
                 if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);

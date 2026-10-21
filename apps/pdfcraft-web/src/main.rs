@@ -279,7 +279,7 @@ mod host {
                 };
                 // The rules go first, so the file is never opened without them.
                 if let Ok(mut o) = ownership.lock() {
-                    *o = Some(who);
+                    o.push(who);
                 }
                 if let Ok(mut q) = inbox.lock() {
                     q.push((name, bytes));
@@ -439,7 +439,7 @@ mod host {
         let actor = if actor.is_undefined() || actor.is_null() {
             None
         } else {
-            let a = actor.as_string().filter(|a| (1..=200).contains(&a.chars().count()));
+            let a = actor.as_string().filter(|a| (1..=200).contains(&a.encode_utf16().count()));
             Some(a.ok_or_else(|| "actor must be a string of 1 to 200 characters".to_string())?)
         };
         let read_only = if read_only.is_undefined() || read_only.is_null() {
