@@ -1541,3 +1541,64 @@ mod ownership_rules {
         assert_eq!(text(&list(&doc, 0)[0], b"PpmOwner"), "");
     }
 }
+
+/// The text box appearance of `contents`: its content stream and /Resources /Font /Helv.
+fn text_box_ap(contents: &str) -> (String, Dict, Document, usize) {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [20.0, 600.0, 220.0, 700.0], font_size: 12.0 }), &meta("k")).unwrap();
+    set_contents(&mut doc, 0, t, contents, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = list(&doc, 0)[t].clone();
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    let font = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap().as_dict().unwrap().clone();
+    (ap_content(&doc, &d), font, doc, t)
+}
+
+#[test]
+fn latin_text_box_appearance_keeps_helvetica_output() {
+    let (content, fonts, ..) = text_box_ap("Hello (world)");
+    let helv = fonts.get(b"Helv").and_then(Object::as_dict).expect("direct Helvetica");
+    assert_eq!(helv.name(b"Subtype"), Some(&b"Type1"[..]));
+    assert_eq!(helv.name(b"BaseFont"), Some(&b"Helvetica"[..]));
+    assert_eq!(helv.name(b"Encoding"), Some(&b"WinAnsiEncoding"[..]));
+    assert_eq!(content, LATIN_BOX_CONTENT, "{content}");
+}
+
+#[test]
+fn korean_text_box_embeds_a_subset_font_and_draws_glyphs() {
+    if pdfcraft_fonts::subset::face().is_none() {
+        return; // this build has no bundled Korean face: the Helvetica `?` path applies
+    }
+    let (content, fonts, doc, t) = text_box_ap("안녕하세요 한글");
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"Contents"), "안녕하세요 한글", "the real text stays in /Contents");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), None, "drawn, not marked as `?`");
+    assert!(!content.contains("(?"), "{content}");
+    let font = doc.resolve(fonts.get(b"Helv").unwrap()).as_dict().unwrap().clone();
+    assert_eq!(font.name(b"Subtype"), Some(&b"Type0"[..]));
+    assert_eq!(font.name(b"Encoding"), Some(&b"Identity-H"[..]));
+    let Object::Stream(tu) = &*doc.resolve(font.get(b"ToUnicode").expect("ToUnicode")) else { panic!("ToUnicode is a stream") };
+    let tu = String::from_utf8_lossy(&tu.decoded().unwrap()).into_owned();
+    // U+C548 (안) is mapped back for copy and search.
+    assert!(tu.contains("<C548>"), "{tu}");
+    let cid = doc.resolve(&font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]).as_dict().unwrap().clone();
+    assert_eq!(cid.name(b"Subtype"), Some(&b"CIDFontType2"[..]));
+    let desc = doc.resolve(cid.get(b"FontDescriptor").unwrap()).as_dict().unwrap().clone();
+    let Object::Stream(program) = &*doc.resolve(desc.get(b"FontFile2").expect("embedded program")) else { panic!() };
+    println!("korean subset font program: {} bytes (flate)", program.raw.len());
+    assert!(program.raw.len() < 100_000, "a subset, not the 2 MB face: {}", program.raw.len());
+
+    // Rasterized, the box has dark glyph pixels (the page is otherwise blank at that spot).
+    let page_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(page_bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    // The interior of the box, inside its 2 pt border (the text is blue on white).
+    let (x0, x1, y0, y1) = (24 * 2, 216 * 2, (792 - 697) * 2, (792 - 678) * 2);
+    let dark = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|(x, y)| out.rgba[((y * out.width as usize + x) * 4)..][..3].iter().any(|c| *c < 200)).count();
+    assert!(dark > 100, "glyphs are drawn: {dark} inked pixels");
+}
+
+/// Captured from the Helvetica-only builder before Unicode text boxes existed.
+const LATIN_BOX_CONTENT: &str = "0 0.4 1 RG\n2 w\n21 676.6 198 22.4 re S\n[] 0 d\n20 675.6 200 24.4 re W n\nBT\n/Helv 12 Tf\n0 0.4 1 rg\n1 0 0 1 24 685.2 Tm (Hello \\(world\\)) Tj\nET\n";

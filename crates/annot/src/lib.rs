@@ -1352,8 +1352,33 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
     Some(stream)
 }
 
+/// Move every stream nested in `o` into its own indirect object (the built appearance's embedded
+/// font program and ToUnicode map).
+fn hoist_streams(doc: &mut Document, o: &mut Object) {
+    match o {
+        Object::Stream(_) => {
+            let s = std::mem::replace(o, Object::Null);
+            *o = Object::Ref(doc.add(s));
+        }
+        Object::Dict(d) => {
+            let keys: Vec<_> = d.iter().map(|(k, _)| k.clone()).collect();
+            for k in keys {
+                if let Some(v) = d.get_mut(&k) {
+                    hoist_streams(doc, v);
+                }
+            }
+        }
+        Object::Array(a) => a.iter_mut().for_each(|v| hoist_streams(doc, v)),
+        _ => {}
+    }
+}
+
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
-fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
+fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, mut stream: Stream) -> Result<(), AnnotError> {
+    // An embedded font's streams are nested in the built resources; streams must be indirect.
+    if let Some(res) = stream.dict.get_mut(b"Resources") {
+        hoist_streams(doc, res);
+    }
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
     let ap = doc.add(Object::Stream(stream));
