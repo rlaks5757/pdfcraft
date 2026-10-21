@@ -4708,6 +4708,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             }
                         }
                     }
+                    if app.host_allows("sign.fill.text") {
                     // Fill & Sign ▸ (text, marks, date, signature).
                     let current_fill = match app.quick_tool {
                         QuickTool::Fill(f) => Some(f),
@@ -4787,6 +4788,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 .speed(0.25)
                                 .suffix(" pt"),
                         );
+                    }
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());

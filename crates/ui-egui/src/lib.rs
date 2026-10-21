@@ -3235,6 +3235,10 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
+        // A viewer works in the one workspace that has the comment tools on the page.
+        if self.host_viewer() && self.mode != Mode::AllTools {
+            self.select_mode(Mode::AllTools);
+        }
         // Host lock without a host: nothing but the notice, and nothing to open.
         if self.host_missing() {
             host_lock::open_in_ppm_screen(ui);

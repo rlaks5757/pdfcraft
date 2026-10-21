@@ -82,6 +82,12 @@ pub(crate) const VIEWER: &[&str] = &[
     "form.clear",
     "sign.panel",
     "sign.validate",
+    "help.shortcuts",
+    "help.about",
+];
+
+/// Commands only a builder may run: editing the document itself.
+pub(crate) const BUILDER: &[&str] = &[
     "sign.fill.text",
     "sign.fill.check",
     "sign.fill.cross",
@@ -90,12 +96,6 @@ pub(crate) const VIEWER: &[&str] = &[
     "sign.fill.date",
     "sign.fill.signature",
     "sign.fill.initials",
-    "help.shortcuts",
-    "help.about",
-];
-
-/// Commands only a builder may run: editing the document itself.
-pub(crate) const BUILDER: &[&str] = &[
     "measure.distance",
     "measure.perimeter",
     "measure.area",
@@ -292,6 +292,12 @@ impl PdfCraftApp {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(EditScope::Viewer, |d| d.ownership().scope)
     }
 
+    /// A locked build showing a viewer's document (or none): the interface offers comments and
+    /// looking around, and hides the tools that edit the document itself.
+    pub(crate) fn host_viewer(&self) -> bool {
+        self.host_lock && self.host_scope() == EditScope::Viewer
+    }
+
     /// Whether the host lock lets command `id` run now. Always true without the lock.
     pub(crate) fn host_allows(&self, id: &str) -> bool {
         if !self.host_lock {
@@ -405,11 +411,13 @@ mod tests {
         app.session.set_open_ownership(Ownership { scope: EditScope::Viewer, ..Default::default() });
         app.open_bytes("v.pdf", None, pdf()).unwrap();
         assert!(!app.host_allows("page.rotate") && !app.host_allows("redact.apply"));
+        assert!(app.host_viewer() && !app.host_allows("sign.fill.text") && !app.host_allows("sign.fill.signature"), "Fill & Sign is not in /viewer");
         assert!(!app.execute("page.rotate") && !app.execute("file.open") && !app.execute("print.dialog"), "refused without a word");
         assert!(app.toast.is_none() && app.dialog.is_none());
         app.session.set_open_ownership(Ownership { scope: EditScope::All, ..Default::default() });
         app.open_bytes("b.pdf", None, pdf()).unwrap();
         assert!(app.host_allows("page.rotate") && app.host_allows("redact.apply"), "a builder edits the document");
+        assert!(!app.host_viewer() && app.host_allows("sign.fill.text"), "and fills and signs");
         assert!(!app.host_allows("file.open") && !app.host_allows("file.save_as") && !app.host_allows("print.dialog"), "but still not the files");
         // The same commands run in a build without the lock.
         app.host_lock = false;
