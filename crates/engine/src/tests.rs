@@ -6535,7 +6535,9 @@ mod ownership {
 
     #[test]
     fn a_comment_file_cannot_hand_my_comment_to_someone_else() {
-        let (mut s, id) = two_owners();
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
         let fdf = comment_file(&s, id, DataFormat::Fdf);
         let text = String::from_utf8_lossy(&fdf).replace("(u-a)", "(u-z)");
         assert_ne!(text.as_bytes(), &fdf[..], "the file names the owner");
@@ -6577,26 +6579,20 @@ mod ownership {
     }
 
     #[test]
-    fn a_pdfa_conversion_is_not_refused_for_changes_the_server_ignores() {
+    fn any_change_to_a_foreign_comments_object_graph_is_refused() {
         let (mut s, id) = two_owners();
-        // A foreign comment's flags and appearance are not what the save check compares.
-        raw(&mut s, id, 0, 1, |d| {
-            d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(0));
-            d.set(b"C".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Real(0.5); 3]));
-        });
-        let before = pdfcraft_annot::ownership::foreign_snapshot(&s.get(id).unwrap().editor.as_ref().unwrap().cos, "u-a");
-        raw(&mut s, id, 0, 1, |d| {
-            d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(4));
-            d.remove(b"AP");
-            d.set(b"M".to_vec(), pdfcraft_cos::PdfString::text("D:20260101000000Z"));
-        });
-        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
-        assert!(pdfcraft_annot::ownership::check_foreign_kept(cos, &before).is_ok());
-        raw(&mut s, id, 0, 1, |d| {
-            d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("changed"));
-        });
-        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
-        assert!(pdfcraft_annot::ownership::check_foreign_kept(cos, &before).is_err());
+        let snap = |s: &Session| pdfcraft_annot::ownership::foreign_snapshot(&s.get(id).unwrap().editor.as_ref().unwrap().cos, "u-a");
+        let kept = |s: &Session, before: &pdfcraft_annot::ownership::Foreign| pdfcraft_annot::ownership::check_foreign_kept(&s.get(id).unwrap().editor.as_ref().unwrap().cos, before).is_ok();
+        let before = snap(&s);
+        assert!(kept(&s, &before));
+        // Even what the save check's field list doesn't name: flags (what a PDF/A conversion writes), dates, colour.
+        for change in [("F", pdfcraft_cos::Object::Int(77)), ("C", pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Real(0.5); 3]))] {
+            let before = snap(&s);
+            raw(&mut s, id, 0, 1, |d| d.set(change.0.as_bytes().to_vec(), change.1.clone()));
+            assert!(!kept(&s, &before), "{} changed", change.0);
+        }
+        raw(&mut s, id, 0, 1, |d| d.set(b"M".to_vec(), pdfcraft_cos::PdfString::text("D:20260101000000Z")));
+        assert!(!kept(&s, &before));
     }
 
     // ---- fixtures for the server-side save check ----
@@ -6618,6 +6614,42 @@ mod ownership {
         let id = s.open("fixture.pdf", None, bytes.clone(), None).unwrap();
         act(&mut s, actor, false);
         (s, id)
+    }
+
+    /// `PPM_OWN_FIXTURES_DIR=<dir> PPM_OWN_OUTSIDE_PDF=<pdf-lib file> cargo test -p pdfcraft-engine --lib write_outside_tool_fixtures -- --ignored`
+    /// runs a PDF whose annotations an outside tool wrote (no /PpmOwner) through the engine. Run it
+    /// after `write_ownership_fixtures`: it adds files 13 to 16 and a section to the README.
+    #[test]
+    #[ignore = "writes files; set PPM_OWN_FIXTURES_DIR and PPM_OWN_OUTSIDE_PDF"]
+    fn write_outside_tool_fixtures() {
+        let dir = std::path::PathBuf::from(std::env::var_os("PPM_OWN_FIXTURES_DIR").expect("set PPM_OWN_FIXTURES_DIR"));
+        let source = std::fs::read(std::env::var_os("PPM_OWN_OUTSIDE_PDF").expect("set PPM_OWN_OUTSIDE_PDF")).unwrap();
+        let put = |name: &str, bytes: &[u8]| std::fs::write(dir.join(name), bytes).unwrap();
+        put("13_outside_base.pdf", &source);
+
+        let (s, id) = reopened(&Arc::new(source.clone()), Some("u-a"));
+        let list = page_annots(&s, id, 0);
+        assert!(list.iter().all(|d| d.get(b"PpmOwner").is_none()), "the outside annotations have no owner");
+        put("14_outside_untouched_full_rewrite.pdf", &s.save_full_bytes(id).unwrap());
+        put("15_outside_untouched_incremental.pdf", &s.save_bytes(id).unwrap());
+
+        // u-a answers the Square (index 0). Replies are allowed on comments nobody owns.
+        let (mut s2, id2) = reopened(&Arc::new(source), Some("u-a"));
+        s2.apply(id2, Edit::ReplyToAnnotation { page: 0, index: 0, text: "a replies".into(), author: "A".into() }).unwrap();
+        put("16_outside_ua_reply.pdf", &s2.save_bytes(id2).unwrap());
+        put("16_outside_ua_reply_full_rewrite.pdf", &s2.save_full_bytes(id2).unwrap());
+
+        let readme = dir.join("README.md");
+        let mut text = std::fs::read_to_string(&readme).unwrap_or_default();
+        text.push_str(
+            "\n## Annotations from an outside tool (pdf-lib), all without /PpmOwner\n\n\
+`13_outside_base.pdf` holds, on page 0: Square (which has a Popup), FreeText with /DA, Highlight, Ink, and a Stamp whose /AP draws an image XObject. Each has /NM `ext-<Subtype>`, /T `Outside Tool`, /F 4. Written by `outside.cjs` next to this README (pdf-lib, no object streams). They are all ownerless, so locked for everyone.\n\n\
+Must pass for actor u-a (reference: `13_outside_base.pdf`):\n\
+- `14_outside_untouched_full_rewrite.pdf`: opened with u-a and saved as a full rewrite, nothing changed.\n\
+- `15_outside_untouched_incremental.pdf`: the same as an incremental save (no change, so it may equal the base byte for byte).\n\
+- `16_outside_ua_reply.pdf` and `16_outside_ua_reply_full_rewrite.pdf`: u-a replied to the Square; the reply is u-a's, the outside annotations stay as they were.\n",
+        );
+        std::fs::write(&readme, text).unwrap();
     }
 
     /// `PPM_OWN_FIXTURES_DIR=<dir> cargo test -p pdfcraft-engine --lib write_ownership_fixtures -- --ignored`

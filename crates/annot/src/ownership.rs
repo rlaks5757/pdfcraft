@@ -118,45 +118,44 @@ fn scan(doc: &Document) -> Vec<Seen> {
     out
 }
 
-/// The fields of a comment that matter for who it belongs to and what it says: the ones the
-/// server's save check compares (Subtype, Rect, Contents, /T, /PpmOwner, /PpmStamp, QuadPoints,
-/// InkList, the `/NM` of its `/IRT` target). Object numbers, `/AP`, `/M`, `/F`, `/P` and the
-/// like are left out, so a re-serialization (PDF/A conversion) doesn't count as a change.
-#[derive(Clone, Debug, PartialEq)]
-struct Essence {
-    subtype: Option<Vec<u8>>,
-    /// Hundredths of a point, so float noise doesn't count.
-    rect: Option<Vec<i64>>,
-    contents: Option<String>,
-    title: Option<String>,
-    owner: Option<String>,
-    stamp: Option<Object>,
-    quads: Option<Object>,
-    ink: Option<Object>,
-    reply_to: Option<String>,
-}
+/// A comment as the file holds it, everything it points to included: references are replaced
+/// by what they point at (a loop stays a reference), except `/P`, the page it sits on, which
+/// the page number stands for, and `/IRT` and `/Parent`, which stay references. Any change to the comment's object graph (`/AP` streams, fonts,
+/// flags, dates) shows. The server hashes the same way, so what it would refuse is refused here.
+type Essence = Object;
 
 fn essence(doc: &Document, d: &Dict) -> Essence {
-    let text = |key: &[u8]| d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
-    let deep = |key: &[u8]| {
-        let o = doc.resolve(d.get(key)?);
-        // One level of indirection inside an array (InkList's strokes) is resolved too.
-        Some(match o.as_array() {
-            Some(items) => Object::Array(items.iter().map(|i| (*doc.resolve(i)).clone()).collect()),
-            None => (*o).clone(),
-        })
-    };
-    Essence {
-        subtype: d.name(b"Subtype").map(<[u8]>::to_vec),
-        rect: d.get(b"Rect").map(|o| doc.resolve(o)).and_then(|o| o.as_array().map(|a| a.iter().map(|n| (doc.resolve(n).as_f64().unwrap_or(0.0) * 100.0).round() as i64).collect())),
-        contents: text(b"Contents"),
-        title: text(b"T"),
-        owner: owner_of(doc, d),
-        stamp: deep(b"PpmStamp"),
-        quads: deep(b"QuadPoints"),
-        ink: deep(b"InkList"),
-        reply_to: d.reference(b"IRT").and_then(|r| doc.get(r).as_dict().and_then(|t| name_of(doc, t))),
+    fn walk(doc: &Document, o: &Object, seen: &mut Vec<ObjRef>) -> Object {
+        match o {
+            Object::Ref(r) => {
+                if seen.contains(r) {
+                    return o.clone();
+                }
+                seen.push(*r);
+                let out = walk(doc, &doc.get(*r), seen);
+                seen.pop();
+                out
+            }
+            Object::Dict(d) => Object::Dict(dict(doc, d, seen)),
+            Object::Array(items) => Object::Array(items.iter().map(|i| walk(doc, i, seen)).collect()),
+            Object::Stream(st) => Object::Stream(pdfcraft_cos::Stream { dict: dict(doc, &st.dict, seen), raw: st.raw.clone() }),
+            other => other.clone(),
+        }
     }
+    fn dict(doc: &Document, d: &Dict, seen: &mut Vec<ObjRef>) -> Dict {
+        let mut out = Dict::new();
+        for (k, v) in d.iter() {
+            match k.as_slice() {
+                b"P" => {}
+                // The links to the comment it answers: followed, a reply would change whenever
+                // its parent is edited, which the parent's owner may do.
+                b"IRT" | b"Parent" => out.set(k.clone(), v.clone()),
+                _ => out.set(k.clone(), walk(doc, v, seen)),
+            }
+        }
+        out
+    }
+    Object::Dict(dict(doc, d, &mut Vec::new()))
 }
 
 /// The comments `actor` doesn't own, as they were: what an edit must leave as it was.
@@ -180,8 +179,8 @@ pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
 }
 
 /// Every comment in `before` is still there, on the same page, with the same essential fields:
-/// the answer for any edit that could drop, move or rewrite comments in bulk. It is the rule the
-/// server holds a saved file to, so what the server accepts isn't refused here.
+/// the answer for any edit that could drop, move or rewrite comments in bulk. It is as strict as
+/// the server's save check on purpose: an edit the server would refuse later must fail now.
 pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotError> {
     if before.by_ref.is_empty() && before.inline.is_empty() {
         return Ok(());
