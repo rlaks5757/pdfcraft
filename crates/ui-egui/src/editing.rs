@@ -1059,6 +1059,10 @@ fn short_name(path: &str) -> String {
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    // Host lock: a save goes to the host as a message, never to the user's disk.
+    if crate::HOST_LOCK {
+        return Err("downloads are turned off here".into());
+    }
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let array = js_sys::Uint8Array::from(bytes);

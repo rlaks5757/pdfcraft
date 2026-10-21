@@ -28,7 +28,8 @@ fn main() {
                         app.restore(&json);
                     }
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
-                    if let Some(url) = query_param("file") {
+                    // A host-lock build (PPM) opens only what the host sends, so it never fetches one.
+                    if let Some(url) = query_param("file").filter(|_| !pdfcraft_ui_egui::HOST_LOCK) {
                         let inbox = app.startup_inbox.clone();
                         let failed = app.failed_inbox.clone();
                         let ctx = cc.egui_ctx.clone();
@@ -75,6 +76,8 @@ fn main() {
                             &"PdfCraft: ?host=parent needs a framing page on the same origin; saves download instead".into(),
                         );
                     }
+                    // Without the bridge above `host_save` stays unset, and a host-lock build then
+                    // shows only its "open it in PPM" page and opens nothing.
                     Ok(Box::new(app))
                 }),
             )
@@ -127,13 +130,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
-/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly? }`, where `bytes` is an
+/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly?, mode? }`, where `bytes` is an
 ///   `ArrayBuffer` or `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 ///   `actor` (a string of 1 to 200 characters, the user's id) makes every comment the app creates
 ///   the user's, and lets only that user change or delete comments; comments without an owner are
 ///   locked. `readOnly` (a boolean) refuses every edit that changes the document. Both default
 ///   to off, and each open sets them anew. A wrong type or length refuses the open with
-///   `pdfcraft:failed` instead of opening without the checks.
+///   `pdfcraft:failed` instead of opening without the checks. `mode` (`"viewer"` or `"builder"`)
+///   is how much editing a host-lock build allows: `"builder"` everything it doesn't lock for
+///   every host, anything else, or nothing, only comments. A build without the lock ignores it.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
@@ -429,7 +434,7 @@ mod host {
         })
     }
 
-    /// Read `actor` and `readOnly` of a `pdfcraft:open` message. Missing means off; a wrong type or
+    /// Read `actor`, `readOnly` and `mode` of a `pdfcraft:open` message. Missing means off; a wrong type or
     /// length is an error (the open is refused), never a way around the checks.
     fn open_ownership(data: &JsValue) -> Result<pdfcraft_ui_egui::Ownership, String> {
         let get = |key: &str| js_sys::Reflect::get(data, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
@@ -445,7 +450,9 @@ mod host {
         } else {
             read_only.as_bool().ok_or_else(|| "readOnly must be a boolean".to_string())?
         };
-        Ok(pdfcraft_ui_egui::Ownership { actor, read_only })
+        // Any other type than a string is "no mode", the narrowest.
+        let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
+        Ok(pdfcraft_ui_egui::Ownership { actor, read_only, scope })
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {

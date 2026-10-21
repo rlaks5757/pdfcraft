@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# See `pdfcraft-ui-egui`; `ppm/build-web.sh` always turns it on.
+host-lock = ["pdfcraft-ui-egui/host-lock"]
+
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }

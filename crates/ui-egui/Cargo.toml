@@ -9,6 +9,11 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+# A build for an embedding page (PPM): opens only what the host sends and does nothing that reaches
+# the user's own files, printers or the web. Decided when building, never at run time; see host_lock.rs.
+host-lock = []
+
 [dependencies]
 craft-ui = { workspace = true }
 # macOS: a window close quits through `terminate:` (the Touch Bar crash, #1136); elsewhere a no-op.

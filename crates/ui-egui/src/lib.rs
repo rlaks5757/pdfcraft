@@ -62,8 +62,10 @@ mod search_ui;
 mod sign_ui;
 mod stamps_ui;
 mod host_compare;
+mod host_lock;
 mod host_stamp;
-pub use pdfcraft_engine::Ownership;
+pub use pdfcraft_engine::{EditScope, Ownership};
+pub use host_lock::{HOST_LOCK, open_scope, parse_mode};
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
@@ -633,6 +635,9 @@ pub struct PdfCraftApp {
     pub os_events: Option<OsEventsFn>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
+    /// A build for an embedding page (see [`HOST_LOCK`]). Private and set only from the build, so
+    /// nothing at run time unlocks it; tests of this crate set it to try both.
+    pub(crate) host_lock: bool,
     /// While the host names the user ([`Self::set_host_author`]): the name saved in settings, which
     /// `persist` keeps writing so the host's name never reaches a PdfCraft opened without a host.
     stored_author: Option<String>,
@@ -918,7 +923,15 @@ fn rgb_triple(v: &serde_json::Value) -> Option<[f64; 3]> {
 impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
-            session: Session::new(),
+            session: {
+                let mut session = Session::new();
+                // Host lock: a document opened without the host's say-so (a comparison that
+                // arrives first, say) is a viewer's too, never the wider default.
+                if HOST_LOCK {
+                    session.set_open_ownership(host_lock::viewer_ownership());
+                }
+                session
+            },
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
@@ -995,6 +1008,7 @@ impl PdfCraftApp {
             unsaved_flag: Default::default(),
             os_events: None,
             host_save: None,
+            host_lock: HOST_LOCK,
             stored_author: None,
             host_dirty: None,
             stamp_inbox: Default::default(),
@@ -1419,6 +1433,9 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn open_dropped(&mut self, f: egui::DroppedFileHandle, _ctx: &egui::Context) {
+        if self.host_lock {
+            return;
+        }
         let p = f.path().to_string_lossy().into_owned();
         if !p.is_empty() && f.path().is_absolute() {
             self.open_path(&p);
@@ -1531,6 +1548,9 @@ impl PdfCraftApp {
     /// Browsers read dropped files asynchronously; the bytes land in `inbox` and open next frame.
     #[cfg(target_arch = "wasm32")]
     fn open_dropped(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
+        if self.host_lock {
+            return;
+        }
         self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
@@ -1737,6 +1757,9 @@ impl PdfCraftApp {
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
     /// Open Recent and the Home view's list share this).
     pub fn open_recent(&mut self, path: &str) {
+        if self.host_lock {
+            return;
+        }
         if let Some(i) = self.tab_showing(path) {
             self.active = Some(i);
         } else {
@@ -1828,6 +1851,9 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) {
+        if self.host_lock {
+            return;
+        }
         self.open_path_then(path, None);
     }
 
@@ -1896,6 +1922,10 @@ impl PdfCraftApp {
     }
 
     pub fn open_dialog(&mut self) {
+        // Host lock: a document comes from the host, never from the user's files.
+        if self.host_lock {
+            return;
+        }
         self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
@@ -1991,6 +2021,10 @@ impl PdfCraftApp {
     /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
     /// links; an address that came from a document goes through [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
+        // Host lock: nothing leaves for the web, whoever asks.
+        if self.host_lock {
+            return;
+        }
         if let Some(ctx) = &self.ctx {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
@@ -2002,6 +2036,9 @@ impl PdfCraftApp {
     /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
     /// queue up a stream of dialogs.
     pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
+        if self.host_lock {
+            return;
+        }
         match pdfcraft_engine::links::document_url(url) {
             Ok(url) => {
                 if self.pending_link.is_none() && self.pending_remote_link.is_none() {
@@ -2301,7 +2338,7 @@ impl PdfCraftApp {
             "recent": self.recent,
             "reopen_last_session": self.reopen_last_session,
             // Kept only while the preference is on.
-            "last_session": self.reopen_last_session.then(|| self.session_to_save()),
+            "last_session": (self.reopen_last_session && !self.host_lock).then(|| self.session_to_save()),
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
@@ -2979,6 +3016,12 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
+        // Host lock: files dragged over the window are not seen at all, not by the page grid,
+        // the Combine list or the signature pad either.
+        if self.host_lock {
+            raw.hovered_files.clear();
+            raw.dropped_files.clear();
+        }
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }
@@ -3061,6 +3104,8 @@ impl eframe::App for PdfCraftApp {
             }
         }
         let arrived: Vec<(String, Vec<u8>)> = self.inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        // Host lock: what the user picked or dropped is thrown away; only the host's files open.
+        let arrived = if self.host_lock { Vec::new() } else { arrived };
         // A file opened by the host ends a stamp armed for the document before it.
         if !arrived.is_empty() {
             self.disarm_stamp();
@@ -3077,6 +3122,7 @@ impl eframe::App for PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let opening = false;
         if !opening
+            && !self.host_missing()
             && self.password_prompt.is_none()
             && self.image_import.is_none()
             && self.dialog.is_none()
@@ -3100,6 +3146,8 @@ impl eframe::App for PdfCraftApp {
             for (name, bytes) in startup {
                 if let Some(ownership) = rules.pop_front() {
                     self.session.set_open_ownership(ownership);
+                } else if self.host_lock {
+                    self.session.set_open_ownership(host_lock::viewer_ownership());
                 }
                 let activate = !self.startup_superseded;
                 if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
@@ -3187,6 +3235,12 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
+        // Host lock without a host: nothing but the notice, and nothing to open.
+        if self.host_missing() {
+            host_lock::open_in_ppm_screen(ui);
+            self.finish_render_frame(&ctx);
+            return;
+        }
         for view in &mut self.views {
             view.begin_render_frame();
         }
@@ -3267,6 +3321,11 @@ impl eframe::App for PdfCraftApp {
 
 impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
+        // Host lock: links the interface itself draws (the credits' GitHub names) and any
+        // other request to open a page are dropped before the browser sees them.
+        if self.host_lock {
+            ctx.output_mut(|o| o.commands.retain(|c| !matches!(c, egui::OutputCommand::OpenUrl(_))));
+        }
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible document's textures, so the

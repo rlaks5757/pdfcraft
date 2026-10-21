@@ -19,6 +19,13 @@ fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
 }
 
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    // Host lock: no Open card, recent list, community links or tips; the host sends the document.
+    if app.host_locked() {
+        ui.centered_and_justified(|ui| {
+            ui.label(egui::RichText::new("문서를 불러오는 중입니다").color(Tokens::get(ui.ctx()).text_muted).font(theme::regular(15.0)));
+        });
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 36, right: 36, top: 28, bottom: 28 }).show(ui, |ui| {
