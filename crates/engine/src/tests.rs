@@ -6179,3 +6179,458 @@ fn custom_stamp_extra_survives_saving_a_repaired_file() {
     s.apply(id, add_ppm_stamp(0)).unwrap();
     assert_eq!(ppm_stamp_keys(&s.save_bytes(id).unwrap()), vec![PPM_JSON.to_string()]);
 }
+
+// ---- comment ownership (`actor`, `readOnly`) ----
+
+mod ownership {
+    use super::*;
+
+    fn act(s: &mut Session, actor: Option<&str>, read_only: bool) {
+        s.set_ownership(Ownership { actor: actor.map(str::to_string), read_only });
+    }
+
+    fn rect_at(page: usize, x: f64) -> Edit {
+        rect_comment(page, [x, 20.0, x + 40.0, 60.0])
+    }
+
+    /// Every annotation dictionary of the page, as the working document holds them.
+    fn page_annots(s: &Session, id: DocId, page: usize) -> Vec<pdfcraft_cos::Dict> {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let p = &pdfcraft_model::pages(cos)[page];
+        let list = p.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        list.iter().filter_map(|e| cos.resolve(e).as_dict().cloned()).collect()
+    }
+
+    fn owner_text(d: &pdfcraft_cos::Dict) -> Option<String> {
+        d.get(b"PpmOwner").and_then(|o| o.as_string()).map(|s| s.to_text())
+    }
+
+    /// What an edit that was refused must not touch: the file, the flags and the history.
+    fn snapshot_state(s: &Session, id: DocId) -> (Arc<Vec<u8>>, bool, u64, Option<String>) {
+        let d = s.get(id).unwrap();
+        (d.bytes.clone(), d.dirty, d.generation, d.can_undo().map(str::to_string))
+    }
+
+    fn refused(s: &mut Session, id: DocId, edit: Edit, message: &str) {
+        let all = |s: &Session| (0..s.get(id).unwrap().info.pages.len()).map(|p| page_annots(s, id, p)).collect::<Vec<_>>();
+        let (before, comments) = (snapshot_state(s, id), all(s));
+        let err = s.apply(id, edit).expect_err("the edit is refused");
+        assert_eq!(err.to_string(), message);
+        assert_eq!(snapshot_state(s, id), before, "a refused edit changes nothing, not even the dirty flag");
+        assert_eq!(all(s), comments, "the comments are as they were");
+    }
+
+    const OTHERS: &str = "this comment belongs to someone else";
+    const REPLIES: &str = "the comment has replies from someone else";
+    const PAGE: &str = "this page has comments from someone else";
+    const READ_ONLY: &str = "the document is read-only";
+
+    /// u-a's rectangle at page 0 index 0, u-b's at index 1.
+    fn two_owners() -> (Session, DocId) {
+        let (mut s, id) = session_with(2);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, rect_at(0, 100.0)).unwrap();
+        act(&mut s, Some("u-a"), false);
+        (s, id)
+    }
+
+    #[test]
+    fn every_creation_path_marks_the_owner_and_names_the_comment() {
+        let (mut s, id) = session_with(2);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }).unwrap();
+        s.apply(id, Edit::SetAnnotationStatus { page: 0, index: 0, state: ReviewState::Accepted, author: "A".into() }).unwrap();
+        s.apply(id, Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: "A".into() }).unwrap();
+        let quad = pdfcraft_annot::rect_quad([20.0, 140.0, 80.0, 160.0]);
+        let strike = Style::default_for(&Shape::TextMarkup { kind: Markup::StrikeOut, quads: vec![] });
+        let caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
+        s.apply(id, Edit::ReplaceText { page: 0, quads: vec![quad], text: "new".into(), author: "A".into(), strike, caret }).unwrap();
+        s.apply(id, add_ppm_stamp(0)).unwrap();
+        let ink = Shape::Ink { strokes: vec![vec![[10.0, 100.0], [50.0, 120.0], [90.0, 100.0]]] };
+        s.apply(id, fill_item(ink, "ink")).unwrap();
+        s.apply(
+            id,
+            Edit::AddMeasurement(measure::NewMeasurement {
+                page: 1,
+                kind: measure::Kind::Distance,
+                points: vec![[10.0, 20.0], [40.0, 60.0]],
+                scale: measure::Scale::new(0.1, "m", 2).unwrap(),
+                style: Style::default(),
+                label: "Wall".into(),
+                author: "A".into(),
+            }),
+        )
+        .unwrap();
+        // A comment file read in (XFDF exported from another document).
+        let (mut other, oid) = session_with(2);
+        other.apply(oid, rect_at(1, 30.0)).unwrap();
+        let xfdf = other.export_data(oid, DataFormat::Xfdf, true, false).unwrap();
+        s.apply(id, Edit::ImportData { name: "c.xfdf".into(), bytes: Arc::new(xfdf) }).unwrap();
+
+        let mut names = std::collections::HashSet::new();
+        let mut count = 0;
+        for page in 0..2 {
+            for d in page_annots(&s, id, page) {
+                if matches!(d.name(b"Subtype"), Some(b"Popup" | b"Widget" | b"Link")) {
+                    continue;
+                }
+                count += 1;
+                assert_eq!(owner_text(&d).as_deref(), Some("u-a"), "{:?}", d.name(b"Subtype"));
+                let nm = d.get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text()).unwrap_or_default();
+                assert!(!nm.is_empty() && names.insert(nm), "every comment has its own /NM");
+            }
+        }
+        // rectangle, 3 replies, strikeout + caret, stamp, ink, measurement, imported rectangle.
+        assert!(count >= 10, "{count} comments");
+    }
+
+    #[test]
+    fn nothing_is_written_without_an_actor() {
+        let (mut s, id) = session_with(1);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        assert_eq!(owner_text(&page_annots(&s, id, 0)[0]), None);
+        // And nothing is checked: anyone changes it.
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }).unwrap();
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    }
+
+    #[test]
+    fn the_owner_changes_and_deletes_their_own_comment() {
+        let (mut s, id) = two_owners();
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }).unwrap();
+        s.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: [10.0, 20.0, 90.0, 60.0] }).unwrap();
+        s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "x".into() }).unwrap();
+        s.apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: None, opacity: Some(0.5), width: None, endings: None }).unwrap();
+        s.apply(id, Edit::FillAnnotation { page: 0, index: 0, fill: None }).unwrap();
+        s.apply(id, Edit::SetAnnotationInfo { page: 0, index: 0, author: Some("Ann".into()), subject: None, icon: None }).unwrap();
+        s.apply(id, Edit::LockAnnotation { page: 0, index: 0, locked: true }).unwrap();
+        s.apply(id, Edit::LockAnnotation { page: 0, index: 0, locked: false }).unwrap();
+        s.apply(id, Edit::SetAnnotationStatus { page: 0, index: 0, state: ReviewState::Accepted, author: "A".into() }).unwrap();
+        s.apply(id, Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: "A".into() }).unwrap();
+        // The owner is untouched by all of it.
+        assert_eq!(owner_text(&page_annots(&s, id, 0)[0]).as_deref(), Some("u-a"));
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    }
+
+    #[test]
+    fn someone_elses_comment_only_takes_replies() {
+        let (mut s, id) = two_owners();
+        let a = |page, index| (page, index);
+        let (page, index) = a(0, 1);
+        refused(&mut s, id, Edit::DeleteAnnotation { page, index }, OTHERS);
+        refused(&mut s, id, Edit::MoveAnnotation { page, index, dx: 5.0, dy: 5.0 }, OTHERS);
+        refused(&mut s, id, Edit::ResizeAnnotation { page, index, rect: [100.0, 20.0, 190.0, 60.0] }, OTHERS);
+        refused(&mut s, id, Edit::SetAnnotationContents { page, index, text: "x".into() }, OTHERS);
+        refused(&mut s, id, Edit::StyleAnnotation { page, index, color: None, opacity: Some(0.5), width: None, endings: None }, OTHERS);
+        refused(&mut s, id, Edit::FillAnnotation { page, index, fill: None }, OTHERS);
+        refused(&mut s, id, Edit::FontSizeAnnotation { page, index, size: 14.0 }, OTHERS);
+        refused(&mut s, id, Edit::SetAnnotationInfo { page, index, author: Some("Mallory".into()), subject: None, icon: None }, OTHERS);
+        refused(&mut s, id, Edit::LockAnnotation { page, index, locked: true }, OTHERS);
+        refused(&mut s, id, Edit::SetAnnotationStatus { page, index, state: ReviewState::Rejected, author: "A".into() }, OTHERS);
+        refused(&mut s, id, Edit::MarkAnnotation { page, index, marked: true, author: "A".into() }, OTHERS);
+        refused(&mut s, id, Edit::EraseInk { page, index, path: vec![[100.0, 20.0], [140.0, 60.0]], radius: 5.0 }, OTHERS);
+        // A reply is how others take part; it is theirs.
+        s.apply(id, Edit::ReplyToAnnotation { page, index, text: "agreed".into(), author: "A".into() }).unwrap();
+        let reply = page_annots(&s, id, 0).pop().unwrap();
+        assert_eq!(owner_text(&reply).as_deref(), Some("u-a"));
+        // The reply is u-a's, so u-b can't delete or edit it, while u-a can delete it.
+        act(&mut s, Some("u-b"), false);
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 2 }, OTHERS);
+        refused(&mut s, id, Edit::SetAnnotationContents { page: 0, index: 2, text: "x".into() }, OTHERS);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 2 }).unwrap();
+    }
+
+    #[test]
+    fn a_comment_without_an_owner_is_locked_for_everyone_but_takes_replies() {
+        let (mut s, id) = session_with(1);
+        // Made with no actor (an original PDF's comment looks the same).
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        act(&mut s, Some("u-a"), false);
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, OTHERS);
+        refused(&mut s, id, Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }, OTHERS);
+        refused(&mut s, id, Edit::SetAnnotationContents { page: 0, index: 0, text: "x".into() }, OTHERS);
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }).unwrap();
+        // The reply is u-a's, but the parent still can't go: its reply is theirs, the comment not.
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, OTHERS);
+    }
+
+    #[test]
+    fn deleting_your_comment_is_refused_while_it_has_replies_from_others() {
+        let (mut s, id) = two_owners();
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "hm".into(), author: "B".into() }).unwrap();
+        act(&mut s, Some("u-a"), false);
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, REPLIES);
+        // Even inside a batch, and a batch that fails leaves nothing behind.
+        refused(
+            &mut s,
+            id,
+            Edit::Batch { label: "b".into(), edits: vec![Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }, Edit::DeleteAnnotation { page: 0, index: 0 }] },
+            REPLIES,
+        );
+        // Moving it is fine, and u-b withdraws their reply, then it can go.
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }).unwrap();
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 2 }).unwrap();
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    }
+
+    #[test]
+    fn your_own_replies_go_with_your_comment() {
+        let (mut s, id) = two_owners();
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "mine".into(), author: "A".into() }).unwrap();
+        s.apply(id, Edit::SetAnnotationStatus { page: 0, index: 0, state: ReviewState::Accepted, author: "A".into() }).unwrap();
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+        assert_eq!(page_annots(&s, id, 0).len(), 1, "only u-b's comment is left");
+    }
+
+    #[test]
+    fn a_batch_sees_the_comments_made_earlier_in_it() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-a"), false);
+        let edits = vec![rect_at(0, 10.0), Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }, Edit::SetAnnotationContents { page: 0, index: 0, text: "x".into() }];
+        s.apply(id, Edit::Batch { label: "add and edit".into(), edits }).unwrap();
+        assert_eq!(owner_text(&page_annots(&s, id, 0)[0]).as_deref(), Some("u-a"));
+        // One foreign edit anywhere in a batch refuses the whole batch.
+        act(&mut s, Some("u-b"), false);
+        let edits = vec![rect_at(0, 100.0), Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }];
+        refused(&mut s, id, Edit::Batch { label: "b".into(), edits }, OTHERS);
+        assert_eq!(page_annots(&s, id, 0).len(), 1);
+    }
+
+    #[test]
+    fn page_operations_that_drop_or_move_others_comments_are_refused() {
+        let (mut s, id) = two_owners();
+        refused(&mut s, id, Edit::DeletePages { pages: vec![0] }, PAGE);
+        refused(&mut s, id, Edit::Flatten { comments: true, fields: false }, PAGE);
+        refused(&mut s, id, Edit::DuplicatePages { pages: vec![0], at: None }, PAGE);
+        refused(&mut s, id, Edit::MovePages { pages: vec![0], to: 2 }, PAGE);
+        refused(&mut s, id, Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }, PAGE);
+        refused(&mut s, id, Edit::Sanitize, PAGE);
+        refused(&mut s, id, Edit::RemoveHidden { which: vec![Hidden::Comments] }, PAGE);
+        // Pages without comments of others' are free: page 2 has none.
+        s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+        // Redaction marks of others are not applied or cleared by you.
+        act(&mut s, Some("u-b"), false);
+        let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+        s.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "B".into() })).unwrap();
+        act(&mut s, Some("u-a"), false);
+        refused(&mut s, id, Edit::ApplyRedactions { pages: None }, PAGE);
+        refused(&mut s, id, Edit::ClearRedactions, PAGE);
+    }
+
+    #[test]
+    fn page_operations_on_your_own_comments_still_work() {
+        let (mut s, id) = session_with(2);
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        s.apply(id, Edit::DuplicatePages { pages: vec![0], at: None }).unwrap();
+        // The copy's comment is its own comment: its own /NM, still u-a's.
+        let (first, copy) = (page_annots(&s, id, 0), page_annots(&s, id, 1));
+        let nm = |d: &pdfcraft_cos::Dict| d.get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text());
+        assert_ne!(nm(&first[0]), nm(&copy[0]));
+        assert_eq!(owner_text(&copy[0]).as_deref(), Some("u-a"));
+        s.apply(id, Edit::Flatten { comments: true, fields: false }).unwrap();
+        assert!(page_annots(&s, id, 0).is_empty());
+    }
+
+    #[test]
+    fn fill_and_sign_flattening_is_refused_for_someone_elses_marks() {
+        let (mut s, id) = session_with(1);
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, fill_item(Shape::Typewriter { rect: [20.0, 200.0, 120.0, 220.0], font_size: 10.0 }, "Hello")).unwrap();
+        act(&mut s, Some("u-a"), false);
+        refused(&mut s, id, Edit::FlattenFillSign, PAGE);
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, Edit::FlattenFillSign).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_session_refuses_every_document_changing_edit() {
+        let (mut s, id) = session_with(2);
+        s.apply(id, rect_at(0, 10.0)).unwrap();
+        s.mark_saved(id, s.save_bytes(id).unwrap(), None).unwrap();
+        assert!(!s.get(id).unwrap().dirty);
+        act(&mut s, Some("u-a"), true);
+        assert!(!s.get(id).unwrap().allows_annotation() && !s.get(id).unwrap().allows_modification() && !s.get(id).unwrap().allows_form_filling());
+        assert!(!s.get(id).unwrap().can_edit_comment(0, 0) && !s.get(id).unwrap().can_delete_comment(0, 0));
+        refused(&mut s, id, rect_at(1, 10.0), READ_ONLY);
+        refused(&mut s, id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }, READ_ONLY);
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, READ_ONLY);
+        refused(&mut s, id, Edit::RotatePages { pages: vec![0], degrees: 90 }, READ_ONLY);
+        refused(&mut s, id, Edit::SetInfo { key: "Title".into(), value: "x".into() }, READ_ONLY);
+        refused(&mut s, id, Edit::FlattenFillSign, READ_ONLY);
+        refused(&mut s, id, Edit::Batch { label: "b".into(), edits: vec![] }, READ_ONLY);
+        refused(&mut s, id, Edit::Batch { label: "b".into(), edits: vec![rect_at(1, 10.0)] }, READ_ONLY);
+        // Read-only without an actor is the same, and turning it off brings editing back.
+        act(&mut s, None, true);
+        refused(&mut s, id, rect_at(1, 10.0), READ_ONLY);
+        act(&mut s, None, false);
+        s.apply(id, rect_at(1, 10.0)).unwrap();
+    }
+
+    #[test]
+    fn a_read_only_document_opened_later_is_read_only_too() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        act(&mut s, Some("u-a"), true);
+        let id = s.open("later.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        refused(&mut s, id, rect_at(0, 10.0), READ_ONLY);
+        assert_eq!(s.get(id).unwrap().ownership(), &Ownership { actor: Some("u-a".into()), read_only: true });
+    }
+
+    #[test]
+    fn what_the_interface_asks_agrees_with_the_engine() {
+        let (mut s, id) = two_owners();
+        let d = s.get(id).unwrap();
+        assert!(d.can_edit_comment(0, 0) && d.can_delete_comment(0, 0));
+        assert!(!d.can_edit_comment(0, 1) && !d.can_delete_comment(0, 1));
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "B".into() }).unwrap();
+        act(&mut s, Some("u-a"), false);
+        let d = s.get(id).unwrap();
+        assert!(d.can_edit_comment(0, 0) && !d.can_delete_comment(0, 0), "u-b's reply keeps it");
+    }
+
+    #[test]
+    fn owners_survive_a_save_and_a_reopen() {
+        let (s, id) = two_owners();
+        let bytes = s.save_bytes(id).unwrap();
+        let mut again = Session::new().with_clock(|| 1_700_000_000);
+        let id2 = again.open("again.pdf", None, bytes, None).unwrap();
+        act(&mut again, Some("u-b"), false);
+        refused(&mut again, id2, Edit::DeleteAnnotation { page: 0, index: 0 }, OTHERS);
+        again.apply(id2, Edit::DeleteAnnotation { page: 0, index: 1 }).unwrap();
+    }
+
+    // ---- fixtures for the server-side save check ----
+
+    fn nm_of(s: &Session, id: DocId, page: usize, index: usize) -> String {
+        page_annots(s, id, page)[index].get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text()).unwrap_or_default()
+    }
+
+    /// Change the working document behind the engine's back, as a client that skips the checks would.
+    fn raw(s: &mut Session, id: DocId, page: usize, index: usize, change: impl FnOnce(&mut pdfcraft_cos::Dict)) {
+        let cos = &mut s.doc_mut(id).unwrap().editor.as_mut().unwrap().cos;
+        let list = pdfcraft_model::pages(cos)[page].dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+        let r = list[index].as_ref().unwrap();
+        cos.update_dict(r, change).unwrap();
+    }
+
+    fn reopened(bytes: &Arc<Vec<u8>>, actor: Option<&str>) -> (Session, DocId) {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("fixture.pdf", None, bytes.clone(), None).unwrap();
+        act(&mut s, actor, false);
+        (s, id)
+    }
+
+    /// `PPM_OWN_FIXTURES_DIR=<dir> cargo test -p pdfcraft-engine --lib write_ownership_fixtures -- --ignored`
+    /// writes the PDFs the server's save check is tested with, and a README that names each comment.
+    #[test]
+    #[ignore = "writes files; set PPM_OWN_FIXTURES_DIR"]
+    fn write_ownership_fixtures() {
+        let dir = std::path::PathBuf::from(std::env::var_os("PPM_OWN_FIXTURES_DIR").expect("set PPM_OWN_FIXTURES_DIR to an empty directory"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let put = |name: &str, bytes: &[u8]| std::fs::write(dir.join(name), bytes).unwrap();
+
+        // ---- 01: the base file. Page 0: ownerless (with and without /NM), u-a, u-b, u-b's reply to u-a's.
+        let (mut s, id) = session_with(2);
+        act(&mut s, None, false);
+        s.apply(id, rect_at(0, 10.0)).unwrap(); // 0 ownerless, has /NM
+        s.apply(id, rect_at(0, 60.0)).unwrap(); // 1 ownerless, /NM removed below
+        raw(&mut s, id, 0, 1, |d| {
+            d.remove(b"NM");
+        });
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, rect_at(0, 110.0)).unwrap(); // 2 u-a
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, rect_at(0, 150.0)).unwrap(); // 3 u-b
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 2, text: "b replies to a".into(), author: "B".into() }).unwrap(); // 4 u-b reply to #2
+        act(&mut s, Some("u-a"), false);
+        s.apply(id, add_ppm_stamp(1)).unwrap(); // page 1 / 0 u-a stamp
+        act(&mut s, Some("u-b"), false);
+        s.apply(id, rect_at(1, 150.0)).unwrap(); // page 1 / 1 u-b
+        let base = s.save_bytes(id).unwrap(); // incremental on the built file, so a full rewrite differs
+        put("01_base.pdf", &base);
+        let nm = |page, index| nm_of(&s, id, page, index);
+        let names = [nm(0, 0), nm(0, 1), nm(0, 2), nm(0, 3), nm(0, 4), nm(1, 0), nm(1, 1)];
+
+        // ---- 02: opened with u-a and saved without any change (a re-serialization).
+        let (s2, id2) = reopened(&base, Some("u-a"));
+        let incremental = s2.save_bytes(id2).unwrap();
+        let full = s2.save_full_bytes(id2).unwrap();
+        put("02_untouched_incremental.pdf", &incremental);
+        put("02_untouched_full_rewrite.pdf", &full);
+        assert_ne!(full, base, "a full rewrite is a different file");
+
+        // ---- 03: u-a edits only their own comment (move, new text), adds one, replies to u-b's.
+        let (mut s3, id3) = reopened(&base, Some("u-a"));
+        s3.apply(id3, Edit::MoveAnnotation { page: 0, index: 2, dx: 7.0, dy: 7.0 }).unwrap();
+        s3.apply(id3, Edit::SetAnnotationContents { page: 0, index: 2, text: "a edited".into() }).unwrap();
+        s3.apply(id3, rect_at(0, 20.0)).unwrap();
+        s3.apply(id3, Edit::ReplyToAnnotation { page: 0, index: 3, text: "a replies to b".into(), author: "A".into() }).unwrap();
+        put("03_ua_edits_own.pdf", &s3.save_bytes(id3).unwrap());
+        put("03_ua_edits_own_full_rewrite.pdf", &s3.save_full_bytes(id3).unwrap());
+
+        // ---- 04..: saves that got around the engine's guard (no actor, or raw changes).
+        let bypass = |name: &str, f: &dyn Fn(&mut Session, DocId)| {
+            let (mut sx, idx) = reopened(&base, None);
+            f(&mut sx, idx);
+            put(name, &sx.save_bytes(idx).unwrap());
+        };
+        bypass("04_ub_comment_moved.pdf", &|s, id| s.apply(id, Edit::MoveAnnotation { page: 0, index: 3, dx: 9.0, dy: 9.0 }).unwrap());
+        bypass("05_ub_comment_deleted.pdf", &|s, id| s.apply(id, Edit::DeleteAnnotation { page: 1, index: 1 }).unwrap());
+        bypass("06_ownerless_comment_moved.pdf", &|s, id| s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 9.0, dy: 9.0 }).unwrap());
+        bypass("07_ownerless_without_nm_moved.pdf", &|s, id| s.apply(id, Edit::MoveAnnotation { page: 0, index: 1, dx: 9.0, dy: 9.0 }).unwrap());
+        bypass("08_ua_comment_deleted_with_ub_reply.pdf", &|s, id| s.apply(id, Edit::DeleteAnnotation { page: 0, index: 2 }).unwrap());
+        bypass("09_ub_comment_taken_over.pdf", &|s, id| raw(s, id, 0, 3, |d| {
+            d.set(b"PpmOwner".to_vec(), pdfcraft_cos::PdfString::text("u-a"));
+        }));
+        bypass("10_page_inserted_before.pdf", &|s, id| s.apply(id, Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }).unwrap());
+        bypass("11_new_comment_in_ub_name.pdf", &|s, id| {
+            s.apply(id, rect_at(0, 20.0)).unwrap();
+            raw(s, id, 0, 5, |d| {
+                d.set(b"PpmOwner".to_vec(), pdfcraft_cos::PdfString::text("u-b"));
+            });
+        });
+        bypass("12_new_comment_without_owner.pdf", &|s, id| s.apply(id, rect_at(0, 20.0)).unwrap());
+
+        let readme = format!(
+            "# Ownership fixtures for the server-side save check\n\n\
+Written by the fork's engine tests (`write_ownership_fixtures`, `crates/engine/src/tests.rs`, branch ppm/ownership). \
+Each file is a whole PDF; the check compares it with `01_base.pdf` for actor `u-a`. The /NM values change with every \
+run, so read them from the file or from the table below (this README is written with the files).\n\n\
+## Base comments (`01_base.pdf`, written by an incremental save of the built file; the full rewrites below differ from it as bytes)\n\n\
+| page / index | owner (/PpmOwner) | /NM |\n|---|---|---|\n\
+| 0 / 0 | none (comment from before owners) | {} |\n\
+| 0 / 1 | none, and no /NM at all (server rule 3) | (none) |\n\
+| 0 / 2 | u-a | {} |\n\
+| 0 / 3 | u-b | {} |\n\
+| 0 / 4 | u-b, a reply (/IRT) to 0 / 2 (server rule 4) | {} |\n\
+| 1 / 0 | u-a, a PPM stamp with /PpmStamp | {} |\n\
+| 1 / 1 | u-b | {} |\n\n\
+## Must pass for actor u-a\n\n\
+- `02_untouched_incremental.pdf`: `01_base.pdf` opened with actor u-a and saved with no change (incremental save, the web host's normal save).\n\
+- `02_untouched_full_rewrite.pdf`: the same, saved as a full rewrite: every object renumbered or rewritten, /M and appearances may differ.\n\
+- `03_ua_edits_own.pdf` and `03_ua_edits_own_full_rewrite.pdf`: u-a moved and re-worded their comment 0 / 2, added a new comment on page 0, and replied to u-b's 0 / 3 (the reply is u-a's).\n\n\
+## Must be refused for actor u-a (403 annotated_ownership), made by an edit without the guard\n\n\
+- `04_ub_comment_moved.pdf`: u-b's 0 / 3 moved (Rect changed). Rule 1; blocked: its /NM.\n\
+- `05_ub_comment_deleted.pdf`: u-b's 1 / 1 deleted. Rule 1.\n\
+- `06_ownerless_comment_moved.pdf`: the ownerless 0 / 0 moved. Rule 1.\n\
+- `07_ownerless_without_nm_moved.pdf`: the ownerless 0 / 1 without /NM moved. Rule 3 (its page's fingerprints no longer match).\n\
+- `08_ua_comment_deleted_with_ub_reply.pdf`: u-a's 0 / 2 deleted, which took u-b's reply 0 / 4 with it. Rule 1 for the reply; rule 4 for the pair.\n\
+- `09_ub_comment_taken_over.pdf`: u-b's 0 / 3 now says /PpmOwner u-a. Rule 1 (the owner is part of what must stay).\n\
+- `10_page_inserted_before.pdf`: a blank page inserted first, so every comment is on a different page. Rule 1 (page number is compared).\n\
+- `11_new_comment_in_ub_name.pdf`: a new comment whose /PpmOwner is u-b. Rule 2.\n\
+- `12_new_comment_without_owner.pdf`: a new comment with no /PpmOwner. Rule 2.\n\n\
+Files 04 to 12 are incremental saves of `01_base.pdf` after the edit (`Session::save_bytes`).\n",
+            names[0], names[2], names[3], names[4], names[5], names[6]
+        );
+        put("README.md", readme.as_bytes());
+    }
+}

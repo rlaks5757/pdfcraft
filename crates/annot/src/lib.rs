@@ -18,6 +18,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 pub mod appearance;
 pub mod links;
+pub mod ownership;
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,13 @@ pub enum AnnotError {
     Undrawable(String),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
+    /// Ownership ([`ownership`]): the comment's `/PpmOwner` is not the acting user.
+    #[error("this comment belongs to someone else")]
+    NotOwner,
+    #[error("the comment has replies from someone else")]
+    ForeignReplies,
+    #[error("this page has comments from someone else")]
+    ForeignPage,
 }
 
 pub type Rgb = [f64; 3];
@@ -1501,19 +1509,13 @@ fn touch(d: &mut Dict, meta: &Meta) {
     }
 }
 
-/// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
-pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
-    let p = page_ref(doc, page)?;
-    let list = annots(doc, p);
-    let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    if let Some(r) = target.as_ref() {
-        unlocked(doc, r)?;
-    }
-    let mut doomed: Vec<ObjRef> = target.as_ref().into_iter().collect();
+/// What deleting a comment removes: it, its pop-up, its replies (`/IRT`) and theirs, to a fixpoint.
+fn doomed_with(doc: &Document, list: &[Object], target: Option<ObjRef>) -> Vec<ObjRef> {
+    let mut doomed: Vec<ObjRef> = target.into_iter().collect();
     // Replies (`/IRT`) and pop-ups (`/Parent`) of anything doomed, to a fixpoint.
     loop {
         let before = doomed.len();
-        for e in &list {
+        for e in list {
             let Some(r) = e.as_ref() else { continue };
             if doomed.contains(&r) {
                 continue;
@@ -1536,6 +1538,18 @@ pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Resul
             break;
         }
     }
+    doomed
+}
+
+/// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
+pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    if let Some(r) = target.as_ref() {
+        unlocked(doc, r)?;
+    }
+    let doomed = doomed_with(doc, &list, target.as_ref());
     let kept: Vec<Object> =
         list.into_iter().enumerate().filter(|(i, e)| *i != index && !e.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(_, e)| e).collect();
     set_annots(doc, p, kept)

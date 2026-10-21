@@ -66,7 +66,7 @@ fn main() {
                         {
                             app.comment_prefs.author = author.chars().take(200).collect();
                         }
-                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), app.ownership_inbox.clone(), cc.egui_ctx.clone());
                         app.host_stamp = Some(bridge.stamp_fn());
                         app.host_compare = Some(bridge.compare_fn());
                         app.host_save = Some(bridge.save_fn());
@@ -129,8 +129,13 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
-/// - `pdfcraft:open` (from the parent): `{ name, bytes }`, where `bytes` is an `ArrayBuffer` or
-///   `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
+/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly? }`, where `bytes` is an
+///   `ArrayBuffer` or `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
+///   `actor` (a string of 1 to 200 characters, the user's id) makes every comment the app creates
+///   the user's, and lets only that user change or delete comments; comments without an owner are
+///   locked. `readOnly` (a boolean) refuses every edit that changes the document. Both default
+///   to off, and each open sets them anew. A wrong type or length refuses the open with
+///   `pdfcraft:failed` instead of opening without the checks.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
@@ -206,6 +211,7 @@ mod host {
             inbox: pdfcraft_ui_egui::Inbox,
             stamps: pdfcraft_ui_egui::StampInbox,
             compares: pdfcraft_ui_egui::CompareInbox,
+            ownership: pdfcraft_ui_egui::OwnershipInbox,
             ctx: egui::Context,
         ) {
             let bridge = self.clone();
@@ -256,6 +262,13 @@ mod host {
                     _ => return,
                 }
                 let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string());
+                let who = match open_ownership(&data) {
+                    Ok(who) => who,
+                    Err(error) => {
+                        bridge.post_failed(&error);
+                        return;
+                    }
+                };
                 let Ok(bytes) = js_sys::Reflect::get(&data, &JsValue::from_str("bytes")) else { return };
                 let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
                     array.to_vec()
@@ -264,6 +277,10 @@ mod host {
                 } else {
                     return;
                 };
+                // The rules go first, so the file is never opened without them.
+                if let Ok(mut o) = ownership.lock() {
+                    *o = Some(who);
+                }
                 if let Ok(mut q) = inbox.lock() {
                     q.push((name, bytes));
                 }
@@ -412,6 +429,25 @@ mod host {
             height: number("height")?,
             meta: text("meta")?,
         })
+    }
+
+    /// Read `actor` and `readOnly` of a `pdfcraft:open` message. Missing means off; a wrong type or
+    /// length is an error (the open is refused), never a way around the checks.
+    fn open_ownership(data: &JsValue) -> Result<pdfcraft_ui_egui::Ownership, String> {
+        let get = |key: &str| js_sys::Reflect::get(data, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
+        let (actor, read_only) = (get("actor"), get("readOnly"));
+        let actor = if actor.is_undefined() || actor.is_null() {
+            None
+        } else {
+            let a = actor.as_string().filter(|a| (1..=200).contains(&a.chars().count()));
+            Some(a.ok_or_else(|| "actor must be a string of 1 to 200 characters".to_string())?)
+        };
+        let read_only = if read_only.is_undefined() || read_only.is_null() {
+            false
+        } else {
+            read_only.as_bool().ok_or_else(|| "readOnly must be a boolean".to_string())?
+        };
+        Ok(pdfcraft_ui_egui::Ownership { actor, read_only })
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {

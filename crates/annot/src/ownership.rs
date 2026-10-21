@@ -1,0 +1,234 @@
+//! Who owns a comment (the embedding page's `actor`), kept in the private key `/PpmOwner`.
+//!
+//! The rules (docs/alternate/ownership-contract.md of the PPM host):
+//! - Every annotation except Popup, Widget and Link has an owner. A pop-up follows its parent.
+//! - Only the owner changes or deletes a comment. Others reply to it. A comment without a
+//!   `/PpmOwner` (an original PDF's, or one saved before owners existed) is nobody's but locked.
+//! - A comment with replies from someone else can't be deleted.
+//! - Page-level edits that would drop or move someone else's comments are refused.
+//!
+//! Checks here read the document; they never change it. [`claim_new`] is the one writer.
+
+use std::collections::{HashMap, HashSet};
+
+use super::*;
+
+/// The private key holding the owner's user id (a PDF text string).
+pub const OWNER_KEY: &str = "PpmOwner";
+
+/// Annotations that have an owner: everything but pop-ups (which follow their parent), form
+/// widgets and links (not comments the user writes).
+pub fn is_protected(d: &Dict) -> bool {
+    !matches!(d.name(b"Subtype"), Some(b"Popup" | b"Widget" | b"Link"))
+}
+
+/// The user id in `/PpmOwner`, if there is one.
+pub fn owner_of(doc: &Document, d: &Dict) -> Option<String> {
+    let o = doc.resolve(d.get(OWNER_KEY.as_bytes())?);
+    let s = o.as_string()?.to_text();
+    let s = s.trim_matches('\0');
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+fn entry_dict(doc: &Document, entry: &Object) -> Option<Dict> {
+    doc.resolve(entry).as_dict().cloned()
+}
+
+/// The dictionary whose owner decides `d`: itself, or for a pop-up its parent. `None`: nobody
+/// owns this kind of annotation (a link, a widget).
+fn deciding(doc: &Document, d: &Dict) -> Option<Dict> {
+    if d.name(b"Subtype") == Some(b"Popup") {
+        // A pop-up without a readable parent has no owner to speak for it.
+        return Some(d.reference(b"Parent").and_then(|p| doc.get(p).as_dict().cloned()).unwrap_or_default());
+    }
+    is_protected(d).then(|| d.clone())
+}
+
+fn owned_by(doc: &Document, d: &Dict, actor: &str) -> bool {
+    owner_of(doc, d).is_some_and(|o| o == actor)
+}
+
+/// May `actor` change the comment at `(page, index)`? Not when someone else (or nobody) owns it.
+/// Positions that don't exist pass: the edit itself reports them.
+pub fn check_target(doc: &Document, page: usize, index: usize, actor: &str) -> Result<(), AnnotError> {
+    let p = page_ref(doc, page)?;
+    let Some(d) = annots(doc, p).get(index).and_then(|e| entry_dict(doc, e)) else { return Ok(()) };
+    match deciding(doc, &d) {
+        Some(owner) if !owned_by(doc, &owner, actor) => Err(AnnotError::NotOwner),
+        _ => Ok(()),
+    }
+}
+
+/// May `actor` delete the comment at `(page, index)`? The owner's own, and only when everything
+/// that goes with it (replies, theirs, pop-ups) is the owner's too.
+pub fn check_delete(doc: &Document, page: usize, index: usize, actor: &str) -> Result<(), AnnotError> {
+    check_target(doc, page, index, actor)?;
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let Some(target) = list.get(index).and_then(Object::as_ref) else { return Ok(()) };
+    for r in doomed_with(doc, &list, Some(target)) {
+        if r == target {
+            continue;
+        }
+        let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+        if is_protected(&d) && !owned_by(doc, &d, actor) {
+            return Err(AnnotError::ForeignReplies);
+        }
+    }
+    Ok(())
+}
+
+/// Do the pages (0-based; unknown ones are skipped) hold a comment `actor` doesn't own?
+pub fn check_pages(doc: &Document, pages: &[usize], actor: &str) -> Result<(), AnnotError> {
+    let refs = page_refs(doc)?;
+    for &i in pages {
+        let Some(&p) = refs.get(i) else { continue };
+        let foreign = annots(doc, p).iter().filter_map(|e| entry_dict(doc, e)).any(|d| is_protected(&d) && !owned_by(doc, &d, actor));
+        if foreign {
+            return Err(AnnotError::ForeignPage);
+        }
+    }
+    Ok(())
+}
+
+/// Every page.
+pub fn check_all_pages(doc: &Document, actor: &str) -> Result<(), AnnotError> {
+    let n = page_refs(doc)?.len();
+    check_pages(doc, &(0..n).collect::<Vec<_>>(), actor)
+}
+
+/// One protected annotation as the document holds it.
+struct Seen {
+    page: usize,
+    obj: Option<ObjRef>,
+    dict: Dict,
+}
+
+fn scan(doc: &Document) -> Vec<Seen> {
+    let Ok(pages) = page_refs(doc) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (page, p) in pages.iter().enumerate() {
+        for entry in annots(doc, *p) {
+            let Some(dict) = entry_dict(doc, &entry) else { continue };
+            if is_protected(&dict) {
+                out.push(Seen { page, obj: entry.as_ref(), dict });
+            }
+        }
+    }
+    out
+}
+
+/// The comments `actor` doesn't own, as they were: what an edit must leave exactly as it was.
+pub struct Foreign {
+    by_ref: HashMap<ObjRef, (usize, Dict)>,
+    inline: Vec<(usize, Dict)>,
+}
+
+pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
+    let mut f = Foreign { by_ref: HashMap::new(), inline: Vec::new() };
+    for s in scan(doc).into_iter().filter(|s| !owned_by(doc, &s.dict, actor)) {
+        match s.obj {
+            Some(r) => {
+                f.by_ref.insert(r, (s.page, s.dict));
+            }
+            None => f.inline.push((s.page, s.dict)),
+        }
+    }
+    f
+}
+
+/// Every comment in `before` is still there, on the same page, with the same dictionary: the
+/// answer for any edit that could drop, move or rewrite comments in bulk.
+pub fn check_foreign_kept(doc: &Document, before: &Foreign) -> Result<(), AnnotError> {
+    if before.by_ref.is_empty() && before.inline.is_empty() {
+        return Ok(());
+    }
+    let now = scan(doc);
+    let by_ref: HashMap<ObjRef, (usize, &Dict)> = now.iter().filter_map(|s| s.obj.map(|r| (r, (s.page, &s.dict)))).collect();
+    let mut inline: Vec<(usize, &Dict)> = now.iter().filter(|s| s.obj.is_none()).map(|s| (s.page, &s.dict)).collect();
+    for (r, (page, dict)) in &before.by_ref {
+        // A comment edited into an inline copy (or promoted to a reference) counts as changed.
+        if by_ref.get(r) != Some(&(*page, dict)) {
+            return Err(AnnotError::ForeignPage);
+        }
+    }
+    for (page, dict) in &before.inline {
+        let Some(at) = inline.iter().position(|(p, d)| p == page && *d == dict) else { return Err(AnnotError::ForeignPage) };
+        inline.swap_remove(at);
+    }
+    Ok(())
+}
+
+/// What existed before an edit that creates comments.
+pub struct Known {
+    pages: HashSet<ObjRef>,
+    refs: HashSet<ObjRef>,
+    /// Entries that were inline: (page, index in `/Annots`, dictionary).
+    inline: Vec<(ObjRef, usize, Dict)>,
+    names: HashSet<String>,
+}
+
+pub fn known(doc: &Document) -> Known {
+    let mut k = Known { pages: HashSet::new(), refs: HashSet::new(), inline: Vec::new(), names: HashSet::new() };
+    let Ok(pages) = page_refs(doc) else { return k };
+    for p in pages {
+        k.pages.insert(p);
+        for (index, entry) in annots(doc, p).into_iter().enumerate() {
+            match (entry.as_ref(), entry_dict(doc, &entry)) {
+                (Some(r), _) => {
+                    k.refs.insert(r);
+                }
+                (None, Some(d)) => k.inline.push((p, index, d)),
+                (None, None) => {}
+            }
+            if let Some(name) = entry_dict(doc, &entry).and_then(|d| name_of(doc, &d)) {
+                k.names.insert(name);
+            }
+        }
+    }
+    k
+}
+
+fn name_of(doc: &Document, d: &Dict) -> Option<String> {
+    let o = doc.resolve(d.get(b"NM")?);
+    let s = o.as_string()?.to_text();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Mark every comment the edit created as `actor`'s, and give each a `/NM` of its own (a copied
+/// page's comments would repeat their original's). New are the entries that weren't there
+/// before, and all of a page that wasn't. Returns how many were claimed.
+pub fn claim_new(doc: &mut Document, before: &Known, actor: &str, fresh_name: &mut dyn FnMut() -> String) -> Result<usize, AnnotError> {
+    let mut names = before.names.clone();
+    // Inline entries from before, used up as they are matched (editing one may promote it to a
+    // reference, which must not make it look new).
+    let mut old_inline = before.inline.clone();
+    let mut claimed = 0;
+    for (page, p) in page_refs(doc)?.into_iter().enumerate() {
+        let new_page = !before.pages.contains(&p);
+        for (index, entry) in annots(doc, p).into_iter().enumerate() {
+            let Some(d) = entry_dict(doc, &entry) else { continue };
+            let mut is_new = new_page || entry.as_ref().is_none_or(|r| !before.refs.contains(&r));
+            if is_new && !new_page {
+                let same = |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
+                if let Some(at) = old_inline.iter().position(same) {
+                    old_inline.swap_remove(at);
+                    is_new = false;
+                }
+            }
+            // A pop-up has no owner of its own, so nothing for it here.
+            if !is_new || !is_protected(&d) {
+                continue;
+            }
+            let (_, r) = annot_ref(doc, page, index)?;
+            let name = name_of(doc, &d).filter(|n| !names.contains(n)).unwrap_or_else(&mut *fresh_name);
+            names.insert(name.clone());
+            doc.update_dict(r, |d| {
+                d.set(OWNER_KEY.as_bytes().to_vec(), PdfString::text(actor));
+                d.set(b"NM".to_vec(), PdfString::text(&name));
+            })?;
+            claimed += 1;
+        }
+    }
+    Ok(claimed)
+}

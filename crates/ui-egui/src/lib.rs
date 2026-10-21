@@ -63,6 +63,7 @@ mod sign_ui;
 mod stamps_ui;
 mod host_compare;
 mod host_stamp;
+pub use pdfcraft_engine::Ownership;
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
@@ -393,6 +394,10 @@ pub struct PageClip {
 /// Files delivered asynchronously: (name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// Who is editing, as the embedding page's latest `pdfcraft:open` said; taken when that open's
+/// file is opened ([`PdfCraftApp::ownership_inbox`]).
+pub type OwnershipInbox = std::sync::Arc<std::sync::Mutex<Option<pdfcraft_engine::Ownership>>>;
+
 /// Files that failed to arrive asynchronously (a browser `?file=` URL that couldn't be fetched):
 /// `(name, error)`, reported to the user on the next frame (#173).
 pub type FailedInbox = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
@@ -616,6 +621,10 @@ pub struct PdfCraftApp {
     /// arrival opens in the background once the user has started working (#171).
     pub startup_inbox: Inbox,
     startup_superseded: bool,
+    /// The embedding page's `actor` and `readOnly`, set with the file it opened. They apply when
+    /// that file is taken from `startup_inbox`, so a held-back open doesn't change the rules for
+    /// the document still showing.
+    pub ownership_inbox: OwnershipInbox,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
     /// Mirrors "some document has unsaved work" each frame, so the web page's `beforeunload` handler can read it (#812).
@@ -977,6 +986,7 @@ impl PdfCraftApp {
             full_screen: false,
             inbox: Default::default(),
             startup_inbox: Default::default(),
+            ownership_inbox: Default::default(),
             startup_superseded: false,
             failed_inbox: Default::default(),
             unsaved_flag: Default::default(),
@@ -3060,6 +3070,10 @@ impl eframe::App for PdfCraftApp {
             let startup = self.startup_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
             if !startup.is_empty() {
                 self.disarm_stamp();
+                // Whoever opened this file also says who edits it.
+                if let Some(ownership) = self.ownership_inbox.lock().ok().and_then(|mut o| o.take()) {
+                    self.session.set_ownership(ownership);
+                }
             }
             for (name, bytes) in startup {
                 let activate = !self.startup_superseded;

@@ -3735,7 +3735,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     ui.separator();
                 }
             }
-            canvas_action = comments::context_menu(ui, view, info, prefs, allowed).or(copy_image);
+            canvas_action = comments::context_menu(ui, view, info, doc, prefs, allowed).or(copy_image);
         });
         (wanted, visible_now)
     });
@@ -3924,7 +3924,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), view, &mut tool, allowed);
+    comments::keys(ui.ctx(), view, doc, &mut tool, allowed);
     if preparing {
         crate::prepare::keys(ui.ctx(), view);
     }

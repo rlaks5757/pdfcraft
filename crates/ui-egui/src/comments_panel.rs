@@ -100,10 +100,12 @@ fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool 
 }
 
 /// Draw the panel body. Returns an edit to apply (posting, replying, deleting…).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut egui::Ui,
     t: &Tokens,
     info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     view: &mut DocView,
     prefs: &CommentPrefs,
     allowed: bool,
@@ -255,7 +257,7 @@ pub(crate) fn show(
             continue;
         }
         let thread = replies_of(a);
-        if let Some(e) = card(ui, t, a, &thread, info, view, prefs, allowed, nav) {
+        if let Some(e) = card(ui, t, a, &thread, info, doc, view, prefs, allowed, nav) {
             edit = Some(e);
         }
     }
@@ -269,12 +271,15 @@ fn card(
     a: &Annotation,
     thread: &[&Annotation],
     info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     view: &mut DocView,
     prefs: &CommentPrefs,
     allowed: bool,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
     let mut edit = None;
+    // Others' comments (and ones nobody owns) take replies only; the engine refuses the rest.
+    let mine = allowed && doc.can_edit_comment(a.page, a.index);
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
     let color = a.color.map(|c| color32(c.map(f64::from))).unwrap_or(t.accent);
@@ -307,7 +312,7 @@ fn card(
                     }
                     // Acrobat's per-comment checkmark: a toggle on the selected card, a mark otherwise.
                     let tip = if marked { tl!("Remove checkmark") } else { tl!("Mark with checkmark") };
-                    if selected && allowed {
+                    if selected && mine {
                         if icons::button(ui, "circle-check", 22.0, marked, tip).clicked() {
                             edit = Some(Edit::MarkAnnotation { page: a.page, index: a.index, marked: !marked, author: prefs.author.clone() });
                         }
@@ -433,7 +438,7 @@ fn card(
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.rect));
     }
-    if click.double_clicked() && allowed {
+    if click.double_clicked() && mine {
         view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
     }
     let menu_id = ui.id().with(("card-menu", key));
@@ -449,19 +454,21 @@ fn card(
         .show(|ui| {
             ui.set_min_width(160.0);
             crate::comments::attachment_items(ui, view, info, a);
-            if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl_ctx!("comment menu", "Edit"))).clicked() {
                 view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
                 ui.close();
             }
-            ui.menu_button(tl!("Set status"), |ui| {
-                for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
-                    if ui.button(tl!(s.name())).clicked() {
-                        edit = Some(Edit::SetAnnotationStatus { page: a.page, index: a.index, state: s, author: prefs.author.clone() });
-                        ui.close();
+            ui.add_enabled_ui(mine, |ui| {
+                ui.menu_button(tl!("Set status"), |ui| {
+                    for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
+                        if ui.button(tl!(s.name())).clicked() {
+                            edit = Some(Edit::SetAnnotationStatus { page: a.page, index: a.index, state: s, author: prefs.author.clone() });
+                            ui.close();
+                        }
                     }
-                }
+                });
             });
-            if ui.button(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" })).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 edit = Some(Edit::MarkAnnotation { page: a.page, index: a.index, marked: !marked, author: prefs.author.clone() });
                 ui.close();
             }
@@ -478,7 +485,7 @@ fn card(
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(!a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            if ui.add_enabled(!a.locked && doc.can_delete_comment(a.page, a.index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
                 ui.close();
