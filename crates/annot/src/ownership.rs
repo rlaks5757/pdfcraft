@@ -168,8 +168,20 @@ pub struct Foreign {
 }
 
 fn page_geometry(doc: &Document, page: usize) -> Vec<Option<Object>> {
-    let dict = page_refs(doc).ok().and_then(|p| p.get(page).copied()).and_then(|p| doc.get(p).as_dict().cloned()).unwrap_or_default();
-    [&b"MediaBox"[..], b"CropBox", b"Rotate"].iter().map(|k| dict.get(k).map(|o| (*doc.resolve(o)).clone())).collect()
+    let first = page_refs(doc).ok().and_then(|p| p.get(page).copied());
+    // The value in effect: set on the page or inherited from the page tree.
+    let inherited = |key: &[u8]| {
+        let mut at = first;
+        for _ in 0..32 {
+            let dict = doc.get(at?).as_dict().cloned()?;
+            if let Some(o) = dict.get(key) {
+                return Some((*doc.resolve(o)).clone());
+            }
+            at = dict.reference(b"Parent");
+        }
+        None
+    };
+    [&b"MediaBox"[..], b"CropBox", b"Rotate"].iter().map(|k| inherited(k)).collect()
 }
 
 pub fn foreign_snapshot(doc: &Document, actor: &str) -> Foreign {
