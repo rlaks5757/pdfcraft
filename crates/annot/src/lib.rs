@@ -1329,14 +1329,17 @@ fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> Result<(), 
 fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = build_appearance(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
-    apply_appearance(doc, r, &d, stream)
+    let Some(stream) = build_appearance(doc, &d, true) else { return Err(AnnotError::Unsupported(subtype)) };
+    // The font this annotation's previous appearance embedded is reused when the glyphs are the same.
+    let mut pool = FontPool::default();
+    pool.seed_from(doc, &d);
+    apply_appearance(doc, r, &d, stream, &mut pool)
 }
 
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
-fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
-    let mut stream = appearance::build(d)?;
+fn build_appearance(doc: &Document, d: &Dict, unicode: bool) -> Option<Stream> {
+    let mut stream = appearance::build_with(d, unicode)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
@@ -1373,14 +1376,100 @@ fn hoist_streams(doc: &mut Document, o: &mut Object) {
     }
 }
 
+/// Bytes of the streams nested in `o` (an embedded font's program and ToUnicode map).
+fn nested_stream_bytes(o: &Object) -> usize {
+    match o {
+        Object::Stream(s) => s.raw.len(),
+        Object::Dict(d) => d.iter().map(|(_, v)| nested_stream_bytes(v)).sum(),
+        Object::Array(a) => a.iter().map(nested_stream_bytes).sum(),
+        _ => 0,
+    }
+}
+
+/// The subset fonts one document (or one display copy) may get from [`apply_appearance`]: the same
+/// glyph set is embedded once and shared, and only so many are made, so a file full of comments
+/// in many scripts can't make a copy as big as the font itself for each of them. Past the limit
+/// text falls back to `?`, marked as such.
+#[derive(Default)]
+struct FontPool {
+    /// Embedded fonts by `/BaseFont` (which carries the glyph-set tag).
+    by_name: std::collections::HashMap<Vec<u8>, Object>,
+    count: usize,
+    bytes: usize,
+}
+
+impl FontPool {
+    const MAX_FONTS: usize = 64;
+    const MAX_BYTES: usize = 8 << 20;
+
+    /// Start with the font `d`'s current appearance embeds, if it is one of ours.
+    fn seed_from(&mut self, doc: &Document, d: &Dict) {
+        let font = d
+            .get(b"AP")
+            .map(|a| doc.resolve(a))
+            .and_then(|a| a.as_dict().and_then(|a| a.get(b"N").map(|n| doc.resolve(n))))
+            .and_then(|n| match n.as_ref() {
+                Object::Stream(s) => s.dict.get(b"Resources").map(|r| doc.resolve(r)),
+                _ => None,
+            })
+            .and_then(|r| r.as_dict().and_then(|r| r.get(b"Font").map(|f| doc.resolve(f))))
+            .and_then(|f| f.as_dict().and_then(|f| f.get(b"Helv").cloned()));
+        if let Some(font @ Object::Ref(_)) = font
+            && let Some(name) = doc.resolve(&font).as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type0")).and_then(|f| f.name(b"BaseFont")).map(<[u8]>::to_vec)
+        {
+            self.by_name.insert(name, font);
+        }
+    }
+
+    /// Whether another font of `bytes` may be embedded.
+    fn allows(&self, bytes: usize) -> bool {
+        self.count < Self::MAX_FONTS && self.bytes.saturating_add(bytes) <= Self::MAX_BYTES
+    }
+}
+
+/// The embedded font of a built appearance, if it has one: its resource name and `/BaseFont`.
+fn embedded_font(stream: &Stream) -> Option<(Vec<u8>, Vec<u8>)> {
+    let fonts = stream.dict.get(b"Resources")?.as_dict()?.get(b"Font")?.as_dict()?;
+    fonts.iter().find_map(|(k, v)| {
+        let f = v.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type0"))?;
+        Some((k.clone(), f.name(b"BaseFont")?.to_vec()))
+    })
+}
+
+/// Make the built appearance's embedded font an indirect object shared through `pool` (streams
+/// must be indirect; the same glyph set is stored once). False when `pool` has no room for it.
+fn place_font(doc: &mut Document, stream: &mut Stream, pool: &mut FontPool) -> bool {
+    let Some((resource, base)) = embedded_font(stream) else { return true };
+    let Some(Object::Dict(res)) = stream.dict.get_mut(b"Resources") else { return true };
+    let Some(Object::Dict(fonts)) = res.get_mut(b"Font") else { return true };
+    let Some(slot) = fonts.get_mut(&resource) else { return true };
+    if let Some(shared) = pool.by_name.get(&base) {
+        *slot = shared.clone();
+        return true;
+    }
+    let bytes = nested_stream_bytes(slot);
+    if !pool.allows(bytes) {
+        return false;
+    }
+    hoist_streams(doc, slot);
+    let font = std::mem::replace(slot, Object::Null);
+    *slot = Object::Ref(doc.add(font));
+    pool.by_name.insert(base, slot.clone());
+    pool.count += 1;
+    pool.bytes += bytes;
+    true
+}
+
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
-fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, mut stream: Stream) -> Result<(), AnnotError> {
-    // An embedded font's streams are nested in the built resources; streams must be indirect.
-    if let Some(res) = stream.dict.get_mut(b"Resources") {
-        hoist_streams(doc, res);
+fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, mut stream: Stream, pool: &mut FontPool) -> Result<(), AnnotError> {
+    // Past the pool's limit the text is drawn the old way, with `?`.
+    if !place_font(doc, &mut stream, pool)
+        && let Some(plain) = appearance::build_with(d, false)
+    {
+        stream = plain;
     }
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
-    let missing = appearance::undrawable_text(d).map(|(_, c)| c);
+    let missing = appearance::drawn_as_question_mark(d, &stream);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
@@ -1434,8 +1523,10 @@ impl AppearanceCache {
         if self.entries.len() >= 1_000_000 {
             self.clear();
         }
-        if self.bytes.saturating_add(stream.raw.len()) <= Self::MAX_BYTES {
-            self.bytes += stream.raw.len();
+        // An embedded font's streams are nested in the resources; they count too.
+        let size = stream.raw.len().saturating_add(stream.dict.get(b"Resources").map_or(0, nested_stream_bytes));
+        if self.bytes.saturating_add(size) <= Self::MAX_BYTES {
+            self.bytes += size;
             self.entries.insert(r, stream.clone());
         }
         // Else over budget: keep serving the entries already cached instead of growing.
@@ -1466,6 +1557,7 @@ pub fn with_missing_appearances(doc: &Document) -> Option<Document> {
 /// redrawing it. See [`AppearanceCache`] for when entries stay valid.
 pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCache) -> Option<Document> {
     let mut copy: Option<Document> = None;
+    let mut pool = FontPool::default();
     for page in page_refs(doc).ok()? {
         for r in annots(doc, page).iter().filter_map(Object::as_ref) {
             let d = annot_dict(doc, r);
@@ -1478,13 +1570,13 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             }
             if let Some(stream) = cache.get(r) {
                 // Fails only when `r` isn't a dictionary, which the cached build ruled out.
-                apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
+                apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream, &mut pool).ok();
                 continue;
             }
-            let Some(stream) = build_appearance(doc, &d) else { continue };
+            let Some(stream) = build_appearance(doc, &d, true) else { continue };
             cache.insert(r, &stream);
             // Fails only when `r` isn't a dictionary, which the build just ruled out.
-            apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream).ok();
+            apply_appearance(copy.get_or_insert_with(|| doc.clone()), r, &d, stream, &mut pool).ok();
         }
     }
     copy
@@ -1631,7 +1723,7 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
         w
     } else {
         // No usable old width: fall back to the creation-time width (at most 300 pt).
-        let longest = text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
+        let longest = appearance::widest_line(text, size);
         (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0)
     };
     let lines = appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64;

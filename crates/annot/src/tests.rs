@@ -1602,3 +1602,110 @@ fn korean_text_box_embeds_a_subset_font_and_draws_glyphs() {
 
 /// Captured from the Helvetica-only builder before Unicode text boxes existed.
 const LATIN_BOX_CONTENT: &str = "0 0.4 1 RG\n2 w\n21 676.6 198 22.4 re S\n[] 0 d\n20 675.6 200 24.4 re W n\nBT\n/Helv 12 Tf\n0 0.4 1 rg\n1 0 0 1 24 685.2 Tm (Hello \\(world\\)) Tj\nET\n";
+
+/// A FreeText dictionary without an appearance, for the display-copy tests.
+fn bare_free_text(doc: &mut Document, contents: &str, y: f64) -> ObjRef {
+    let mut bare = Dict::new();
+    bare.set(b"Type".to_vec(), Object::name("Annot"));
+    bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    bare.set(b"Rect".to_vec(), Object::Array([100.0, y, 300.0, y + 30.0].iter().map(|v| Object::Real(*v)).collect()));
+    bare.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+    bare.set(b"Contents".to_vec(), PdfString::text(contents));
+    let r = doc.add(Object::Dict(bare));
+    let page = page_ref(doc, 0).unwrap();
+    let mut on_page = annots(doc, page);
+    on_page.push(Object::Ref(r));
+    set_annots(doc, page, on_page).unwrap();
+    r
+}
+
+/// The `/Helv` font entry of an annotation's normal appearance.
+fn helv(doc: &Document, r: ObjRef) -> Object {
+    let d = doc.get(r).as_dict().cloned().unwrap();
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).unwrap().as_dict().unwrap().get(b"N").cloned().unwrap();
+    let Object::Stream(s) = &*doc.resolve(&n) else { panic!() };
+    let res = doc.resolve(s.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    fonts.as_dict().unwrap().get(b"Helv").cloned().unwrap()
+}
+
+#[test]
+fn korean_text_boxes_are_sized_with_the_font_they_are_drawn_in() {
+    let Some(face) = pdfcraft_fonts::subset::face() else { return };
+    let text = "한글 테스트";
+    // Wider than Helvetica's `?` stand-ins would suggest, and the wrapped lines fit the width.
+    assert!(appearance::widest_line(text, 12.0) > pdfcraft_fonts::helvetica_width(text, 12.0));
+    let lines = appearance::wrap(text, 12.0, 40.0);
+    assert!(lines.len() >= 2 && lines.iter().all(|l| pdfcraft_fonts::subset::width(face, l, 12.0) <= 40.0 || l.chars().count() == 1), "{lines:?}");
+    // A box fitted to the text holds all the lines the appearance draws.
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [20.0, 600.0, 70.0, 700.0], font_size: 12.0 }), &meta("k")).unwrap();
+    set_contents(&mut doc, 0, t, text, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let r = rect(d);
+    let drawn = appearance::wrap(text, 12.0, r[2] - r[0] - 2.0 * 4.0).len() as f64;
+    assert!(r[3] - r[1] >= drawn * 12.0 * 1.2, "{r:?} for {drawn} lines");
+    // Latin boxes are sized as before.
+    assert_eq!(appearance::widest_line("Hello", 12.0), pdfcraft_fonts::helvetica_width("Hello", 12.0));
+    assert_eq!(appearance::wrap("Hello world", 12.0, 40.0), pdfcraft_fonts::wrap("Hello world", 12.0, 40.0));
+}
+
+#[test]
+fn a_question_mark_drawn_for_text_the_font_could_have_drawn_is_still_marked() {
+    if pdfcraft_fonts::subset::face().is_none() {
+        return;
+    }
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 100.0, 30.0].iter().map(|v| Object::Real(*v)).collect()));
+    d.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+    d.set(b"Contents".to_vec(), PdfString::text("한글"));
+    assert_eq!(appearance::undrawable_text(&d), None);
+    let unicode = appearance::build(&d).unwrap();
+    assert_eq!(appearance::drawn_as_question_mark(&d, &unicode), None);
+    let plain = appearance::build_with(&d, false).unwrap();
+    assert_eq!(appearance::drawn_as_question_mark(&d, &plain), Some('한'));
+}
+
+#[test]
+fn display_copies_share_subset_fonts_and_stop_at_the_limit() {
+    if pdfcraft_fonts::subset::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let same: Vec<ObjRef> = (0..5).map(|i| bare_free_text(&mut doc, "한글 한글", 100.0 + 40.0 * i as f64)).collect();
+    let shown = with_missing_appearances(&doc).expect("a display copy");
+    let fonts: Vec<Object> = same.iter().map(|r| helv(&shown, *r)).collect();
+    assert!(matches!(fonts[0], Object::Ref(_)));
+    assert!(fonts.iter().all(|f| *f == fonts[0]), "one font object for the same glyphs");
+    let font = shown.resolve(&fonts[0]).as_dict().cloned().unwrap();
+    let base = font.name(b"BaseFont").unwrap();
+    assert!(base[..6].iter().all(u8::is_ascii_uppercase) && base[6] == b'+', "{}", String::from_utf8_lossy(base));
+
+    // More distinct glyph sets than the pool allows: the rest are drawn with `?` and marked.
+    let mut doc = fixture();
+    let many: Vec<ObjRef> = (0..70u32).map(|i| bare_free_text(&mut doc, &format!("가{}", char::from_u32(0xAC00 + 1 + i).unwrap()), 100.0)).collect();
+    let shown = with_missing_appearances(&doc).expect("a display copy");
+    let marked = many.iter().filter(|r| shown.get(**r).as_dict().and_then(pdfcraft_fonts::undrawn_mark).is_some()).count();
+    assert_eq!(marked, 70 - FontPool::MAX_FONTS);
+    let mut cache = AppearanceCache::default();
+    let _ = with_missing_appearances_cached(&doc, &mut cache);
+    assert!(cache.bytes > 70 * 1000, "embedded font streams count against the cache budget: {}", cache.bytes);
+}
+
+#[test]
+fn editing_a_korean_comment_reuses_its_font_when_the_glyphs_stay() {
+    if pdfcraft_fonts::subset::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [20.0, 600.0, 220.0, 700.0], font_size: 12.0 }), &meta("k")).unwrap();
+    set_contents(&mut doc, 0, t, "한글", &meta("")).unwrap();
+    let page = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, page)[t].as_ref().unwrap();
+    let before = helv(&doc, r);
+    let objects = doc.object_numbers().len();
+    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    assert_eq!(helv(&doc, r), before, "a restyle keeps the embedded font object");
+    assert!(doc.object_numbers().len() <= objects + 1, "only the new appearance stream is added");
+}

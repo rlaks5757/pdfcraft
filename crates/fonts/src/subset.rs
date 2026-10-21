@@ -14,10 +14,18 @@ use skrifa::{FontRef, MetadataProvider, instance::{LocationRef, Size}, raw::Tabl
 
 use crate::CraftFont;
 
-/// The face used for text outside WinAnsi: the first Korean craft-fonts face (it also has the
-/// Latin letters), if this build embeds one.
+/// Whether [`build`] can cut a subset of `face`: a TrueType (`glyf`) program with outline bounds
+/// and glyph ids that fit a CID. CFF faces aren't supported (their program needs FontFile3).
+fn usable(face: &CraftFont) -> bool {
+    FontRef::new(face.bytes).is_ok_and(|f| {
+        f.glyf().is_ok() && f.metrics(Size::unscaled(), LocationRef::default()).bounds.is_some() && f.maxp().is_ok_and(|m| m.num_glyphs() < u16::MAX)
+    })
+}
+
+/// The face used for text outside WinAnsi: the first usable Korean craft-fonts face (it also has
+/// the Latin letters), if this build embeds one.
 pub fn face() -> Option<&'static CraftFont> {
-    crate::ui_korean_fonts().into_iter().next()
+    crate::ui_korean_fonts().into_iter().find(|f| usable(f))
 }
 
 /// The face, when it has a glyph for every character of `text` (line breaks aside).
@@ -25,7 +33,7 @@ pub fn face_for(text: &str) -> Option<&'static CraftFont> {
     face().filter(|f| crate::embedding::covers(f.bytes, text))
 }
 
-/// Advance of `s` at `size` points in `face` (characters it lacks count as `.notdef`).
+/// Advance of `s` at `size` points in `face` (characters it lacks count as zero).
 pub fn width(face: &CraftFont, s: &str, size: f64) -> f64 {
     let Ok(font) = FontRef::new(face.bytes) else { return 0.0 };
     let upem = f64::from(font.head().map_or(1000, |h| h.units_per_em()).max(1));
@@ -36,6 +44,7 @@ pub fn width(face: &CraftFont, s: &str, size: f64) -> f64 {
 }
 
 /// A subset font for one run of text.
+#[derive(Clone)]
 pub struct SubsetFont {
     /// The Type0 font dictionary (streams nested, see the module doc).
     pub dict: Dict,
@@ -55,8 +64,51 @@ impl SubsetFont {
     }
 }
 
-/// Cut a subset of `face` holding the glyphs of `text` (line breaks aside).
+/// The subsets cut most recently, by glyph set, so the same characters are cut once.
+const CACHE_LIMIT: usize = 32;
+
+thread_local! {
+    static CACHE: std::cell::RefCell<std::collections::HashMap<u64, SubsetFont>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// [`build`], reusing a subset of the same characters cut before.
 pub fn build(face: &CraftFont, text: &str) -> Option<SubsetFont> {
+    let key = glyph_set_hash(face, text);
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return Some(hit);
+    }
+    let font = cut(face, text)?;
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= CACHE_LIMIT {
+            c.clear();
+        }
+        c.insert(key, font.clone());
+    });
+    Some(font)
+}
+
+/// A 64-bit hash of the face and the distinct characters of `text` (line breaks aside).
+fn glyph_set_hash(face: &CraftFont, text: &str) -> u64 {
+    let set: std::collections::BTreeSet<char> = text.chars().filter(|c| !matches!(c, '\n' | '\r')).collect();
+    // FNV-1a over the face's size and name, then the characters in order.
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |v: u64| {
+        for b in v.to_le_bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    mix(face.bytes.len() as u64);
+    face.family.bytes().for_each(|b| mix(u64::from(b)));
+    set.into_iter().for_each(|c| mix(u64::from(c)));
+    h
+}
+
+/// Cut a subset of `face` holding the glyphs of `text` (line breaks aside).
+fn cut(face: &CraftFont, text: &str) -> Option<SubsetFont> {
+    if !usable(face) {
+        return None;
+    }
     let font = FontRef::new(face.bytes).ok()?;
     let charmap = font.charmap();
     let mut remap = subsetter::GlyphRemapper::new();
@@ -94,7 +146,18 @@ pub fn build(face: &CraftFont, text: &str) -> Option<SubsetFont> {
     }
     cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
 
-    let tag = |key: &str| format!("PC{:04X}+{}", subset_tag(text), key);
+    // ISO 32000-2 9.6.4: six capital letters, here from the face and the whole glyph set.
+    let tag = |key: &str| {
+        let mut h = glyph_set_hash(face, text);
+        let letters: String = (0..6)
+            .map(|_| {
+                let l = char::from(b'A' + (h % 26) as u8);
+                h /= 26;
+                l
+            })
+            .collect();
+        format!("{letters}+{key}")
+    };
     let base = tag(&face.family.chars().filter(char::is_ascii_alphanumeric).collect::<String>());
     let mut file = Dict::new();
     file.set(b"Length1".to_vec(), Object::Int(program.len() as i64));
@@ -131,9 +194,4 @@ pub fn build(face: &CraftFont, text: &str) -> Option<SubsetFont> {
     top.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid)]));
     top.set(b"ToUnicode".to_vec(), Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
     Some(SubsetFont { dict: top, cids: chars })
-}
-
-/// A 16-bit tag from the text, so subsets of different text get different names.
-fn subset_tag(text: &str) -> u16 {
-    text.chars().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(u32::from(c))) as u16
 }
