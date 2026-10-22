@@ -4643,7 +4643,8 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                ui.vertical(|ui| {
+                let host = app.host_locked();
+                let contents = |ui: &mut egui::Ui| {
                     if icons::button(ui, "mouse-pointer-2", 32.0, app.quick_tool == QuickTool::Select, tl!("Select (V)")).clicked() {
                         app.quick_tool = QuickTool::Select;
                     }
@@ -4652,8 +4653,14 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     }
                     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
                     // group selects its last-used tool; clicking it again opens the flyout.
-                    for g in 0..comments::GROUPS.len() {
-                        let current = app.comment_prefs.group_tool[g];
+                    // A host build lays the markup and drawing tools out as plain buttons below, so
+                    // only the Comment group stays a flyout.
+                    let groups = if app.host_locked() { 1 } else { comments::GROUPS.len() };
+                    for g in 0..groups {
+                        // Tools the host's policy turned off are left out (all of them are on without the lock).
+                        let allowed: Vec<_> = comments::GROUPS[g].iter().copied().filter(|t| app.host_allows(t.command())).collect();
+                        let Some(&first) = allowed.first() else { continue };
+                        let current = Some(app.comment_prefs.group_tool[g]).filter(|c| allowed.contains(c)).unwrap_or(first);
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
                         let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
                         // A small corner triangle marks the flyout.
@@ -4669,7 +4676,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             .align(egui::RectAlign::RIGHT_START)
                             .gap(6.0)
                             .show(|ui| {
-                                for tool in comments::GROUPS[g] {
+                                for tool in &allowed {
                                     let on = app.quick_tool == QuickTool::Comment(*tool);
                                     let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
                                     let press = theme::Press::track(ui, &click);
@@ -4703,6 +4710,18 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                    }
+                    if app.host_locked() {
+                        // One click picks a tool; the PDFTron viewer shows them all, too.
+                        for tool in comments::GROUPS[1].iter().chain(comments::GROUPS[2]) {
+                            if !app.host_allows(tool.command()) {
+                                continue;
+                            }
+                            let on = app.quick_tool == QuickTool::Comment(*tool);
+                            if icons::button(ui, tool.icon(), 32.0, on, tl!(tool.label())).clicked() {
+                                app.execute(tool.command());
+                            }
+                        }
                     }
                     // Edit text & images, while the Edit workspace is open (Acrobat's Edit toolbar)
                     // or the tool is in use.
@@ -4824,7 +4843,16 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             });
                         }
                     }
-                });
+                };
+                if host {
+                    // Nine more buttons than the upstream bar: scroll when the window is too low for them.
+                    // The area's frame is sized from the last frame, so grant the height first.
+                    let height = (area.height() - 28.0 - 12.0).max(64.0);
+                    ui.set_max_height(height);
+                    egui::ScrollArea::vertical().max_height(height).show(ui, contents);
+                } else {
+                    ui.vertical(contents);
+                }
             });
     });
 }

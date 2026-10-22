@@ -1242,6 +1242,44 @@ mod tests {
         assert_eq!(state.session.get(id).unwrap().ownership().scope, EditScope::All);
     }
 
+    /// A locked app showing a one-page document opened with `own`, its quick bar drawn.
+    fn quick_bar_harness(own: Ownership) -> egui_kittest::Harness<'static, PdfCraftApp> {
+        let mut app = locked();
+        app.host_save = Some(Box::new(|_, _, _| Ok(())));
+        app.set_option("language", "en").unwrap();
+        app.session.set_open_ownership(own);
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| app);
+        h.run_steps(4);
+        h
+    }
+
+    /// The markup and drawing tools are plain buttons: one click picks one, and a tool the policy
+    /// turned off has no button. The same in a viewer's and in a builder's document.
+    #[test]
+    fn the_markup_and_drawing_tools_are_buttons_of_the_quick_bar() {
+        use crate::comments::{CommentTool, GROUPS};
+        use egui_kittest::kittest::Queryable;
+        let direct: Vec<_> = GROUPS[1].iter().chain(GROUPS[2]).copied().collect();
+        for scope in [EditScope::Viewer, EditScope::All] {
+            let off = [("comment.underline".to_string(), false), ("comment.cloud".to_string(), false)];
+            let mut h = quick_bar_harness(with_policy(Ownership { scope, ..Default::default() }, off.to_vec()));
+            for tool in &direct {
+                let shown = h.query_by_label(tool.label()).is_some();
+                let policy = h.state().host_allows(tool.command());
+                assert_eq!(shown, policy, "{scope:?} {}: a button exactly when the policy allows it", tool.label());
+            }
+            assert!(h.state().host_allows("comment.highlight"), "{scope:?}: the highlighter is on");
+            let on: Vec<_> = direct.iter().filter(|t| h.state().host_allows(t.command())).collect();
+            for tool in on {
+                h.get_by_label(tool.label()).click();
+                h.run_steps(2);
+                assert_eq!(h.state().quick_tool, crate::QuickTool::Comment(*tool), "{scope:?} {}: one click picks it", tool.label());
+            }
+            assert!(h.query_by_label(CommentTool::Underline.label()).is_none() && h.query_by_label(CommentTool::Cloud.label()).is_none());
+        }
+    }
+
     /// `parse_mode`, whatever the build: the document gets what the host said.
     fn open_scope_for_test(mode: &str) -> EditScope {
         parse_mode(Some(mode))
