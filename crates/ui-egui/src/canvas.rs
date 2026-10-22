@@ -2787,7 +2787,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_props: Option<(usize, usize)> = None;
     let mut field_props = false;
     let mut field_placed = false;
-    let can_modify = doc.allows_modification();
+    // A viewer's host scope edits content only when its policy says.
+    let can_modify = doc.allows_modification() && crate::host_lock::scope_allows(doc.ownership(), Some(pdfcraft_engine::PolicyGroup::ContentEdit));
     if preparing {
         crate::prepare::after_refresh(view, &form);
     } else {

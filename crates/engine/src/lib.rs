@@ -212,6 +212,8 @@ pub struct Ownership {
     pub read_only: bool,
     /// Which edits the host lets through (see [`EditScope`]).
     pub scope: EditScope,
+    /// What the host's policy turns on beyond the scope (see [`PolicyGroups`]).
+    pub allow: PolicyGroups,
 }
 
 /// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
@@ -223,6 +225,66 @@ pub enum EditScope {
     /// Comments only (`viewer`): annotations and form filling. Page operations, content editing,
     /// form building, redaction, watermarks, protection, signing and the like are refused.
     Viewer,
+}
+
+/// A feature the host's policy can turn on (`pdfcraft:open` `policy.allow`). The first three are
+/// shut in every host build; the others are a viewer's page, content and measuring work, and
+/// Fill & Sign (a builder has them anyway).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolicyGroup {
+    Print,
+    Export,
+    ExternalLinks,
+    Measure,
+    FillSign,
+    PageEdit,
+    ContentEdit,
+}
+
+impl PolicyGroup {
+    pub const ALL: [PolicyGroup; 7] = [
+        Self::Print,
+        Self::Export,
+        Self::ExternalLinks,
+        Self::Measure,
+        Self::FillSign,
+        Self::PageEdit,
+        Self::ContentEdit,
+    ];
+
+    /// The id the host sends.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Print => "print",
+            Self::Export => "export",
+            Self::ExternalLinks => "external_links",
+            Self::Measure => "measure",
+            Self::FillSign => "fill_sign",
+            Self::PageEdit => "page_edit",
+            Self::ContentEdit => "content_edit",
+        }
+    }
+}
+
+/// The groups a host turned on. Empty by default: nothing is on unless the host names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PolicyGroups(u8);
+
+impl PolicyGroups {
+    /// The groups named by `ids`; ids that are not a group are ignored.
+    pub fn from_ids<'a>(ids: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut out = Self::default();
+        for id in ids {
+            if let Some(g) = PolicyGroup::ALL.into_iter().find(|g| g.id() == id) {
+                out.0 |= 1 << g as u8;
+            }
+        }
+        out
+    }
+
+    pub fn has(self, group: PolicyGroup) -> bool {
+        self.0 & (1 << group as u8) != 0
+    }
 }
 
 /// Stable identifier of an open document within a session.
@@ -2382,7 +2444,7 @@ impl EditCtx {
 /// edit in it, so an edit sees the comments the ones before it made.
 fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     owner_guard::check(doc, edit, &cx.ownership)?;
-    owner_guard::check_scope(edit, cx.ownership.scope)?;
+    owner_guard::check_scope(edit, cx.ownership.scope, cx.ownership.allow)?;
     let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| {
         let known = pdfcraft_annot::ownership::known(doc, &a);
         (a, known)
@@ -3771,7 +3833,7 @@ impl Session {
             return Err(EditError::HostReadOnly);
         }
         // Likewise a viewer's limit, also for an edit that would find nothing to do.
-        owner_guard::check_scope(&edit, cx.ownership.scope)?;
+        owner_guard::check_scope(&edit, cx.ownership.scope, cx.ownership.allow)?;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;

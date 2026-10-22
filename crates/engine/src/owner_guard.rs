@@ -4,7 +4,7 @@
 
 use pdfcraft_annot::ownership as owner;
 
-use crate::{Edit, EditError, EditScope, Ownership};
+use crate::{Edit, EditError, EditScope, Ownership, PolicyGroup, PolicyGroups};
 
 /// Refuse `edit` on `doc` when the session is read-only, or when it would change a comment the
 /// actor doesn't own. What an edit does to comments beyond its named target (page operations,
@@ -60,20 +60,40 @@ pub(crate) fn creates_comments(edit: &Edit) -> bool {
     )
 }
 
-/// Refuse `edit` when the host opened the document as a viewer and the edit is not a comment.
-/// A `Batch` passes here and is held to the rule edit by edit, as each one goes through
-/// [`crate::run_edit`].
-pub(crate) fn check_scope(edit: &Edit, scope: EditScope) -> Result<(), EditError> {
-    if scope == EditScope::Viewer && !is_comment_work(edit) {
-        return Err(EditError::HostViewerOnly);
-    }
-    Ok(())
+/// What a viewer's host policy decides about an edit.
+enum Work {
+    /// Comments of every kind, answering them, filling in form values: always a viewer's.
+    Comment,
+    /// Page operations: `page_edit`.
+    Page,
+    /// Direct editing of text, pictures and links: `content_edit`.
+    Content,
+    /// Measurements: `measure`.
+    Measure,
+    /// Everything else, which no policy opens to a viewer.
+    Other,
 }
 
-/// Whether `edit` is comment work, which a viewer may do (comments of every kind, answering them,
-/// filling in form values). Every variant is named, so a new edit can't take effect in a viewer
-/// before someone has put it on one side.
-pub(crate) fn is_comment_work(edit: &Edit) -> bool {
+/// Refuse `edit` when the host opened the document as a viewer and the edit is not a comment or
+/// something its policy turned on. A `Batch` passes here and is held to the rule edit by edit,
+/// as each one goes through [`crate::run_edit`].
+pub(crate) fn check_scope(edit: &Edit, scope: EditScope, allow: PolicyGroups) -> Result<(), EditError> {
+    if scope == EditScope::All {
+        return Ok(());
+    }
+    let ok = match work(edit) {
+        Work::Comment => true,
+        Work::Page => allow.has(PolicyGroup::PageEdit),
+        Work::Content => allow.has(PolicyGroup::ContentEdit),
+        Work::Measure => allow.has(PolicyGroup::Measure),
+        Work::Other => false,
+    };
+    if ok { Ok(()) } else { Err(EditError::HostViewerOnly) }
+}
+
+/// Which kind of work `edit` is. Every variant is named, so a new edit can't take effect in a
+/// viewer before someone has put it on one side.
+fn work(edit: &Edit) -> Work {
     match edit {
         Edit::AddAnnotation(..)
         | Edit::AddCustomStamp { .. }
@@ -95,7 +115,7 @@ pub(crate) fn is_comment_work(edit: &Edit) -> bool {
         | Edit::ResetForm { .. }
         | Edit::ApplyScriptChanges { .. }
         | Edit::XfaEvent { .. }
-        | Edit::Batch { .. } => true,
+        | Edit::Batch { .. } => Work::Comment,
         Edit::RotatePages { .. }
         | Edit::DeletePages { .. }
         | Edit::MovePages { .. }
@@ -104,18 +124,33 @@ pub(crate) fn is_comment_work(edit: &Edit) -> bool {
         | Edit::DuplicatePages { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
-        | Edit::SetTransition { .. }
-        | Edit::SetInfo { .. }
         | Edit::InsertPagesFrom { .. }
+        | Edit::NumberPages { .. } => Work::Page,
+        Edit::EditTextLine { .. }
+        | Edit::EditPageImage { .. }
+        | Edit::MoveObjects { .. }
+        | Edit::EditTextBlock { .. }
+        | Edit::RegisterTextFont { .. }
+        | Edit::AddText { .. }
+        | Edit::AddImage { .. }
+        | Edit::UpdateContent { .. }
+        | Edit::DeleteContent { .. }
+        | Edit::ReplaceImage { .. }
+        | Edit::AddLink { .. }
+        | Edit::SetLink { .. }
+        | Edit::DeleteLink { .. }
+        | Edit::RemoveLinks { .. }
+        | Edit::AddLinks { .. } => Work::Content,
+        Edit::AddMeasurement(..)
+        | Edit::SetMeasurementScale { .. } => Work::Measure,
+        Edit::SetTransition { .. }
+        | Edit::SetInfo { .. }
         | Edit::AddBookmark { .. }
         | Edit::RenameBookmark { .. }
         | Edit::DeleteBookmark { .. }
         | Edit::MoveBookmark { .. }
         | Edit::SetBookmarkPage { .. }
         | Edit::BookmarksFromStructure
-        | Edit::NumberPages { .. }
-        | Edit::AddMeasurement(..)
-        | Edit::SetMeasurementScale { .. }
         | Edit::AddField { .. }
         | Edit::SetFieldProps { .. }
         | Edit::SetFieldImage { .. }
@@ -134,28 +169,13 @@ pub(crate) fn is_comment_work(edit: &Edit) -> bool {
         | Edit::SetFieldScript { .. }
         | Edit::ConvertPdfA { .. }
         | Edit::AddOcrText { .. }
-        | Edit::EditTextLine { .. }
-        | Edit::EditPageImage { .. }
-        | Edit::MoveObjects { .. }
-        | Edit::EditTextBlock { .. }
-        | Edit::RegisterTextFont { .. }
         | Edit::MoveInTabOrder { .. }
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
-        | Edit::AddText { .. }
-        | Edit::AddImage { .. }
-        | Edit::UpdateContent { .. }
-        | Edit::DeleteContent { .. }
-        | Edit::ReplaceImage { .. }
         | Edit::ApplyRedactions { .. }
         | Edit::ClearRedactions
-        | Edit::AddLink { .. }
-        | Edit::SetLink { .. }
-        | Edit::DeleteLink { .. }
-        | Edit::RemoveLinks { .. }
-        | Edit::AddLinks { .. }
         | Edit::ImportData { .. }
         | Edit::RemoveHidden { .. }
         | Edit::Sanitize
@@ -163,6 +183,6 @@ pub(crate) fn is_comment_work(edit: &Edit) -> bool {
         | Edit::Flatten { .. }
         | Edit::FlattenFillSign
         | Edit::Protect(..)
-        | Edit::RemoveProtection => false,
+        | Edit::RemoveProtection => Work::Other,
     }
 }

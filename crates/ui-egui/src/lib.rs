@@ -64,8 +64,8 @@ mod stamps_ui;
 mod host_compare;
 mod host_lock;
 mod host_stamp;
-pub use pdfcraft_engine::{EditScope, Ownership};
-pub use host_lock::{HOST_LOCK, open_scope, parse_mode};
+pub use pdfcraft_engine::{EditScope, Ownership, PolicyGroup, PolicyGroups};
+pub use host_lock::{HOST_LOCK, open_scope, parse_mode, policy_groups};
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
@@ -2021,8 +2021,8 @@ impl PdfCraftApp {
     /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
     /// links; an address that came from a document goes through [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
-        // Host lock: nothing leaves for the web, whoever asks.
-        if self.host_lock {
+        // Host lock: nothing leaves for the web, whoever asks, unless the host's policy says.
+        if self.host_lock && !self.host_group(PolicyGroup::ExternalLinks) {
             return;
         }
         if let Some(ctx) = &self.ctx {
@@ -2036,7 +2036,7 @@ impl PdfCraftApp {
     /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
     /// queue up a stream of dialogs.
     pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
-        if self.host_lock {
+        if self.host_lock && !self.host_group(PolicyGroup::ExternalLinks) {
             return;
         }
         match pdfcraft_engine::links::document_url(url) {
@@ -3235,6 +3235,7 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
+        host_lock::set_downloads_open(self.host_lock && (self.host_group(PolicyGroup::Export) || self.host_group(PolicyGroup::Print)));
         // A viewer works in the one workspace that has the comment tools on the page.
         if self.host_viewer() && self.mode != Mode::AllTools {
             self.select_mode(Mode::AllTools);
@@ -3327,7 +3328,7 @@ impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
         // Host lock: links the interface itself draws (the credits' GitHub names) and any
         // other request to open a page are dropped before the browser sees them.
-        if self.host_lock {
+        if self.host_lock && !self.host_group(PolicyGroup::ExternalLinks) {
             ctx.output_mut(|o| o.commands.retain(|c| !matches!(c, egui::OutputCommand::OpenUrl(_))));
         }
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).

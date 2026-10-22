@@ -6501,6 +6501,41 @@ mod ownership {
         s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     }
 
+    fn measurement_for_test() -> measure::NewMeasurement {
+        measure::NewMeasurement {
+            page: 0,
+            kind: measure::Kind::Distance,
+            points: vec![[10.0, 20.0], [40.0, 60.0]],
+            scale: measure::Scale::new(0.1, "m", 2).unwrap(),
+            style: Style::default(),
+            label: "Wall".into(),
+            author: "A".into(),
+        }
+    }
+
+    /// The host's policy opens a viewer to one kind of work at a time, and no further.
+    #[test]
+    fn a_policy_group_opens_a_viewer_to_its_own_kind_of_edit_only() {
+        let rotate = || Edit::RotatePages { pages: vec![0], degrees: 90 };
+        let (mut s, id) = session_with(2);
+        let on = |ids: &[&str]| Ownership { scope: EditScope::Viewer, allow: PolicyGroups::from_ids(ids.iter().copied()), ..Default::default() };
+        s.set_ownership(on(&["page_edit"]));
+        s.apply(id, rotate()).unwrap();
+        refused(&mut s, id, Edit::SetInfo { key: "Title".into(), value: "x".into() }, VIEWER_ONLY);
+        refused(&mut s, id, Edit::DeleteContent { page: 0, index: 0 }, VIEWER_ONLY);
+        s.set_ownership(on(&["content_edit", "print", "no_such_group"]));
+        refused(&mut s, id, rotate(), VIEWER_ONLY);
+        refused(&mut s, id, Edit::AddMeasurement(measurement_for_test()), VIEWER_ONLY);
+        s.set_ownership(on(&["measure"]));
+        s.apply(id, Edit::AddMeasurement(measurement_for_test())).unwrap();
+        s.set_ownership(on(&[]));
+        refused(&mut s, id, rotate(), VIEWER_ONLY);
+        assert!(!PolicyGroups::from_ids(["Page_Edit", ""]).has(PolicyGroup::PageEdit), "ids match exactly");
+        for g in PolicyGroup::ALL {
+            assert!(PolicyGroups::from_ids([g.id()]).has(g) && !PolicyGroups::default().has(g), "{}", g.id());
+        }
+    }
+
     /// A signature is a change to the document too.
     #[test]
     fn a_viewer_scope_also_refuses_digital_signing() {

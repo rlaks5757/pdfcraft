@@ -8,7 +8,9 @@
 //! decides what the menus show and is checked for drift by a test: a command that is in none of
 //! the lists fails it, and is denied until someone classifies it.
 
-use pdfcraft_engine::EditScope;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use pdfcraft_engine::{EditScope, Ownership, PolicyGroup};
 
 /// Whether this build is made for an embedding page.
 pub const HOST_LOCK: bool = cfg!(feature = "host-lock");
@@ -88,6 +90,17 @@ pub(crate) const VIEWER: &[&str] = &[
 
 /// Commands only a builder may run: editing the document itself.
 pub(crate) const BUILDER: &[&str] = &[
+    // Putting a file into the document is an edit, not a way out of it.
+    "comment.attach",
+    "comment.import",
+    "form.import_data",
+    "form.merge_data",
+    "page.combine",
+    "page.insert",
+    "page.replace",
+    "edit.image",
+    "form.add.image",
+    "doc.compare",
     "sign.fill.text",
     "sign.fill.check",
     "sign.fill.cross",
@@ -209,20 +222,12 @@ pub(crate) const DENIED: &[&str] = &[
     "create.images",
     "create.clipboard",
     "measure.export",
-    "page.combine",
     "print.dialog",
-    "comment.attach",
-    "comment.import",
     "comment.export",
-    "form.import_data",
     "form.export_data",
-    "form.merge_data",
     "actions.wizard",
     "actions.distribution",
     "actions.optimize_scans",
-    "doc.compare",
-    "edit.image",
-    "form.add.image",
     "export.image",
     "export.text",
     "export.docx",
@@ -235,8 +240,6 @@ pub(crate) const DENIED: &[&str] = &[
     "tools.document_js",
     "ocr.enhance_camera",
     "ocr.recognize_batch",
-    "page.insert",
-    "page.replace",
     "page.split",
     "help.discord",
     "help.app_page",
@@ -244,6 +247,104 @@ pub(crate) const DENIED: &[&str] = &[
     "help.website",
     "help.check_updates",
 ];
+
+/// The commands each policy group turns on. The first three groups' commands are in [`DENIED`]
+/// and are the only way out of it; the others' are in [`BUILDER`], which a viewer runs when its
+/// policy names the group. A command is in at most one group.
+pub(crate) const GROUPS: &[(PolicyGroup, &[&str])] = &[
+    (PolicyGroup::Print, &["print.dialog"]),
+    (
+        PolicyGroup::Export,
+        &[
+            "file.save_as",
+            "measure.export",
+            "comment.export",
+            "form.export_data",
+            "export.image",
+            "export.text",
+            "export.docx",
+            "export.pptx",
+            "export.html",
+            "export.rtf",
+            "export.all_images",
+            "page.split",
+        ],
+    ),
+    (PolicyGroup::ExternalLinks, &["help.discord", "help.app_page", "help.github", "help.website", "help.check_updates"]),
+    (PolicyGroup::Measure, &["measure.distance", "measure.perimeter", "measure.area", "measure.scale", "measure.info", "measure.snap"]),
+    (
+        PolicyGroup::FillSign,
+        &[
+            "sign.fill.text",
+            "sign.fill.check",
+            "sign.fill.cross",
+            "sign.fill.dot",
+            "sign.fill.line",
+            "sign.fill.date",
+            "sign.fill.signature",
+            "sign.fill.initials",
+            "sign.fill.signature.change",
+            "sign.fill.signature.remove",
+            "sign.fill.initials.remove",
+            "sign.fill.initials.change",
+        ],
+    ),
+    (
+        PolicyGroup::PageEdit,
+        &[
+            "page.copy",
+            "page.cut",
+            "page.paste",
+            "page.organize",
+            "page.rotate",
+            "page.rotate_ccw",
+            "page.delete",
+            "page.insert_blank",
+            "page.rotate_dialog",
+            "page.duplicate",
+            "page.reverse",
+            "page.crop",
+            "page.boxes",
+            "page.extract",
+            "page.number",
+            "page.combine",
+            "page.insert",
+            "page.replace",
+        ],
+    ),
+    (PolicyGroup::ContentEdit, &["edit.text", "edit.edit_text", "edit.link", "edit.links_from_urls", "edit.remove_links"]),
+];
+
+/// The group that turns `id` on, if there is one.
+pub(crate) fn group_of(id: &str) -> Option<PolicyGroup> {
+    GROUPS.iter().find(|(_, ids)| ids.contains(&id)).map(|(g, _)| *g)
+}
+
+/// Groups that can lift the lock on [`DENIED`] commands; the others only widen a viewer.
+#[cfg_attr(not(test), allow(dead_code))]
+fn opens_denied(group: PolicyGroup) -> bool {
+    matches!(group, PolicyGroup::Print | PolicyGroup::Export | PolicyGroup::ExternalLinks)
+}
+
+/// Whether a downloaded file may leave (the host's policy turned exporting or printing on for
+/// the document being shown). Platform code that cannot reach the app reads it.
+static DOWNLOADS_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_downloads_open(open: bool) {
+    DOWNLOADS_OPEN.store(open, Ordering::Relaxed);
+}
+
+// Read by the web build's download only.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn downloads_open() -> bool {
+    DOWNLOADS_OPEN.load(Ordering::Relaxed)
+}
+
+/// Whether a document with `own` may have work of `group` done on it: a builder's always, a
+/// viewer's when its policy names the group (`None`: never, nothing opens that to a viewer).
+pub(crate) fn scope_allows(own: &Ownership, group: Option<PolicyGroup>) -> bool {
+    own.scope == EditScope::All || group.is_some_and(|g| own.allow.has(g))
+}
 
 /// Who may run a command in a host build.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,6 +363,16 @@ pub(crate) fn allowed(id: &str) -> Option<Allow> {
         Some(Allow::Builder)
     } else {
         None
+    }
+}
+
+/// The groups of `pdfcraft:open` `policy.allow`: `None` when there is no policy or its `allow`
+/// is not a list, and a list with anything but text in it counts as no list. Ids that are not a
+/// group are ignored.
+pub fn policy_groups(allow: Option<&[Option<String>]>) -> pdfcraft_engine::PolicyGroups {
+    match allow {
+        Some(ids) if ids.iter().all(Option::is_some) => pdfcraft_engine::PolicyGroups::from_ids(ids.iter().flatten().map(String::as_str)),
+        _ => Default::default(),
     }
 }
 
@@ -292,10 +403,23 @@ impl PdfCraftApp {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(EditScope::Viewer, |d| d.ownership().scope)
     }
 
+    /// What the host's policy turned on for the active document; nothing with no document.
+    fn host_groups(&self) -> pdfcraft_engine::PolicyGroups {
+        self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or_else(Default::default, |d| d.ownership().allow)
+    }
+
+    /// Whether the host's policy turned `group` on for the active document.
+    pub(crate) fn host_group(&self, group: PolicyGroup) -> bool {
+        self.host_groups().has(group)
+    }
+
     /// A locked build showing a viewer's document (or none): the interface offers comments and
-    /// looking around, and hides the tools that edit the document itself.
+    /// looking around, and hides the tools that edit the document itself. A policy that opens
+    /// pages, content or measuring to the viewer brings the tool panels back.
     pub(crate) fn host_viewer(&self) -> bool {
-        self.host_lock && self.host_scope() == EditScope::Viewer
+        self.host_lock
+            && self.host_scope() == EditScope::Viewer
+            && ![PolicyGroup::PageEdit, PolicyGroup::ContentEdit, PolicyGroup::Measure].into_iter().any(|g| self.host_group(g))
     }
 
     /// Whether the host lock lets command `id` run now. Always true without the lock.
@@ -303,10 +427,11 @@ impl PdfCraftApp {
         if !self.host_lock {
             return true;
         }
+        let by_policy = || group_of(id).is_some_and(|g| self.host_group(g));
         match allowed(id) {
             Some(Allow::Viewer) => true,
-            Some(Allow::Builder) => self.host_scope() == EditScope::All,
-            None => false,
+            Some(Allow::Builder) => self.host_scope() == EditScope::All || by_policy(),
+            None => by_policy(),
         }
     }
 
@@ -374,8 +499,8 @@ mod tests {
     #[test]
     fn what_reaches_the_users_files_or_the_web_is_denied() {
         for id in [
-            "file.open", "file.open_recent", "file.save_as", "create.blank", "create.file", "page.combine", "print.dialog", "export.image", "export.docx",
-            "comment.import", "comment.export", "comment.attach", "edit.image", "form.add.image", "tools.js_console", "tools.document_js",
+            "file.open", "file.open_recent", "file.save_as", "create.blank", "create.file", "print.dialog", "export.image", "export.docx",
+            "comment.export", "tools.js_console", "tools.document_js",
             "app.preferences", "help.discord", "help.github", "help.website", "help.check_updates", "help.app_page",
         ] {
             assert_eq!(allowed(id), None, "{id}");
@@ -383,6 +508,63 @@ mod tests {
         assert_eq!(allowed("help.about"), Some(Allow::Viewer));
         assert_eq!(allowed("file.save"), Some(Allow::Viewer));
         assert_eq!(allowed("not.a.command"), None, "what is unknown is denied");
+    }
+
+    /// Every command a group turns on is in the list that group widens, in one group only, and
+    /// what no policy may turn on is in none.
+    #[test]
+    fn every_policy_group_names_its_commands_once() {
+        let mut seen = std::collections::HashMap::new();
+        for (group, ids) in GROUPS {
+            assert!(!ids.is_empty(), "{group:?}");
+            for id in *ids {
+                assert!(COMMANDS.iter().any(|c| c.id == *id), "{id} in {group:?} is not a command");
+                if let Some(other) = seen.insert(*id, *group) {
+                    panic!("{id} is in both {other:?} and {group:?}");
+                }
+                let list = if opens_denied(*group) { DENIED } else { BUILDER };
+                assert!(list.contains(id), "{id} ({group:?}) should be in {}", if opens_denied(*group) { "DENIED" } else { "BUILDER" });
+            }
+        }
+        for g in PolicyGroup::ALL {
+            assert!(GROUPS.iter().any(|(x, _)| *x == g), "{g:?} turns nothing on");
+        }
+        for id in [
+            "file.open", "file.open_recent", "file.clear_recent", "file.close", "file.revert", "create.blank", "create.file", "create.images",
+            "tools.js_console", "tools.document_js", "app.preferences",
+        ] {
+            assert_eq!(group_of(id), None, "{id} can't be turned on by a policy");
+        }
+    }
+
+    #[test]
+    fn a_policy_that_is_missing_or_malformed_turns_nothing_on() {
+        let s = |v: &[&str]| v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>();
+        assert_eq!(policy_groups(None), Default::default());
+        assert_eq!(policy_groups(Some(&[Some("print".into()), None])), Default::default(), "one item that isn't text spoils the list");
+        assert_eq!(policy_groups(Some(&s(&["nope", "insert_local"]))), Default::default(), "unknown ids are ignored");
+        let on = policy_groups(Some(&s(&["print", "page_edit", "nope"])));
+        assert!(on.has(PolicyGroup::Print) && on.has(PolicyGroup::PageEdit) && !on.has(PolicyGroup::Export));
+    }
+
+    /// A viewer gets what its policy names, and nothing else.
+    #[test]
+    fn a_policy_widens_a_viewer_by_group_only() {
+        let mut app = locked();
+        let allow = |ids: &[&str]| Ownership { scope: EditScope::Viewer, allow: policy_groups(Some(&ids.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>())), ..Default::default() };
+        app.session.set_open_ownership(allow(&["print", "page_edit", "fill_sign"]));
+        app.open_bytes("p.pdf", None, pdf()).unwrap();
+        assert!(app.host_allows("print.dialog") && app.host_allows("page.rotate") && app.host_allows("sign.fill.text"));
+        assert!(!app.host_allows("file.save_as") && !app.host_allows("measure.distance") && !app.host_allows("edit.text"));
+        assert!(!app.host_allows("file.open") && !app.host_allows("redact.apply") && !app.host_allows("help.github"));
+        assert!(!app.host_viewer(), "page tools come back with page_edit");
+        assert!(app.host_group(PolicyGroup::Print) && !app.host_group(PolicyGroup::Export));
+        // The engine follows the same policy.
+        let (_, id) = app.active_ids().unwrap();
+        assert!(app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).is_ok());
+        app.session.set_open_ownership(allow(&["fill_sign"]));
+        app.open_bytes("q.pdf", None, pdf()).unwrap();
+        assert!(app.host_viewer() && app.host_allows("sign.fill.text") && !app.host_allows("page.rotate"));
     }
 
     /// `pdfcraft:open` `mode`: `builder` is the only way to the wider scope.

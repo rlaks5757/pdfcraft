@@ -434,7 +434,7 @@ mod host {
         })
     }
 
-    /// Read `actor`, `readOnly` and `mode` of a `pdfcraft:open` message. Missing means off; a wrong type or
+    /// Read `actor`, `readOnly`, `mode` and `policy` of a `pdfcraft:open` message. Missing means off; a wrong type or
     /// length is an error (the open is refused), never a way around the checks.
     fn open_ownership(data: &JsValue) -> Result<pdfcraft_ui_egui::Ownership, String> {
         let get = |key: &str| js_sys::Reflect::get(data, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
@@ -452,7 +452,23 @@ mod host {
         };
         // Any other type than a string is "no mode", the narrowest.
         let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
-        Ok(pdfcraft_ui_egui::Ownership { actor, read_only, scope })
+        Ok(pdfcraft_ui_egui::Ownership { actor, read_only, scope, allow: policy_allow(data) })
+    }
+
+    /// `policy.allow` of a `pdfcraft:open` message. No policy, or one in the wrong shape, turns
+    /// nothing on.
+    fn policy_allow(data: &JsValue) -> pdfcraft_ui_egui::PolicyGroups {
+        let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
+        let policy = get(data, "policy");
+        if !policy.is_object() {
+            return Default::default();
+        }
+        let allow = get(&policy, "allow");
+        if !js_sys::Array::is_array(&allow) {
+            return Default::default();
+        }
+        let ids: Vec<Option<String>> = js_sys::Array::from(&allow).iter().map(|v| v.as_string()).collect();
+        pdfcraft_ui_egui::policy_groups(Some(&ids))
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {
