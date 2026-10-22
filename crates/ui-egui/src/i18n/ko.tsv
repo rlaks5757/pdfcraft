@@ -2,9 +2,8 @@
 # (context <TAB> source <TAB> translation; @id, @plural and other contexts; escapes \n \t \\).
 # Plural forms (see `plural_none` in i18n/mod.rs): one form for every count.
 #
-# Clean-room: every entry was written from the plain meaning of the English label using ordinary
-# Korean computing vocabulary. No proprietary localisation resource, string table or product UI
-# (Acrobat's included) was consulted or copied; add entries the same way.
+# Terminology: common Korean PDF viewer conventions. Entries were written from the plain meaning of
+# the English label; no product's string table was copied.
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
@@ -1360,7 +1359,7 @@ theme	Appearance	화면 모양
 	Clear form	양식 지우기
 	Clear redaction marks	교정 표시 지우기
 	Clipboard	클립보드
-	Cloud	구름
+	Cloud	구름 모양
 	Column select	열 선택
 	Combine	결합
 	Combine files	파일 결합
@@ -1391,12 +1390,12 @@ theme	Appearance	화면 모양
 	Document JavaScripts…	문서 JavaScript…
 	Document actions	문서 동작
 	Dot	점
-	Draw a cloud	구름 그리기
+	Draw a cloud	구름 모양 그리기
 	Draw a line	선 그리기
 	Draw a polygon	다각형 그리기
 	Draw a rectangle	사각형 그리기
 	Draw an arrow	화살표 그리기
-	Draw an oval	원 그리기
+	Draw an oval	타원 그리기
 	Draw connected lines	연결선 그리기
 	Draw freehand	자유롭게 그리기
 	Drawing	그리기
@@ -1494,7 +1493,7 @@ theme	Appearance	화면 모양
 	Optimize scanned documents	스캔한 문서 최적화
 	Optimize scanned documents…	스캔한 문서 최적화…
 	Output preview	출력 미리보기
-	Oval	원
+	Oval	타원
 	PDF/A…	PDF/A…
 	Page grid	페이지 격자
 	Page labels	페이지 레이블
@@ -1824,7 +1823,7 @@ comment menu	Edit	편집
 	Add inserted text	삽입 텍스트 추가
 	Add line	선 추가
 	Add link	링크 추가
-	Add oval	원 추가
+	Add oval	타원 추가
 	Add polygon	다각형 추가
 	Add rectangle	사각형 추가
 	Add redaction mark	교정 표시 추가
@@ -2282,7 +2281,7 @@ comment menu	Edit	편집
 	Social Security Number	주민등록번호
 	Social Security Numbers	주민등록번호
 	Solid	실선
-	Squiggly	물결
+	Squiggly	물결 밑줄
 	Star	별
 	Strong	강함
 	Structure Info	구조 정보
@@ -2347,7 +2346,7 @@ comment menu	Edit	편집
 	This document has no layers.	이 문서에는 레이어가 없습니다.
 	This file is already as small as it can be made ({size}). No copy was saved.	이 파일은 이미 더 이상 줄일 수 없는 크기({size})입니다. 사본을 저장하지 않았습니다.
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	이 양식에는 PdfCraft가 아직 읽지 못하는 XFA 데이터도 있습니다. 필드를 채울 수는 있지만 Acrobat에서는 XFA 값이 대신 표시될 수 있습니다.
-	Thumbnails	축소판
+	Thumbnails	페이지 축소판
 	Timed responses	시간 제한 응답
 	Type Password	암호 입력
 	Type a password.	암호를 입력하세요.

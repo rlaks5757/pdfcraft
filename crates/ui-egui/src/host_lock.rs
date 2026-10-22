@@ -1125,8 +1125,6 @@ mod tests {
         assert_eq!(app.session.get(app.active_ids().unwrap().1).unwrap().info.pages.len(), n);
     }
 
-    /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
-    /// `UPDATE_COMMANDS_JSON=1 cargo test -p pdfcraft-ui-egui --lib commands_json` rewrites it.
     /// A refused action says so in Korean in a Korean UI and in English in any other.
     #[test]
     fn the_refusal_text_follows_the_language() {
@@ -1137,8 +1135,18 @@ mod tests {
         assert_eq!(host_off_text(), HOST_OFF);
     }
 
+    /// A host build opens in the automatic language (Korean) even when the saved preferences name
+    /// another; the upstream build keeps the saved choice.
+    #[test]
+    fn a_saved_language_is_not_restored_in_a_host_build() {
+        let mut app = PdfCraftApp::new();
+        app.restore(r#"{"language":"en"}"#);
+        let expected = if HOST_LOCK { crate::i18n::AUTO } else { "en" };
+        assert_eq!(app.language, expected);
+    }
+
     /// Every command in the manifest carries a Korean label, so the admin screen never shows an
-    /// English-only row. A few labels are a bare term that Korean keeps as is (PDF/A).
+    /// English-only row. The one exception is a bare term Korean keeps as is (PDF/A).
     #[test]
     fn every_label_ko_is_filled() {
         let manifest: serde_json::Value = serde_json::from_str(&commands_manifest()).unwrap();
@@ -1146,10 +1154,12 @@ mod tests {
         for c in manifest["commands"].as_array().unwrap() {
             let (id, label, ko) = (c["id"].as_str().unwrap(), c["label"].as_str().unwrap(), c["labelKo"].as_str().unwrap_or_default());
             assert!(!ko.trim().is_empty(), "{id}: labelKo is empty");
-            assert!(hangul(ko) || ko == label, "{id}: labelKo is not Korean: {ko}");
+            assert!(hangul(ko) || id == "standards.pdfa" && ko == label, "{id}: labelKo is not Korean: {ko}");
         }
     }
 
+    /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
+    /// `UPDATE_COMMANDS_JSON=1 cargo test -p pdfcraft-ui-egui --lib commands_json` rewrites it.
     #[test]
     fn the_checked_in_commands_json_matches_the_table() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ppm/commands.json");

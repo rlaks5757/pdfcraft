@@ -2477,7 +2477,8 @@ impl PdfCraftApp {
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
-        if let Some(language) = v["language"].as_str().and_then(i18n::normalize_pref) {
+        // A host build is always Korean: a saved language choice is not restored.
+        if let Some(language) = v["language"].as_str().and_then(i18n::normalize_pref).filter(|_| !HOST_LOCK) {
             self.language = language.to_string();
         }
         if let Some(on) = v["flatten_fill_sign"].as_bool() {

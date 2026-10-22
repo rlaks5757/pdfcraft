@@ -263,25 +263,28 @@ fn reading_mode_label(mode: &str) -> &'static str {
 /// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Interface language"));
-        let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
-        let before = app.language.clone();
-        egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
-            if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                ui.close();
-            }
-            for language in crate::i18n::Lang::all() {
-                if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+    // A host build is always Korean, so it offers no choice of language.
+    if !crate::HOST_LOCK {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Interface language"));
+            let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
+            let before = app.language.clone();
+            egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
+                if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                     ui.close();
                 }
+                for language in crate::i18n::Lang::all() {
+                    if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+                        ui.close();
+                    }
+                }
+            });
+            // Relabel the rest of this dialog in the new language right away, not next frame.
+            if app.language != before {
+                crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
             }
         });
-        // Relabel the rest of this dialog in the new language right away, not next frame.
-        if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
-        }
-    });
+    }
     ui.horizontal(|ui| {
         use crate::ui_scale;
         ui.label(tl!("Interface size"));

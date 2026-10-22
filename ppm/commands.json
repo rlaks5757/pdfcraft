@@ -756,7 +756,7 @@
       },
       "id": "comment.circle",
       "label": "Draw an oval",
-      "labelKo": "원 그리기",
+      "labelKo": "타원 그리기",
       "location": []
     },
     {
@@ -786,7 +786,7 @@
       },
       "id": "comment.cloud",
       "label": "Draw a cloud",
-      "labelKo": "구름 그리기",
+      "labelKo": "구름 모양 그리기",
       "location": []
     },
     {
