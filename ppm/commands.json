@@ -866,7 +866,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "comment.flatten",
       "label": "Flatten comments",
@@ -876,7 +876,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "comment.import",
       "label": "Import comments…",
@@ -926,7 +926,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.import_data",
       "label": "Import form data…",
@@ -946,7 +946,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "standards.pdfa",
       "label": "PDF/A…",
@@ -996,7 +996,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.detect",
       "label": "Detect form fields",
@@ -1006,7 +1006,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.merge_data",
       "label": "Merge data files into spreadsheet…",
@@ -1016,7 +1016,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.flatten",
       "label": "Flatten form fields",
@@ -1026,7 +1026,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.prepare",
       "label": "Prepare a form",
@@ -1036,7 +1036,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.tab_order.row",
       "label": "Tab order: by rows",
@@ -1046,7 +1046,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.tab_order.column",
       "label": "Tab order: by columns",
@@ -1056,7 +1056,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.tab_order.structure",
       "label": "Tab order: by document structure",
@@ -1116,7 +1116,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.bates",
       "label": "Add Bates numbering…",
@@ -1176,7 +1176,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "redact.apply",
       "label": "Apply redactions…",
@@ -1186,7 +1186,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "redact.clear",
       "label": "Clear redaction marks",
@@ -1196,7 +1196,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "protect.remove_hidden",
       "label": "Remove hidden information…",
@@ -1206,7 +1206,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "redact.sanitize",
       "label": "Sanitize document…",
@@ -1216,7 +1216,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.field.properties",
       "label": "Field properties…",
@@ -1226,7 +1226,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.text",
       "label": "Add a text field",
@@ -1236,7 +1236,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.checkbox",
       "label": "Add a checkbox",
@@ -1246,7 +1246,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.radio",
       "label": "Add a radio button",
@@ -1256,7 +1256,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.combo",
       "label": "Add a drop-down list",
@@ -1266,7 +1266,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.list",
       "label": "Add a list box",
@@ -1276,7 +1276,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.button",
       "label": "Add a button",
@@ -1296,7 +1296,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.date",
       "label": "Add a date field",
@@ -1306,7 +1306,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "form.add.signature",
       "label": "Add a digital signature field",
@@ -1316,7 +1316,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "sign.digital",
       "label": "Digitally sign",
@@ -1326,7 +1326,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "sign.certify",
       "label": "Certify (visible signature)",
@@ -1336,7 +1336,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "sign.certify_invisible",
       "label": "Certify (invisible signature)",
@@ -1500,7 +1500,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "optimize.reduce",
       "label": "Reduce file size…",
@@ -1512,7 +1512,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "optimize.advanced",
       "label": "Optimize PDF…",
@@ -1616,7 +1616,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "ocr.recognize",
       "label": "Recognize text…",
@@ -1666,7 +1666,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "a11y.autotag",
       "label": "Automatically tag PDF",
@@ -1696,7 +1696,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "a11y.alt_text",
       "label": "Add alternate text…",
@@ -1706,7 +1706,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "a11y.autotag_fields",
       "label": "Tag form fields",
@@ -1738,7 +1738,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.header_footer",
       "label": "Add header & footer…",
@@ -1748,7 +1748,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.header_footer.update",
       "label": "Update header & footer…",
@@ -1758,7 +1758,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.header_footer.remove",
       "label": "Remove header & footer",
@@ -1768,7 +1768,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.watermark",
       "label": "Add watermark…",
@@ -1778,7 +1778,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.watermark.update",
       "label": "Update watermark…",
@@ -1788,7 +1788,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.watermark.remove",
       "label": "Remove watermark",
@@ -1798,7 +1798,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.background",
       "label": "Add background…",
@@ -1808,7 +1808,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.background.update",
       "label": "Update background…",
@@ -1818,7 +1818,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "edit.background.remove",
       "label": "Remove background",
@@ -1828,7 +1828,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "protect.password",
       "label": "Protect using password…",
@@ -1840,7 +1840,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "protect.remove",
       "label": "Remove security",
@@ -1852,7 +1852,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "protect.unlock",
       "label": "Enter permissions password…",
@@ -1862,7 +1862,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "protect.properties",
       "label": "Security properties…",
@@ -1886,7 +1886,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "bookmark.add",
       "label": "New bookmark",
@@ -1898,7 +1898,7 @@
     {
       "grades": {
         "builder": "on",
-        "viewer": "off"
+        "viewer": "locked"
       },
       "id": "bookmark.from_structure",
       "label": "New bookmarks from structure",

@@ -108,6 +108,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     changed
                 });
                 let mut action = None;
+                // Closing and reopening tabs are File commands a host build locks.
+                let (can_close, can_reopen) = (app.host_allows("file.close"), app.host_allows("file.open"));
                 let mut close = None;
                 // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
                 let mut drag_x = None;
@@ -143,6 +145,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     cap,
                                     tab_h,
                                     true,
+                                    can_close,
                                 );
                                 slots.push((i, response.rect));
                                 if response.dragged() || response.drag_stopped() {
@@ -154,11 +157,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let id = app.views[i].id;
                                 let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
                                 response.context_menu(|ui| {
-                                    if ui.button(tl!("Close Tab")).clicked() {
+                                    if can_close && ui.button(tl!("Close Tab")).clicked() {
                                         action = Some(crate::tab_context::Action::Close(id));
                                         ui.close();
                                     }
-                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                    if can_reopen && ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
                                         action = Some(crate::tab_context::Action::Reopen);
                                         ui.close();
                                     }
@@ -173,7 +176,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                                 // A middle click closes the tab, as in Acrobat and browsers (#1853);
                                 // unsaved changes ask first, as the close button does.
-                                if response.middle_clicked() {
+                                if can_close && response.middle_clicked() {
                                     close = Some(i);
                                 }
                             }
@@ -225,6 +228,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     cap,
                                     tab_h,
                                     false,
+                                    true,
                                 );
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
@@ -428,6 +432,7 @@ fn tab(
     cap: Option<f32>,
     height: f32,
     draggable: bool,
+    closable: bool,
 ) -> egui::Response {
     let font = theme::regular(13.0);
     let mut label = tab_name(name);
@@ -467,17 +472,22 @@ fn tab(
         ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
     });
     let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, id.with("close"), Sense::click());
-    let x_press = theme::Press::track(ui, &x);
-    x_press.wash(ui, x_rect, 4, false);
-    // Unsaved changes: a dot where the close button sits, until the tab is hovered.
-    if dirty && !resp.hovered() && !x.hovered() {
+    // A host build that locks File ▸ Close has no close button.
+    if closable {
+        let x = ui.interact(x_rect, id.with("close"), Sense::click());
+        let x_press = theme::Press::track(ui, &x);
+        x_press.wash(ui, x_rect, 4, false);
+        // Unsaved changes: a dot where the close button sits, until the tab is hovered.
+        if dirty && !resp.hovered() && !x.hovered() {
+            ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
+        } else if active || resp.hovered() || x.hovered() {
+            icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
+        }
+        if theme::hand(x).clicked() {
+            *close = Some(index);
+        }
+    } else if dirty {
         ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
-    } else if active || resp.hovered() || x.hovered() {
-        icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
-    }
-    if theme::hand(x).clicked() {
-        *close = Some(index);
     }
     let shown = match file {
         Some(file) => std::borrow::Cow::Owned(format!("{}\n{}", crate::bidi::visual(name), crate::bidi::visual(file))),
@@ -504,11 +514,11 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.add_space(10.0);
                 // A viewer has no workspaces to switch between: the tools of Edit, Convert and E-Sign
                 // are not its to use.
-                if !app.host_viewer() {
+                {
                     for (mode, label) in
                         [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
                     {
-                        if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                        if app.host_mode_shown(mode) && widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
                             app.switch_mode(mode, true);
                         }
                     }

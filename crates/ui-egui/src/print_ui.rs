@@ -291,6 +291,10 @@ fn default_printer(printers: &[spool::Printer]) -> Option<String> {
 
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
+        // Host lock: a script's `print()` and a button's Print action land here too.
+        if !self.host_allows("print.dialog") {
+            return;
+        }
         let Some((i, _)) = self.active_ids() else { return };
         let (printers, printers_loading) = match self.printer_source.clone() {
             // The list from the last time the dialog opened, until the fresh one arrives.
@@ -622,7 +626,7 @@ impl PdfCraftApp {
         };
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let file = format!("{stem} (print).pdf");
-        match crate::editing::download(&file, &pdf) {
+        match crate::editing::download(&["print.dialog"], &file, &pdf) {
             Ok(()) => self.notify_fmt("Couldn't print from the browser ({e}); downloaded {name} to print instead", &[("e", error), ("name", &file)]),
             Err(_) => self.notify_error(error),
         }
@@ -661,7 +665,7 @@ impl PdfCraftApp {
     fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> bool {
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let file = format!("{stem} (print).pdf");
-        match crate::editing::download(&file, &bytes) {
+        match crate::editing::download(&["print.dialog"], &file, &bytes) {
             Ok(()) => {
                 self.notify_fmt("Downloaded {name}", &[("name", &file)]);
                 true

@@ -66,7 +66,7 @@ impl PdfCraftApp {
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
     pub fn check_for_updates(&mut self) {
         let Some(source) = self.update_source.clone() else {
-            self.open_url(RELEASES_PAGE);
+            self.open_url(RELEASES_PAGE, &["help.check_updates"]);
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -89,7 +89,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = source;
-            self.open_url(RELEASES_PAGE);
+            self.open_url(RELEASES_PAGE, &["help.check_updates"]);
         }
     }
 
@@ -185,7 +185,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if close {
         app.updates.open = false;
         if let Some(url) = download {
-            app.open_url(&url);
+            app.open_url(&url, &["help.check_updates"]);
         }
     }
 }

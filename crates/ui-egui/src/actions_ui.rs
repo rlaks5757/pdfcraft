@@ -107,7 +107,7 @@ impl PdfCraftApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
-                    crate::editing::download(&name, &r.bytes)?;
+                    crate::editing::download(&["actions.wizard", "actions.distribution", "actions.optimize_scans"], &name, &r.bytes)?;
                     Ok(())
                 });
                 match r {

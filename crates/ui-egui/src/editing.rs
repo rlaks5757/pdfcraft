@@ -674,7 +674,7 @@ impl PdfCraftApp {
             let to_host = self.host_save.is_some();
             let delivered = match &self.host_save {
                 Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
-                None => download(&name, &bytes),
+                None => download(&["file.save_as"], &name, &bytes),
             };
             match delivered {
                 Ok(()) => {
@@ -798,6 +798,9 @@ impl PdfCraftApp {
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
+        if !self.host_allows("file.close") {
+            return;
+        }
         // Text typed into a field counts as an unsaved change.
         if self.has_unsaved_work(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
@@ -810,6 +813,9 @@ impl PdfCraftApp {
 
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     pub fn close_all(&mut self) {
+        if !self.host_allows("file.close_all") {
+            return;
+        }
         for i in (0..self.views.len()).rev() {
             if !self.has_unsaved_work(i) {
                 self.close_tab(i);
@@ -822,6 +828,9 @@ impl PdfCraftApp {
 
     /// File ▸ Revert (after the confirmation).
     pub fn revert_active(&mut self) {
+        if !self.host_allows("file.revert") {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         match self.session.revert(id) {
             Ok(()) => {
@@ -1058,10 +1067,10 @@ fn short_name(path: &str) -> String {
 
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn download(cmds: &[&str], name: &str, bytes: &[u8]) -> Result<(), String> {
     // Host lock: a save goes to the host as a message, never to the user's disk, unless the
-    // host's policy turned exporting or printing on.
-    if crate::HOST_LOCK && !crate::host_lock::downloads_open() {
+    // host's policy turned on a command this file is for (`cmds`: any of them).
+    if crate::HOST_LOCK && !crate::host_lock::downloads_allow(cmds) {
         return Err("downloads are turned off here".into());
     }
     use wasm_bindgen::JsCast;

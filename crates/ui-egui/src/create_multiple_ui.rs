@@ -78,7 +78,7 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             let result = {
                 let _ = target;
-                crate::editing::download(&filename, &pdf)
+                crate::editing::download(&["file.save_as"], &filename, &pdf)
             };
             match result {
                 Ok(()) => made += 1,

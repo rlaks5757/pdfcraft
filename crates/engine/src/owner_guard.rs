@@ -15,6 +15,21 @@ pub(crate) fn check(doc: &pdfcraft_cos::Document, edit: &Edit, own: &Ownership) 
     if own.read_only && !matches!(edit, Edit::Batch { .. }) {
         return Err(EditError::HostReadOnly);
     }
+    // A viewer takes part in comments, not in the document's own links and form widgets, whether
+    // or not an actor is named.
+    if own.scope == EditScope::Viewer
+        && let Edit::DeleteAnnotation { page, index }
+        | Edit::MoveAnnotation { page, index, .. }
+        | Edit::ResizeAnnotation { page, index, .. }
+        | Edit::StyleAnnotation { page, index, .. }
+        | Edit::FillAnnotation { page, index, .. }
+        | Edit::FontSizeAnnotation { page, index, .. }
+        | Edit::SetAnnotationInfo { page, index, .. }
+        | Edit::LockAnnotation { page, index, .. } = edit
+        && owner::is_layout_annotation(doc, *page, *index)
+    {
+        return Err(EditError::HostViewerOnly);
+    }
     let Some(actor) = own.actor.as_deref() else { return Ok(()) };
     match edit {
         Edit::DeleteAnnotation { page, index } => owner::check_delete(doc, *page, *index, actor)?,

@@ -240,7 +240,7 @@ impl PdfCraftApp {
                             #[cfg(not(target_arch = "wasm32"))]
                             crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
                             #[cfg(target_arch = "wasm32")]
-                            crate::editing::download(&name, &r.bytes)?;
+                            crate::editing::download(&["ocr.enhance_camera", "ocr.recognize_batch"], &name, &r.bytes)?;
                             Ok(r.words())
                         });
                         match saved {

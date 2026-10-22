@@ -2020,9 +2020,11 @@ impl PdfCraftApp {
 
     /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
     /// links; an address that came from a document goes through [`Self::request_document_url`].
-    pub fn open_url(&mut self, url: &str) {
-        // Host lock: nothing leaves for the web, whoever asks, unless the host's policy says.
-        if self.host_lock && !self.host_any(host_lock::LINK_CMDS) {
+    ///
+    /// `cmds` are the commands this link belongs to; under the host lock it opens only if one
+    /// of them is on, so enabling one help link doesn't open the others.
+    pub fn open_url(&mut self, url: &str, cmds: &[&str]) {
+        if self.host_lock && !self.host_any(cmds) {
             return;
         }
         if let Some(ctx) = &self.ctx {
@@ -2062,7 +2064,7 @@ impl PdfCraftApp {
         if let Some(p) = self.pending_link.take()
             && open
         {
-            self.open_url(&p.url);
+            self.open_url(&p.url, host_lock::LINK_CMDS);
         }
     }
 
@@ -3235,9 +3237,9 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
-        host_lock::set_downloads_open(self.host_lock && (self.host_any(host_lock::EXPORT_CMDS) || self.host_allows("print.dialog")));
+        host_lock::set_downloads_allowed(if self.host_lock { host_lock::DOWNLOAD_CMDS.iter().copied().filter(|id| self.host_allows(id)).collect() } else { Vec::new() });
         // A viewer works in the one workspace that has the comment tools on the page.
-        if self.host_viewer() && self.mode != Mode::AllTools {
+        if self.host_lock && self.mode != Mode::AllTools && !self.host_mode_shown(self.mode) {
             self.select_mode(Mode::AllTools);
         }
         // Host lock without a host: nothing but the notice, and nothing to open.
@@ -3328,8 +3330,10 @@ impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
         // Host lock: links the interface itself draws (the credits' GitHub names) and any
         // other request to open a page are dropped before the browser sees them.
-        if self.host_lock && !self.host_any(host_lock::LINK_CMDS) {
-            ctx.output_mut(|o| o.commands.retain(|c| !matches!(c, egui::OutputCommand::OpenUrl(_))));
+        // Only the address `open_url` just approved goes through.
+        if self.host_lock {
+            let ok = self.last_opened_url.clone();
+            ctx.output_mut(|o| o.commands.retain(|c| !matches!(c, egui::OutputCommand::OpenUrl(u) if Some(&u.url) != ok.as_ref())));
         }
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);

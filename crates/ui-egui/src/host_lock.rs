@@ -8,8 +8,6 @@
 //! decides what the menus show and is checked for drift by a test: a command that is in none of
 //! the lists fails it, and is denied until someone classifies it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use pdfcraft_engine::commands::COMMANDS;
 use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
 
@@ -100,13 +98,12 @@ pub(crate) const VIEWER: &[&str] = &[
     "help.about",
 ];
 
-/// Commands only a builder may run: editing the document itself.
+/// Commands only a builder may run that a viewer's policy can turn on: editing the document
+/// itself, in the kinds the engine can open for a viewer (see [`EDIT_CMDS`]), plus Fill & Sign and
+/// what only reads or marks. Anything else is [`BUILDER_ONLY`].
 pub(crate) const BUILDER: &[&str] = &[
     // Putting a file into the document is an edit, not a way out of it.
     "comment.attach",
-    "comment.import",
-    "form.import_data",
-    "form.merge_data",
     "page.combine",
     "page.insert",
     "page.replace",
@@ -133,9 +130,48 @@ pub(crate) const BUILDER: &[&str] = &[
     "file.properties",
     "edit.column_select",
     "edit.snapshot",
-    "comment.flatten",
     "comment.stamp",
     "comment.summarize",
+    "edit.text",
+    "edit.edit_text",
+    "edit.link",
+    "edit.links_from_urls",
+    "edit.remove_links",
+    "redact.mark",
+    "redact.pages",
+    "redact.search",
+    "redact.properties",
+    "sign.fill.signature.change",
+    "sign.fill.signature.remove",
+    "sign.fill.initials.remove",
+    "sign.fill.initials.change",
+    "a11y.check",
+    "a11y.find_untagged",
+    "a11y.report",
+    "a11y.reading_options",
+    "a11y.tags",
+    "page.organize",
+    "page.rotate",
+    "page.rotate_ccw",
+    "page.delete",
+    "page.insert_blank",
+    "page.rotate_dialog",
+    "page.duplicate",
+    "page.reverse",
+    "page.crop",
+    "page.boxes",
+    "page.extract",
+    "page.number",
+];
+
+/// Commands only a builder may run, and no policy gives a viewer: the engine refuses their edits
+/// to a viewer (form building, redaction, protection, watermarks, bookmarks, digital signing,
+/// OCR, importing data), so turning one on would show a command that only ever fails.
+pub(crate) const BUILDER_ONLY: &[&str] = &[
+    "comment.import",
+    "form.import_data",
+    "form.merge_data",
+    "comment.flatten",
     "form.flatten",
     "form.detect",
     "form.prepare",
@@ -152,16 +188,7 @@ pub(crate) const BUILDER: &[&str] = &[
     "form.add.date",
     "form.add.signature",
     "standards.pdfa",
-    "edit.text",
-    "edit.edit_text",
-    "edit.link",
-    "edit.links_from_urls",
-    "edit.remove_links",
     "edit.bates",
-    "redact.mark",
-    "redact.pages",
-    "redact.search",
-    "redact.properties",
     "redact.apply",
     "redact.clear",
     "protect.remove_hidden",
@@ -169,21 +196,12 @@ pub(crate) const BUILDER: &[&str] = &[
     "sign.digital",
     "sign.certify",
     "sign.certify_invisible",
-    "sign.fill.signature.change",
-    "sign.fill.signature.remove",
-    "sign.fill.initials.remove",
-    "sign.fill.initials.change",
     "optimize.reduce",
     "optimize.advanced",
     "ocr.recognize",
-    "a11y.check",
-    "a11y.find_untagged",
     "a11y.autotag",
-    "a11y.report",
-    "a11y.reading_options",
     "a11y.alt_text",
     "a11y.autotag_fields",
-    "a11y.tags",
     "edit.header_footer",
     "edit.header_footer.update",
     "edit.header_footer.remove",
@@ -197,20 +215,8 @@ pub(crate) const BUILDER: &[&str] = &[
     "protect.remove",
     "protect.unlock",
     "protect.properties",
-    "page.organize",
     "bookmark.add",
     "bookmark.from_structure",
-    "page.rotate",
-    "page.rotate_ccw",
-    "page.delete",
-    "page.insert_blank",
-    "page.rotate_dialog",
-    "page.duplicate",
-    "page.reverse",
-    "page.crop",
-    "page.boxes",
-    "page.extract",
-    "page.number",
 ];
 
 /// Commands no policy can turn on: they open the user's files, start a new document, close or
@@ -268,6 +274,8 @@ pub(crate) const OFF: &[&str] = &[
 
 /// The commands that reach the user's disk (save, export, download, a folder to write to).
 /// Turning any of them on lets the platform functions behind them work.
+// Read by the native file pickers only.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) const EXPORT_CMDS: &[&str] = &[
     "file.save_as",
     "measure.export",
@@ -326,6 +334,8 @@ pub(crate) const EDIT_CMDS: &[(EditClass, &[&str])] = &[
     "edit.link",
     "edit.links_from_urls",
     "edit.remove_links",
+    "edit.image",
+    "form.add.image",
 ]),
     (EditClass::Measure, &[
     "measure.distance",
@@ -364,6 +374,8 @@ pub(crate) fn grade(id: &str, scope: EditScope) -> Grade {
         Grade::On
     } else if BUILDER.contains(&id) {
         if scope == EditScope::All { Grade::On } else { Grade::Off }
+    } else if BUILDER_ONLY.contains(&id) {
+        if scope == EditScope::All { Grade::On } else { Grade::Locked }
     } else if OFF.contains(&id) {
         Grade::Off
     } else {
@@ -379,18 +391,48 @@ pub(crate) fn enabled(id: &str, scope: EditScope, overrides: &[(String, bool)]) 
     }
 }
 
-/// Whether a downloaded file may leave (the host's policy turned an export or print command on
-/// for the document being shown). Platform code that cannot reach the app reads it.
-static DOWNLOADS_OPEN: AtomicBool = AtomicBool::new(false);
+/// The commands whose files may leave the page (a download, a save to disk); a download is told
+/// which of them it is for ([`downloads_allow`]).
+pub(crate) const DOWNLOAD_CMDS: &[&str] = &[
+    "file.save_as",
+    "print.dialog",
+    "page.split",
+    "measure.export",
+    "comment.export",
+    "form.export_data",
+    "actions.wizard",
+    "actions.distribution",
+    "actions.optimize_scans",
+    "export.image",
+    "export.text",
+    "export.docx",
+    "export.pptx",
+    "export.html",
+    "export.rtf",
+    "export.all_images",
+    "ocr.enhance_camera",
+    "ocr.recognize_batch",
+];
 
-pub(crate) fn set_downloads_open(open: bool) {
-    DOWNLOADS_OPEN.store(open, Ordering::Relaxed);
+/// Which of [`DOWNLOAD_CMDS`] the document being shown has on. Platform code that cannot reach
+/// the app reads it.
+static DOWNLOADS_ALLOWED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn set_downloads_allowed(allowed: Vec<&'static str>) {
+    if let Ok(mut now) = DOWNLOADS_ALLOWED.lock() {
+        *now = allowed;
+    }
 }
 
+/// Whether a file for one of the commands `cmds` may leave: any of them is on.
 // Read by the web build's download only.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn downloads_open() -> bool {
-    DOWNLOADS_OPEN.load(Ordering::Relaxed)
+pub(crate) fn downloads_allow(cmds: &[&str]) -> bool {
+    DOWNLOADS_ALLOWED.lock().is_ok_and(|now| any_listed(&now, cmds))
+}
+
+fn any_listed(on: &[&str], cmds: &[&str]) -> bool {
+    cmds.iter().any(|c| on.contains(c))
 }
 
 /// Whether work of `class` may be done on a document with `own`: a builder's always, a viewer's
@@ -487,9 +529,34 @@ impl PdfCraftApp {
     /// looking around, and hides the tools that edit the document itself. A policy that opens
     /// pages, content or measuring to the viewer brings the tool panels back.
     pub(crate) fn host_viewer(&self) -> bool {
-        self.host_lock
-            && self.host_scope() == EditScope::Viewer
-            && self.active_ids().and_then(|(_, id)| self.session.get(id)).is_none_or(|d| d.ownership().allow.is_empty())
+        self.host_lock && self.host_scope() == EditScope::Viewer && !self.host_tools_open()
+    }
+
+    /// Whether any command a viewer starts without (those of [`BUILDER`] and [`BUILDER_ONLY`]) is
+    /// on: only then do the Tools panel and the workspace tabs come back. Always true without the lock.
+    pub(crate) fn host_tools_open(&self) -> bool {
+        !self.host_lock || BUILDER.iter().chain(BUILDER_ONLY).any(|id| self.host_allows(id))
+    }
+
+    /// Whether a tool group has a command that may run, so it is worth a row in the Tools panel.
+    pub(crate) fn host_group_shown(&self, group: &pdfcraft_engine::catalog::ToolGroup) -> bool {
+        group.sections.iter().flat_map(|s| s.items).any(|i| self.host_allows(i.command))
+    }
+
+    /// Whether the workspace tab of `mode` is offered: the tabs that open the Tools panel need
+    /// some tool on, Edit, Convert and E-Sign need a command of their own tool group.
+    pub(crate) fn host_mode_shown(&self, mode: crate::Mode) -> bool {
+        use crate::Mode;
+        let group = |id: &str| pdfcraft_engine::catalog::TOOL_GROUPS.iter().find(|g| g.id == id).is_some_and(|g| self.host_group_shown(g));
+        if !self.host_lock {
+            return true;
+        }
+        match mode {
+            Mode::AllTools | Mode::Read => self.host_tools_open(),
+            Mode::Edit => group("edit"),
+            Mode::Convert => group("export"),
+            Mode::Sign => group("fill_sign"),
+        }
     }
 
     /// Whether the host lock and the host's policy let command `id` run now, and show where it
@@ -556,7 +623,7 @@ mod tests {
     #[test]
     fn every_command_is_classified_exactly_once() {
         let mut seen = std::collections::HashMap::new();
-        for (list, ids) in [("VIEWER", VIEWER), ("BUILDER", BUILDER), ("OFF", OFF), ("LOCKED", LOCKED)] {
+        for (list, ids) in [("VIEWER", VIEWER), ("BUILDER", BUILDER), ("BUILDER_ONLY", BUILDER_ONLY), ("OFF", OFF), ("LOCKED", LOCKED)] {
             for id in ids {
                 assert!(COMMANDS.iter().any(|c| c.id == *id), "{id} in {list} is not a command (renamed or removed?)");
                 if let Some(other) = seen.insert(*id, list) {
@@ -565,7 +632,7 @@ mod tests {
             }
         }
         let missing: Vec<&str> = COMMANDS.iter().map(|c| c.id).filter(|id| !seen.contains_key(id)).collect();
-        assert!(missing.is_empty(), "commands with no host classification (add them to VIEWER, BUILDER, OFF or LOCKED in host_lock.rs): {missing:?}");
+        assert!(missing.is_empty(), "commands with no host classification (add them to VIEWER, BUILDER, BUILDER_ONLY, OFF or LOCKED in host_lock.rs): {missing:?}");
     }
 
     /// What the contract names as shut in every host build is not on, in either mode.
@@ -600,6 +667,37 @@ mod tests {
         for id in EXPORT_CMDS.iter().chain(LINK_CMDS) {
             assert_eq!(grade(id, EditScope::Viewer), Grade::Off, "{id}");
             assert!(OFF.contains(id), "{id}");
+        }
+    }
+
+    /// A command a viewer's policy can turn on has to work once on: its edit kind is one the policy
+    /// opens in the engine, or it needs no edit kind (Fill & Sign and marks are annotations, the
+    /// rest only look). Whatever the engine refuses a viewer is `BUILDER_ONLY`, locked for it.
+    #[test]
+    fn a_viewer_off_edit_command_is_one_the_engine_can_open() {
+        // Annotation-based or read-only: runs for a viewer without any edit kind opened.
+        const NEEDS_NO_KIND: &[&str] = &[
+            "comment.attach", "comment.stamp", "comment.summarize", "doc.compare", "file.properties", "edit.column_select", "edit.snapshot",
+            "redact.mark", "redact.pages", "redact.search", "redact.properties", "a11y.check", "a11y.find_untagged", "a11y.report",
+            "a11y.reading_options", "a11y.tags",
+        ];
+        for id in BUILDER {
+            let kind = EDIT_CMDS.iter().any(|(_, ids)| ids.contains(id));
+            let fill = id.starts_with("sign.fill.");
+            assert!(kind || fill || NEEDS_NO_KIND.contains(id), "{id} is viewer-off but no edit kind of EDIT_CMDS opens it: lock it for a viewer in BUILDER_ONLY, or list it as needing none");
+            assert!(!BUILDER_ONLY.contains(id), "{id}");
+        }
+        for id in ["edit.image", "form.add.image"] {
+            assert!(EDIT_CMDS.iter().any(|(c, ids)| *c == EditClass::Content && ids.contains(&id)), "{id}");
+        }
+        // The locked-for-a-viewer ones stay shut whatever the policy says, and are on for a builder.
+        let own = with_policy(
+            Ownership { scope: EditScope::Viewer, ..Default::default() },
+            BUILDER_ONLY.iter().map(|id| (id.to_string(), true)).collect(),
+        );
+        assert!(own.allow.is_empty(), "no edit kind opens for a command the engine refuses");
+        for id in BUILDER_ONLY {
+            assert!(!enabled(id, EditScope::Viewer, &own.overrides) && grade(id, EditScope::All) == Grade::On, "{id}");
         }
     }
 
@@ -657,7 +755,58 @@ mod tests {
         assert!(app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).is_ok());
         app.session.set_open_ownership(viewer(&[("sign.fill.text", true)]));
         app.open_bytes("q.pdf", None, pdf()).unwrap();
-        assert!(app.host_viewer() && app.host_allows("sign.fill.text") && !app.host_allows("page.rotate"));
+        assert!(app.host_allows("sign.fill.text") && !app.host_allows("page.rotate"));
+    }
+
+    /// One tool's file may leave only when a command of its own is on.
+    #[test]
+    fn a_download_needs_one_of_its_own_commands() {
+        let on = ["page.split"];
+        assert!(any_listed(&on, &["page.split"]));
+        assert!(!any_listed(&on, &["file.save_as"]));
+        assert!(!any_listed(&[], &["file.save_as", "print.dialog"]));
+        assert!(DOWNLOAD_CMDS.iter().all(|id| grade(id, EditScope::Viewer) == Grade::Off), "a viewer has none on by default");
+    }
+
+    /// Closing, reverting and the tab's own menu all go through the command's policy.
+    #[test]
+    fn closing_and_reverting_follow_their_commands() {
+        let mut app = locked();
+        app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, Vec::new()));
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        app.open_bytes("b.pdf", None, pdf()).unwrap();
+        let n = app.views.len();
+        app.request_close_tab(0);
+        app.close_all();
+        app.revert_active();
+        app.tab_action(crate::tab_context::Action::Close(app.views[0].id));
+        assert_eq!(app.views.len(), n, "locked: no tab closes");
+    }
+
+    /// Turning on one page tool brings back that tool and no other row of the Tools panel.
+    #[test]
+    fn one_tool_on_shows_only_its_own_group() {
+        let mut app = locked();
+        app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![("page.rotate".into(), true)]));
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        assert!(app.host_mode_shown(crate::Mode::AllTools));
+        let shown = |id: &str| pdfcraft_engine::catalog::TOOL_GROUPS.iter().find(|g| g.id == id).is_some_and(|g| app.host_group_shown(g));
+        assert!(shown("organize"));
+        assert!(!shown("redact") && !shown("protect") && !shown("stamp"));
+        assert!(!app.host_allows("form.add.text") && !app.host_allows("edit.watermark"), "form building and watermarks stay off");
+        assert!(!app.host_mode_shown(crate::Mode::Convert) && !app.host_mode_shown(crate::Mode::Sign));
+    }
+
+    /// A help link opens only for its own command.
+    #[test]
+    fn a_link_opens_for_its_own_command_only() {
+        let mut app = locked();
+        app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![("help.github".into(), true)]));
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        app.open_url("https://example.com/w", &["help.website"]);
+        assert_eq!(app.last_opened_url, None);
+        app.open_url("https://example.com/g", &["help.github"]);
+        assert_eq!(app.last_opened_url.as_deref(), Some("https://example.com/g"));
     }
 
     /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
@@ -719,7 +868,7 @@ mod tests {
         let app = locked();
         let shown: Vec<&str> = COMMANDS.iter().map(|c| c.id).filter(|id| app.host_allows(id)).collect();
         assert!(shown.contains(&"comment.note") && shown.contains(&"help.about"));
-        for id in LOCKED.iter().chain(OFF).chain(BUILDER) {
+        for id in LOCKED.iter().chain(OFF).chain(BUILDER).chain(BUILDER_ONLY) {
             assert!(!shown.contains(id), "{id}");
         }
     }
@@ -744,12 +893,12 @@ mod tests {
     #[test]
     fn a_locked_build_opens_no_web_links() {
         let mut app = locked();
-        app.open_url("https://example.com");
+        app.open_url("https://example.com", LINK_CMDS);
         assert_eq!(app.last_opened_url, None);
         app.request_document_url("https://example.com", LinkOrigin::Link);
         assert!(app.pending_link.is_none(), "a document's link doesn't even ask");
         app.host_lock = false;
-        app.open_url("https://example.com");
+        app.open_url("https://example.com", LINK_CMDS);
         assert_eq!(app.last_opened_url.as_deref(), Some("https://example.com"));
     }
 

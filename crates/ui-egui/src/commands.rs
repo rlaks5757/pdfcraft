@@ -215,7 +215,7 @@ impl PdfCraftApp {
             }
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
-                    self.open_url(l.url);
+                    self.open_url(l.url, &[link]);
                 }
             }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),

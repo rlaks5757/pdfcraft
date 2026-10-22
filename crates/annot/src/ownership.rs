@@ -48,6 +48,13 @@ fn owned_by(doc: &Document, d: &Dict, actor: &str) -> bool {
     owner_of(doc, d).is_some_and(|o| o == actor)
 }
 
+/// Is the annotation at `(page, index)` a link or a form widget? Those belong to the document's
+/// own layout, not to any commenter. Positions that don't exist are not.
+pub fn is_layout_annotation(doc: &Document, page: usize, index: usize) -> bool {
+    let Ok(p) = page_ref(doc, page) else { return false };
+    annots(doc, p).get(index).and_then(|e| entry_dict(doc, e)).is_some_and(|d| matches!(d.name(b"Subtype"), Some(b"Link" | b"Widget")))
+}
+
 /// May `actor` change the comment at `(page, index)`? Not when someone else (or nobody) owns it.
 /// Positions that don't exist pass: the edit itself reports them.
 pub fn check_target(doc: &Document, page: usize, index: usize, actor: &str) -> Result<(), AnnotError> {

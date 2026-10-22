@@ -2368,6 +2368,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
     if let Some(i) = pending {
         app.views[i].close_requested = false;
+        if !app.host_allows("file.close") {
+            return;
+        }
         if app.has_unsaved_work(i) {
             app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
         } else {
@@ -2408,11 +2411,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Unlock) => app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None)),
         // Flags the view: the tab closes at the top of the next frame, where no document
         // borrow is held.
-        Some(Notice::Close) => {
+        Some(Notice::Close) if app.host_allows("file.close") => {
             if let Some(view) = app.views.get_mut(index) {
                 view.close_requested = true;
             }
         }
+        Some(Notice::Close) => {}
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         Some(Notice::Console) if app.host_allows("tools.js_console") => app.dialog = Some(crate::Dialog::JsConsole),

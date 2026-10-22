@@ -6483,6 +6483,20 @@ mod ownership {
         s.set_ownership(Ownership { scope: EditScope::Viewer, ..Default::default() });
     }
 
+    /// A viewer takes part in comments, not in the document's own links; a builder still can.
+    #[test]
+    fn a_viewer_cannot_delete_or_change_a_link_annotation() {
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddLink { page: 0, rect: [10.0, 10.0, 80.0, 30.0], action: LinkAction::Uri("https://example.org".into()), style: LinkStyle::default() }).unwrap();
+        viewer(&mut s);
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, VIEWER_ONLY);
+        refused(&mut s, id, Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }, VIEWER_ONLY);
+        s.set_ownership(Ownership { scope: EditScope::Viewer, actor: Some("u-a".into()), ..Default::default() });
+        refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, VIEWER_ONLY);
+        s.set_ownership(Ownership { scope: EditScope::All, ..Default::default() });
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+    }
+
     /// A viewer comments but changes neither pages nor content, alone or inside a `Batch`; the
     /// default scope (and `builder`) still does everything.
     #[test]

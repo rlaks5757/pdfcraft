@@ -436,7 +436,7 @@ impl PdfCraftApp {
         let html = pdfcraft_engine::a11y::report_html(report, &doc.name, &format!("{y}-{m:02}-{d:02}"), lang.code(), &crate::i18n::words);
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let title = tl!("Save the accessibility report").to_string();
-        self.write_files(&[(format!("{stem} Accessibility Report.html"), std::sync::Arc::new(html.into_bytes()))], &title);
+        self.write_files(&[(format!("{stem} Accessibility Report.html"), std::sync::Arc::new(html.into_bytes()))], &title, &["export.html"]);
     }
 
     /// Turn to a finding's page and, when the checker located it, flash its box there.

@@ -64,7 +64,8 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
-        for g in &TOOL_GROUPS[..shown] {
+        let rows: Vec<_> = TOOL_GROUPS[..shown].iter().filter(|g| app.host_group_shown(g)).collect();
+        for g in rows {
             if tool_row(ui, t, g).clicked() {
                 app.select_tool(g.id);
             }
@@ -206,8 +207,15 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         for s in g.sections {
+            if !s.items.iter().any(|i| app.host_allows(i.command)) {
+                continue;
+            }
             widgets::section_title(ui, tl!(s.title));
             for item in s.items {
+                // A command the host build turns off has no row.
+                if !app.host_allows(item.command) {
+                    continue;
+                }
                 if g.id == "fill_sign" && (item.command.starts_with("sign.fill.signature") || item.command.starts_with("sign.fill.initials")) {
                     continue;
                 }
@@ -254,6 +262,9 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                         ui.set_min_width(180.0);
                         for (n, id) in item.actions.iter().enumerate() {
                             let Some(spec) = pdfcraft_engine::commands::command(id) else { continue };
+                            if !app.host_allows(id) {
+                                continue;
+                            }
                             // Add stays usable with no document open: it asks for a file first.
                             let enabled = (n == 0 && app.active.is_none()) || app.command_enabled(spec);
                             let label = crate::i18n::menu_label(spec.id, spec.label);
@@ -287,10 +298,10 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
+                if app.host_allows("redact.apply") && ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
                     run = Some("redact.apply");
                 }
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
+                if app.host_allows("redact.clear") && ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
                     run = Some("redact.clear");
                 }
             });

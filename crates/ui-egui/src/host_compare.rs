@@ -80,7 +80,8 @@ impl PdfCraftApp {
         // A request supersedes whatever the host armed or queued.
         self.disarm_stamp();
         // The rules come from this request alone, never from an open that came before it.
-        self.session.set_open_ownership(ownership);
+        // Both files are only looked at: read-only, so nothing here is ever saved back to the parent.
+        self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, ..ownership });
         let before = self.views.len();
         let opened = [(old, false), (new, true)].into_iter().try_for_each(|((name, bytes), activate)| {
             let name = if name.trim().is_empty() { "document.pdf".to_string() } else { name };
@@ -228,6 +229,7 @@ mod tests {
             assert_eq!(own.scope, EditScope::Viewer);
             assert_eq!(own.overrides, vec![("page.rotate".to_string(), true)]);
             assert!(own.allow.has(pdfcraft_engine::EditClass::Page));
+            assert!(own.read_only, "a compared file is only looked at, never saved back");
         }
     }
 
