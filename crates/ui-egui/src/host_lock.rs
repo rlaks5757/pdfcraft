@@ -365,18 +365,15 @@ pub(crate) fn edit_commands(edit: &pdfcraft_engine::Edit) -> Option<&'static [&'
         E::SetPageBox { .. } => &["page.crop", "page.boxes"],
         E::InsertPagesFrom { .. } => &["page.insert", "page.paste", "page.combine"],
         E::NumberPages { .. } => &["page.number"],
-        E::EditTextLine { .. }
-        | E::EditTextBlock { .. }
-        | E::RegisterTextFont { .. }
-        | E::AddText { .. }
-        | E::UpdateContent { .. }
-        | E::DeleteContent { .. }
-        | E::MoveObjects { .. }
-        | E::EditPageImage { .. } => &["edit.text", "edit.edit_text", "edit.image"],
+        // Text, pictures and links each have their own commands: turning one on opens its own edits only.
+        E::EditTextLine { .. } | E::EditTextBlock { .. } | E::AddText { .. } | E::RegisterTextFont { .. } => &["edit.text", "edit.edit_text"],
+        E::EditPageImage { .. } => &["edit.image"],
         E::AddImage { .. } | E::ReplaceImage { .. } => &["edit.image", "form.add.image"],
-        E::AddLink { .. } | E::SetLink { .. } | E::DeleteLink { .. } | E::RemoveLinks { .. } | E::AddLinks { .. } => {
-            &["edit.link", "edit.links_from_urls", "edit.remove_links"]
-        }
+        E::AddLink { .. } | E::SetLink { .. } | E::AddLinks { .. } => &["edit.link", "edit.links_from_urls"],
+        E::DeleteLink { .. } | E::RemoveLinks { .. } => &["edit.link", "edit.remove_links"],
+        // These name page objects of any kind (text, pictures), and the edit doesn't say which, so
+        // either kind's command opens them.
+        E::MoveObjects { .. } | E::UpdateContent { .. } | E::DeleteContent { .. } => &["edit.text", "edit.edit_text", "edit.image"],
         _ => return None,
     })
 }
@@ -565,7 +562,15 @@ pub(crate) fn open_in_ppm_screen(ui: &mut egui::Ui) {
 
 use crate::PdfCraftApp;
 
+/// What a refused action says. Not a `tl!` literal, so the catalogs need no entry: a language
+/// without one shows this English text.
+pub(crate) const HOST_OFF: &str = "The administrator has turned this off.";
+
 impl PdfCraftApp {
+    pub(crate) fn notify_host_off(&mut self) {
+        self.notify_fmt(HOST_OFF, &[]);
+    }
+
     /// This build is made for an embedding page (see [`HOST_LOCK`]).
     pub fn host_locked(&self) -> bool {
         self.host_lock
@@ -576,16 +581,32 @@ impl PdfCraftApp {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(EditScope::Viewer, |d| d.ownership().scope)
     }
 
+    /// Whether every open document's policy has `id` on (the active document's, with none open).
+    /// For what can't tell which document asked: a download, a link from a script.
+    pub(crate) fn host_allows_in_all_documents(&self, id: &str) -> bool {
+        if !self.host_lock {
+            return true;
+        }
+        let mut docs = self.views.iter().filter_map(|v| self.session.get(v.id)).map(|d| d.ownership()).peekable();
+        if docs.peek().is_none() {
+            return enabled(id, EditScope::Viewer, &[]);
+        }
+        docs.all(|o| enabled(id, o.scope, &o.overrides))
+    }
+
     /// The downloads every open document's policy allows. A file may be asked for by a task that
     /// finishes after the user went to another tab, and a download can't tell which document it
     /// came from, so one document's policy never opens what another's keeps shut.
     pub(crate) fn host_downloads_allowed(&self) -> Vec<&'static str> {
-        let docs: Vec<_> = self.views.iter().filter_map(|v| self.session.get(v.id)).map(|d| d.ownership()).collect();
-        DOWNLOAD_CMDS
-            .iter()
-            .copied()
-            .filter(|id| if docs.is_empty() { enabled(id, EditScope::Viewer, &[]) } else { docs.iter().all(|o| enabled(id, o.scope, &o.overrides)) })
-            .collect()
+        DOWNLOAD_CMDS.iter().copied().filter(|id| self.host_allows_in_all_documents(id)).collect()
+    }
+
+    /// Whether the commands behind `edit` (and each edit inside a `Batch`) are on.
+    pub(crate) fn host_edit_allowed(&self, edit: &pdfcraft_engine::Edit) -> bool {
+        match edit {
+            pdfcraft_engine::Edit::Batch { edits, .. } => edits.iter().all(|e| self.host_edit_allowed(e)),
+            e => crate::host_lock::edit_commands(e).is_none_or(|cmds| self.host_any(cmds)),
+        }
     }
 
     /// The active document's scope and policy; a viewer's with no policy when there is none.
@@ -924,10 +945,17 @@ mod tests {
         app.open_bytes("a.pdf", None, pdf()).unwrap();
         app.request_document_url("https://example.com", crate::LinkOrigin::Link);
         assert!(app.pending_link.is_none(), "Help links on, document links still off");
+        let mut app = locked();
         app.session.set_open_ownership(own(&[(DOCUMENT_LINKS, true)]));
         app.open_bytes("b.pdf", None, pdf()).unwrap();
         app.request_document_url("https://example.com", crate::LinkOrigin::Link);
         assert!(app.pending_link.is_some());
+        // A second document that keeps them off closes them for a request that can't say whose it is.
+        app.session.set_open_ownership(own(&[]));
+        app.open_bytes("c.pdf", None, pdf()).unwrap();
+        app.pending_link = None;
+        app.request_document_url("https://example.com", crate::LinkOrigin::Script);
+        assert!(app.pending_link.is_none());
         let json = commands_manifest();
         assert!(json.contains("\"link.document\"") && json.contains("문서 안 링크 열기"));
     }
@@ -961,6 +989,34 @@ mod tests {
                 assert!(known.contains(id) && all.contains(id), "{id}");
             }
         }
+    }
+
+    /// Text, picture and link edits each need a command of their own kind.
+    #[test]
+    fn text_picture_and_link_edits_are_told_apart() {
+        use pdfcraft_engine::{Edit, ImageEdit, LinkAction, LinkStyle};
+        let text = Edit::EditTextLine { page: 0, line: 0, text: "x".into() };
+        let picture = Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) };
+        let add_link = Edit::AddLink { page: 0, rect: [0.0; 4], action: LinkAction::Page(0), style: LinkStyle::default() };
+        let remove = Edit::RemoveLinks { pages: None };
+        let with = |id: &str| {
+            let mut app = locked();
+            app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![(id.into(), true)]));
+            app.open_bytes("a.pdf", None, pdf()).unwrap();
+            app
+        };
+        let app = with("edit.text");
+        assert!(app.host_edit_allowed(&text) && !app.host_edit_allowed(&picture) && !app.host_edit_allowed(&add_link) && !app.host_edit_allowed(&remove));
+        let app = with("edit.image");
+        assert!(app.host_edit_allowed(&picture) && !app.host_edit_allowed(&text) && !app.host_edit_allowed(&add_link));
+        let app = with("edit.remove_links");
+        assert!(app.host_edit_allowed(&remove) && !app.host_edit_allowed(&add_link) && !app.host_edit_allowed(&text));
+        let app = with("edit.links_from_urls");
+        assert!(app.host_edit_allowed(&add_link) && !app.host_edit_allowed(&remove));
+        // A batch is only as allowed as each edit in it.
+        let app = with("edit.text");
+        assert!(!app.host_edit_allowed(&Edit::Batch { label: "b".into(), edits: vec![text.clone(), picture] }));
+        assert!(app.host_edit_allowed(&Edit::Batch { label: "b".into(), edits: vec![text] }));
     }
 
     /// An attachment opened from a locked document is read-only, so saving it can't reach the host.

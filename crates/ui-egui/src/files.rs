@@ -692,7 +692,7 @@ impl PdfCraftApp {
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
     pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, cmds: &[&str], after: impl FnOnce(&mut Self) + Send + 'static) {
         if !self.host_any(cmds) {
-            self.notify("The administrator has turned this off.");
+            self.notify_host_off();
             return;
         }
         if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {

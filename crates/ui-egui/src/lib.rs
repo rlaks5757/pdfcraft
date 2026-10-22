@@ -2048,7 +2048,8 @@ impl PdfCraftApp {
     /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
     /// queue up a stream of dialogs.
     pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
-        if !self.host_allows(host_lock::DOCUMENT_LINKS) {
+        // A script's request can't say which document it came from: every open one must allow it.
+        if !self.host_allows_in_all_documents(host_lock::DOCUMENT_LINKS) {
             return;
         }
         match pdfcraft_engine::links::document_url(url) {
