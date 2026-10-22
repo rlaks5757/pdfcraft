@@ -31,6 +31,14 @@ pub fn open_scope(mode: Option<&str>) -> EditScope {
     if HOST_LOCK { parse_mode(mode) } else { EditScope::All }
 }
 
+/// `policy` of a `pdfcraft:open` or `pdfcraft:compare` message, as JSON: `{ overrides: { id: bool } }`.
+/// Anything in the wrong shape (no policy, a policy or `overrides` that is not an object) is no
+/// overrides, and so is a value that is not a boolean; the rest of the map still counts.
+pub fn policy_overrides(policy: &serde_json::Value) -> Vec<(String, bool)> {
+    let Some(overrides) = policy.get("overrides").and_then(|o| o.as_object()) else { return Vec::new() };
+    overrides.iter().filter_map(|(id, on)| Some((id.clone(), on.as_bool()?))).collect()
+}
+
 /// Commands a viewer may run (and a builder too): comments, filling in, looking around.
 pub(crate) const VIEWER: &[&str] = &[
     // Settings that only change how the app looks and behaves; the ones that would bring back
@@ -612,6 +620,23 @@ mod tests {
         // A builder has no edit kinds to open.
         let b = with_policy(Ownership::default(), vec![("page.rotate".into(), false)]);
         assert!(b.allow.is_empty() && !enabled("page.rotate", EditScope::All, &b.overrides));
+    }
+
+    /// The shape checks of `policy`: wrong shapes change nothing, and one bad value spares the rest.
+    #[test]
+    fn a_policy_of_the_wrong_shape_or_type_is_ignored() {
+        use serde_json::json;
+        let get = |v: serde_json::Value| {
+            let mut o = policy_overrides(&v);
+            o.sort();
+            o
+        };
+        let on = |id: &str, v: bool| (id.to_string(), v);
+        assert_eq!(get(json!({ "overrides": { "print.dialog": true, "page.rotate": false } })), vec![on("page.rotate", false), on("print.dialog", true)]);
+        assert_eq!(get(json!({ "overrides": { "print.dialog": "true", "a": 1, "b": null, "c": [true], "page.rotate": true } })), vec![on("page.rotate", true)]);
+        for bad in [json!(null), json!("x"), json!(3), json!([]), json!({}), json!({ "overrides": null }), json!({ "overrides": [true] }), json!({ "overrides": "print.dialog" }), json!({ "override": { "print.dialog": true } })] {
+            assert!(get(bad.clone()).is_empty(), "{bad}");
+        }
     }
 
     /// A viewer gets what its policy names, and nothing else.

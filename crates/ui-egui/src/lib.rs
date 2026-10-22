@@ -65,7 +65,7 @@ mod host_compare;
 mod host_lock;
 mod host_stamp;
 pub use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
-pub use host_lock::{HOST_LOCK, commands_manifest, open_scope, parse_mode, with_policy};
+pub use host_lock::{HOST_LOCK, commands_manifest, open_scope, parse_mode, policy_overrides, with_policy};
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;

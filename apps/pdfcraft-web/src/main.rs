@@ -130,7 +130,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
-/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly?, mode? }`, where `bytes` is an
+/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly?, mode?, policy? }`, where `bytes` is an
 ///   `ArrayBuffer` or `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 ///   `actor` (a string of 1 to 200 characters, the user's id) makes every comment the app creates
 ///   the user's, and lets only that user change or delete comments; comments without an owner are
@@ -147,7 +147,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
-/// - `pdfcraft:compare` (from the parent): `{ id, old: { name, bytes }, new: { name, bytes } }`
+/// - `pdfcraft:compare` (from the parent): `{ id, old: { name, bytes }, new: { name, bytes }, mode?, policy? }`
 ///   opens the old file in a background tab and the new file as the active one, then runs the
 ///   Compare Files comparison. A window compares once; `pdfcraft:compare-done`
 ///   `{ id, replaced, inserted, deleted, visual }` or `pdfcraft:compare-failed` `{ id, error }`
@@ -403,7 +403,10 @@ mod host {
     /// Read a `pdfcraft:compare` message; the error is what the parent is told.
     fn compare_request(data: &JsValue) -> Result<pdfcraft_ui_egui::CompareCommand, String> {
         let id = string(data, "id").ok_or_else(|| "id must be a string".to_string())?;
-        Ok(pdfcraft_ui_egui::CompareCommand { id, old: compare_file(data, "old")?, new: compare_file(data, "new")? })
+        // The same rules as an open: `mode` and `policy`, and the narrowest without them.
+        let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
+        let ownership = pdfcraft_ui_egui::with_policy(pdfcraft_ui_egui::Ownership { scope, ..Default::default() }, policy_overrides(data));
+        Ok(pdfcraft_ui_egui::CompareCommand { id, old: compare_file(data, "old")?, new: compare_file(data, "new")?, ownership })
     }
 
     /// Read a `pdfcraft:stamp-add` message; the error is what the parent is told.
@@ -456,25 +459,13 @@ mod host {
         Ok(pdfcraft_ui_egui::with_policy(own, policy_overrides(data)))
     }
 
-    /// `policy.overrides` of a `pdfcraft:open` message: command id to true or false. No policy, or
-    /// one in the wrong shape, changes nothing; so does a value that is not a boolean.
+    /// `policy.overrides` of a `pdfcraft:open` or `pdfcraft:compare` message: command id to true
+    /// or false. The reading is `pdfcraft_ui_egui::policy_overrides`, on the policy as JSON.
     fn policy_overrides(data: &JsValue) -> Vec<(String, bool)> {
-        let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
-        let policy = get(data, "policy");
-        if !policy.is_object() {
-            return Vec::new();
-        }
-        let overrides = get(&policy, "overrides");
-        if !overrides.is_object() || js_sys::Array::is_array(&overrides) {
-            return Vec::new();
-        }
-        js_sys::Object::entries(overrides.unchecked_ref::<js_sys::Object>())
-            .iter()
-            .filter_map(|entry| {
-                let pair = js_sys::Array::from(&entry);
-                Some((pair.get(0).as_string()?, pair.get(1).as_bool()?))
-            })
-            .collect()
+        let policy = js_sys::Reflect::get(data, &JsValue::from_str("policy")).unwrap_or(JsValue::UNDEFINED);
+        let json = js_sys::JSON::stringify(&policy).ok().and_then(|s| s.as_string());
+        let value = json.and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+        value.map(|v| pdfcraft_ui_egui::policy_overrides(&v)).unwrap_or_default()
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {

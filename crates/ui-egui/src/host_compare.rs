@@ -16,12 +16,14 @@ const MAX_ERROR_CHARS: usize = 200;
 /// The most bytes either file may have; the bridge checks it before copying into memory.
 pub const MAX_COMPARE_BYTES: usize = 200 << 20;
 
-/// What the host asks for: `(name, bytes)` of each file.
+/// What the host asks for: `(name, bytes)` of each file, and the rules both open under (its
+/// `mode` and `policy`, read like an open's; the narrowest when it names none).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompareCommand {
     pub id: String,
     pub old: (String, Vec<u8>),
     pub new: (String, Vec<u8>),
+    pub ownership: pdfcraft_engine::Ownership,
 }
 
 /// What the host is told.
@@ -62,7 +64,7 @@ impl PdfCraftApp {
                 self.fail_compare(&command.id, "busy: this window already compares");
             } else {
                 self.compare_taken = true;
-                match self.start_host_compare(command.old, command.new) {
+                match self.start_host_compare(command.old, command.new, command.ownership) {
                     Ok((replaced, inserted, deleted, visual)) => {
                         self.emit_compare(CompareEvent::Done { id: command.id, replaced, inserted, deleted, visual });
                     }
@@ -74,18 +76,24 @@ impl PdfCraftApp {
 
     /// Open both files (old in the background, new active) and compare them: the counts of
     /// replaced, inserted, deleted and visual differences.
-    fn start_host_compare(&mut self, old: (String, Vec<u8>), new: (String, Vec<u8>)) -> Result<(usize, usize, usize, usize), String> {
+    fn start_host_compare(&mut self, old: (String, Vec<u8>), new: (String, Vec<u8>), ownership: pdfcraft_engine::Ownership) -> Result<(usize, usize, usize, usize), String> {
         // A request supersedes whatever the host armed or queued.
         self.disarm_stamp();
+        // The rules come from this request alone, never from an open that came before it.
+        self.session.set_open_ownership(ownership);
         let before = self.views.len();
-        for ((name, bytes), activate) in [(old, false), (new, true)] {
+        let opened = [(old, false), (new, true)].into_iter().try_for_each(|((name, bytes), activate)| {
             let name = if name.trim().is_empty() { "document.pdf".to_string() } else { name };
             self.open_bytes_with_focus(&name, None, bytes, activate).map_err(|e| format!("couldn't open {name}: {e}"))?;
             // An encrypted file asks for a password the host can't give.
             if self.password_prompt.take().is_some() {
                 return Err(format!("{name} needs a password"));
             }
-        }
+            Ok(())
+        });
+        // Later opens start from the build's own default again.
+        self.session.set_open_ownership(if self.host_lock { crate::host_lock::viewer_ownership() } else { Default::default() });
+        opened?;
         if self.views.len() != before + 2 {
             return Err("couldn't open both files".into());
         }
@@ -119,6 +127,7 @@ mod tests {
             id: id.into(),
             old: ("old.pdf".into(), text_pdf("Delivery within five days. Returns accepted.")),
             new: ("new.pdf".into(), text_pdf("Delivery within three days. Returns accepted for a week.")),
+            ownership: Default::default(),
         }
     }
 
@@ -198,6 +207,43 @@ mod tests {
         send(&mut h, command(""));
         send(&mut h, command("ok"));
         assert!(matches!(events.borrow().as_slice(), [CompareEvent::Failed { .. }, CompareEvent::Done { id, .. }] if id == "ok"));
+    }
+
+    /// Both files open under the request's own rules, whatever an earlier open left behind.
+    #[test]
+    fn both_files_open_under_the_requests_policy_and_not_an_earlier_opens_rules() {
+        use pdfcraft_engine::{EditScope, Ownership};
+        let (mut h, events) = app(true);
+        h.state_mut().host_lock = true;
+        // A builder's open came first in this window.
+        h.state_mut().session.set_open_ownership(Ownership { scope: EditScope::All, ..Default::default() });
+        let mut c = command("c1");
+        c.ownership = crate::with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![("page.rotate".into(), true)]);
+        send(&mut h, c);
+        assert!(matches!(events.borrow().as_slice(), [CompareEvent::Done { .. }]), "{:?}", events.borrow());
+        let state = h.state();
+        let s = state.compare.as_ref().unwrap();
+        for id in [s.old, s.new] {
+            let own = state.session.get(id).unwrap().ownership().clone();
+            assert_eq!(own.scope, EditScope::Viewer);
+            assert_eq!(own.overrides, vec![("page.rotate".to_string(), true)]);
+            assert!(own.allow.has(pdfcraft_engine::EditClass::Page));
+        }
+    }
+
+    #[test]
+    fn a_compare_without_rules_is_a_viewers() {
+        use pdfcraft_engine::EditScope;
+        let (mut h, _) = app(true);
+        h.state_mut().host_lock = true;
+        let mut c = command("c1");
+        c.ownership = crate::with_policy(pdfcraft_engine::Ownership { scope: crate::open_scope(None), ..Default::default() }, Vec::new());
+        send(&mut h, c);
+        let state = h.state();
+        let s = state.compare.as_ref().unwrap();
+        // With the lock built in, no mode is the narrowest; without it, nothing is limited.
+        let want = if crate::HOST_LOCK { EditScope::Viewer } else { EditScope::All };
+        assert_eq!(state.session.get(s.new).unwrap().ownership().scope, want);
     }
 
     #[test]
