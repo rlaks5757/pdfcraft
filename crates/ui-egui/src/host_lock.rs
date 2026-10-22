@@ -371,9 +371,8 @@ pub(crate) fn edit_commands(edit: &pdfcraft_engine::Edit) -> Option<&'static [&'
         E::AddImage { .. } | E::ReplaceImage { .. } => &["edit.image", "form.add.image"],
         E::AddLink { .. } | E::SetLink { .. } | E::AddLinks { .. } => &["edit.link", "edit.links_from_urls"],
         E::DeleteLink { .. } | E::RemoveLinks { .. } => &["edit.link", "edit.remove_links"],
-        // These name page objects of any kind (text, pictures), and the edit doesn't say which, so
-        // either kind's command opens them.
-        E::MoveObjects { .. } | E::UpdateContent { .. } | E::DeleteContent { .. } => &["edit.text", "edit.edit_text", "edit.image"],
+        // MoveObjects, UpdateContent and DeleteContent name an object, so the kind is found from
+        // the document: see `PdfCraftApp::host_edit_allowed`.
         _ => return None,
     })
 }
@@ -601,10 +600,35 @@ impl PdfCraftApp {
         DOWNLOAD_CMDS.iter().copied().filter(|id| self.host_allows_in_all_documents(id)).collect()
     }
 
-    /// Whether the commands behind `edit` (and each edit inside a `Batch`) are on.
+    /// Whether the commands behind `edit` (and each edit inside a `Batch`) are on. An edit that
+    /// names an object (move, change, delete) is judged by the object's kind, text or picture; one
+    /// whose kind can't be found is refused.
     pub(crate) fn host_edit_allowed(&self, edit: &pdfcraft_engine::Edit) -> bool {
+        use pdfcraft_engine::{Edit, ObjectKind};
+        const TEXT: &[&str] = &["edit.text", "edit.edit_text"];
+        const PICTURE: &[&str] = &["edit.image"];
+        let added_kind = |page: usize, index: usize| {
+            let doc = self.active_ids().and_then(|(_, id)| self.session.get(id))?;
+            match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
+                pdfcraft_engine::AddedContent::Text(_) => Some(TEXT),
+                pdfcraft_engine::AddedContent::Image(_) => Some(PICTURE),
+            }
+        };
+        let judged = |cmds: Option<&[&str]>| cmds.is_some_and(|c| self.host_any(c));
         match edit {
-            pdfcraft_engine::Edit::Batch { edits, .. } => edits.iter().all(|e| self.host_edit_allowed(e)),
+            Edit::Batch { edits, .. } => edits.iter().all(|e| self.host_edit_allowed(e)),
+            Edit::MoveObjects { page, objects, .. } => objects.iter().all(|o| {
+                judged(match o.kind {
+                    ObjectKind::Text => Some(TEXT),
+                    ObjectKind::Image => Some(PICTURE),
+                    ObjectKind::Added => added_kind(*page, o.index),
+                })
+            }),
+            Edit::UpdateContent { content, .. } => judged(Some(match content {
+                pdfcraft_engine::AddedContent::Text(_) => TEXT,
+                pdfcraft_engine::AddedContent::Image(_) => PICTURE,
+            })),
+            Edit::DeleteContent { page, index } => judged(added_kind(*page, *index)),
             e => crate::host_lock::edit_commands(e).is_none_or(|cmds| self.host_any(cmds)),
         }
     }
@@ -1017,6 +1041,50 @@ mod tests {
         let app = with("edit.text");
         assert!(!app.host_edit_allowed(&Edit::Batch { label: "b".into(), edits: vec![text.clone(), picture] }));
         assert!(app.host_edit_allowed(&Edit::Batch { label: "b".into(), edits: vec![text] }));
+    }
+
+    /// Moving, changing and deleting an object is judged by what the object is: text or picture.
+    #[test]
+    fn objects_are_judged_by_their_kind() {
+        use pdfcraft_engine::{AddedContent, AddedText, Edit, ObjectKind, ObjectTarget};
+        let mut app = locked();
+        // The file is a builder's until its two added items are in; then its rules are the viewer's.
+        app.session.set_open_ownership(Ownership::default());
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        let text = AddedText { rect: [20.0, 250.0, 180.0, 280.0], text: "note".into(), size: 12.0, ..AddedText::default() };
+        app.session.apply(id, Edit::AddText { page: 0, text: text.clone() }).unwrap();
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 20, 10);
+            enc.set_color(png::ColorType::Rgb);
+            enc.write_header().unwrap().write_image_data(&[0u8; 600]).unwrap();
+        }
+        app.session.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: std::sync::Arc::new(png) }).unwrap();
+        let (text_at, image_at) = (0, 1);
+        let target = |kind, index| ObjectTarget { kind, index };
+        let mv = |objects: Vec<ObjectTarget>| Edit::MoveObjects { page: 0, objects, offset: [1.0, 1.0] };
+        let rules = |own: &str| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![(own.into(), true)]);
+
+        app.session.set_ownership(rules("edit.text"));
+        let all = |app: &PdfCraftApp, edits: &[&Edit]| edits.iter().all(|e| app.host_edit_allowed(e));
+        let none = |app: &PdfCraftApp, edits: &[&Edit]| edits.iter().all(|e| !app.host_edit_allowed(e));
+        let text_move = mv(vec![target(ObjectKind::Text, 0)]);
+        let added_text_move = mv(vec![target(ObjectKind::Added, text_at)]);
+        let picture_move = mv(vec![target(ObjectKind::Image, 0)]);
+        let added_picture_move = mv(vec![target(ObjectKind::Added, image_at)]);
+        let mixed = mv(vec![target(ObjectKind::Text, 0), target(ObjectKind::Image, 0)]);
+        let missing = mv(vec![target(ObjectKind::Added, 9)]);
+        let change_text = Edit::UpdateContent { page: 0, index: text_at, content: AddedContent::Text(text.clone()) };
+        let delete_text = Edit::DeleteContent { page: 0, index: text_at };
+        let delete_picture = Edit::DeleteContent { page: 0, index: image_at };
+        let change_picture = Edit::UpdateContent { page: 0, index: image_at, content: app.session.get(id).unwrap().added()[image_at].content.clone() };
+        assert!(all(&app, &[&text_move, &added_text_move, &change_text, &delete_text]));
+        assert!(none(&app, &[&picture_move, &added_picture_move, &mixed, &missing, &change_picture, &delete_picture]));
+
+        app.session.set_ownership(rules("edit.image"));
+        assert!(all(&app, &[&picture_move, &added_picture_move, &change_picture, &delete_picture]));
+        assert!(none(&app, &[&text_move, &added_text_move, &mixed, &missing, &change_text, &delete_text]));
     }
 
     /// An attachment opened from a locked document is read-only, so saving it can't reach the host.
