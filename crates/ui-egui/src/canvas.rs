@@ -2401,8 +2401,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Reload) => app.watch.reload_request = Some(view.id),
         #[cfg(target_arch = "wasm32")]
         Some(Notice::Reload) => {}
-        Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
-        Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
+        // Buttons in the notices open the same dialogs as the commands, so they follow them.
+        Some(Notice::Repairs) if app.host_allows("file.properties") => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
+        Some(Notice::Security) if app.host_allows("file.properties") => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
+        Some(Notice::Repairs | Notice::Security) => {}
         Some(Notice::Unlock) => app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None)),
         // Flags the view: the tab closes at the top of the next frame, where no document
         // borrow is held.
@@ -2413,7 +2415,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
-        Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        Some(Notice::Console) if app.host_allows("tools.js_console") => app.dialog = Some(crate::Dialog::JsConsole),
+        Some(Notice::Console) => {}
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
@@ -4014,7 +4017,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, w)) = field_props {
         app.open_field_props(&name, w);
     }
-    if let Some(FieldMenu::Duplicate(name)) = field_menu {
+    if let Some(FieldMenu::Duplicate(name)) = field_menu.filter(|_| app.host_allows("form.field.properties")) {
         let pages = app.session.get(app.views[index].id).map_or(1, |d| d.info.pages.len());
         app.duplicate_draft = Some(crate::DuplicateDraft { name, all: true, from: 1, to: pages });
         app.dialog = Some(crate::Dialog::DuplicateField);
@@ -4060,11 +4063,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(why) = refused {
         app.notify_error(why);
     }
-    if open_signature || open_initials {
+    if (open_signature || open_initials) && app.host_allows("sign.fill.signature") {
         app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
         app.dialog = Some(crate::Dialog::Signature);
     }
-    if open_boxes {
+    if open_boxes && app.host_allows("page.boxes") {
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);

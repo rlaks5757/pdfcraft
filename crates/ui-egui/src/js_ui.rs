@@ -479,19 +479,22 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.add_space(8.0);
     date_format(ui, app, t);
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let mut on = app.session.javascript();
-        if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
-            app.session.set_javascript(on);
-        }
-        ui.label(
-            egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
-                .small()
-                .color(t.text_muted),
-        );
-    });
+    // Scripting is locked in a host build; its switch is not offered.
+    if !app.host_locked() {
+        ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
+        egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let mut on = app.session.javascript();
+            if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
+                app.session.set_javascript(on);
+            }
+            ui.label(
+                egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
+                    .small()
+                    .color(t.text_muted),
+            );
+        });
+    }
     ui.add_space(10.0);
     buttons(ui, tl!("OK"), &[]).is_some()
 }

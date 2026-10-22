@@ -1045,11 +1045,11 @@
       "viewer": "off"
     },
     {
-      "builder": "locked",
+      "builder": "on",
       "id": "app.preferences",
       "label": "Preferences…",
       "menu": "Edit",
-      "viewer": "locked"
+      "viewer": "on"
     },
     {
       "builder": "locked",

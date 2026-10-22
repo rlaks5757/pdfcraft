@@ -649,7 +649,10 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            // A viewer's rail lists and shows; attachments and tags are for editing.
+            // Each rail button follows the command that opens its panel; a build that has the
+            // command off shows no button. Attachments have no command: a viewer's rail has none.
+            let (comments, fields, signatures) = (app.host_allows("comment.list"), app.host_allows("form.fields"), app.host_allows("sign.panel"));
+            let (accessibility, tags) = (app.host_allows("a11y.report"), app.host_allows("a11y.tags"));
             let viewer = app.host_viewer();
             let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
                 let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
@@ -662,19 +665,25 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.choose_right_panel(if selected { None } else { Some(panel) });
                 }
             };
-            rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
+            if comments {
+                rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
+            }
             rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
             rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
-            rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
+            if fields {
+                rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
+            }
             rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
             if !viewer {
                 rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
             }
-            rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
-            if has_check && !viewer {
+            if signatures {
+                rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
+            }
+            if has_check && accessibility {
                 rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
             }
-            if !viewer {
+            if tags {
                 rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
             }
 

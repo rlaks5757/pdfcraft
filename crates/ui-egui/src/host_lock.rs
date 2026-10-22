@@ -33,6 +33,9 @@ pub fn open_scope(mode: Option<&str>) -> EditScope {
 
 /// Commands a viewer may run (and a builder too): comments, filling in, looking around.
 pub(crate) const VIEWER: &[&str] = &[
+    // Settings that only change how the app looks and behaves; the ones that would bring back
+    // what is locked are left out of the dialog.
+    "app.preferences",
     "ui.dock.reset",
     "file.save",
     "file.word_count",
@@ -204,7 +207,7 @@ pub(crate) const BUILDER: &[&str] = &[
 
 /// Commands no policy can turn on: they open the user's files, start a new document, close or
 /// revert the one the host gave (the parent's file could be overwritten with an empty or old
-/// one), keep a document in the browser, run scripts, or change the settings that bring those back.
+/// one), keep a document in the browser, or run scripts.
 // Read by the drift test only: a command in no list is locked anyway.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const LOCKED: &[&str] = &[
@@ -221,7 +224,6 @@ pub(crate) const LOCKED: &[&str] = &[
     "create.multiple_separate",
     "create.images",
     "create.clipboard",
-    "app.preferences",
     "tools.js_console",
     "tools.document_js",
 ];
@@ -558,14 +560,17 @@ mod tests {
     /// What the contract names as shut in every host build is not on, in either mode.
     #[test]
     fn what_reaches_the_users_files_or_the_web_is_off_or_locked() {
-        for id in ["file.open", "file.open_recent", "create.blank", "create.file", "file.close", "file.revert", "tools.js_console", "app.preferences"] {
+        for id in ["file.open", "file.open_recent", "create.blank", "create.file", "file.close", "file.revert", "tools.js_console"] {
             assert_eq!(grade(id, EditScope::All), Grade::Locked, "{id}");
         }
         for id in ["file.save_as", "print.dialog", "export.image", "export.docx", "comment.export", "help.discord", "help.github", "help.check_updates"] {
             assert_eq!((grade(id, EditScope::All), grade(id, EditScope::Viewer)), (Grade::Off, Grade::Off), "{id}");
         }
         assert_eq!(grade("help.about", EditScope::Viewer), Grade::On);
-        assert_eq!(grade("file.save", EditScope::Viewer), Grade::On);
+        // Saving to the host page and the look of the app are on for both; only saving elsewhere is off.
+        for scope in [EditScope::Viewer, EditScope::All] {
+            assert_eq!((grade("file.save", scope), grade("app.preferences", scope), grade("file.save_as", scope)), (Grade::On, Grade::On, Grade::Off));
+        }
         assert_eq!((grade("page.rotate", EditScope::Viewer), grade("page.rotate", EditScope::All)), (Grade::Off, Grade::On));
         assert_eq!(grade("not.a.command", EditScope::All), Grade::Locked, "what is unknown is locked");
     }
