@@ -42,6 +42,15 @@ impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // Host lock: a page or content edit works only through a command that is on, wherever on
+        // screen it was started (the page grid's buttons, drags and keys included).
+        if self.host_lock
+            && let Some(cmds) = crate::host_lock::edit_commands(&edit)
+            && !self.host_any(cmds)
+        {
+            self.notify("The administrator has turned this off.");
+            return false;
+        }
         let label = edit.label();
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
@@ -1071,7 +1080,7 @@ pub(crate) fn download(cmds: &[&str], name: &str, bytes: &[u8]) -> Result<(), St
     // Host lock: a save goes to the host as a message, never to the user's disk, unless the
     // host's policy turned on a command this file is for (`cmds`: any of them).
     if crate::HOST_LOCK && !crate::host_lock::downloads_allow(cmds) {
-        return Err("downloads are turned off here".into());
+        return Err("The administrator has turned this off.".into());
     }
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");

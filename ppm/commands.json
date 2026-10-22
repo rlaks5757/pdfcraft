@@ -2158,6 +2158,16 @@
       "location": [
         "Help"
       ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "link.document",
+      "label": "Open document links",
+      "labelKo": "문서 안 링크 열기",
+      "location": []
     }
   ],
   "schema": 1

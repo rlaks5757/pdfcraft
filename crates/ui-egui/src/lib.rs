@@ -1584,8 +1584,18 @@ impl PdfCraftApp {
         match (data, open) {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
+                // Host lock: the attachment opens under its parent's rules, read-only, so a save from
+                // its tab never reaches the host as if it were the host's document.
+                let parent = self.host_lock.then(|| self.session.get(doc).map(|d| d.ownership().clone())).flatten();
+                if let Some(own) = parent {
+                    self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, ..own });
+                }
                 // The tab name later names files written from the tab (Split, Extract pages).
-                if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+                let opened = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes);
+                if self.host_lock {
+                    self.session.set_open_ownership(host_lock::viewer_ownership());
+                }
+                if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
                 }
             }
@@ -2038,7 +2048,7 @@ impl PdfCraftApp {
     /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
     /// queue up a stream of dialogs.
     pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
-        if self.host_lock && !self.host_any(host_lock::LINK_CMDS) {
+        if !self.host_allows(host_lock::DOCUMENT_LINKS) {
             return;
         }
         match pdfcraft_engine::links::document_url(url) {
@@ -2064,7 +2074,7 @@ impl PdfCraftApp {
         if let Some(p) = self.pending_link.take()
             && open
         {
-            self.open_url(&p.url, host_lock::LINK_CMDS);
+            self.open_url(&p.url, &[host_lock::DOCUMENT_LINKS]);
         }
     }
 
@@ -3237,7 +3247,7 @@ impl eframe::App for PdfCraftApp {
             ctx.request_repaint();
             return;
         }
-        host_lock::set_downloads_allowed(if self.host_lock { host_lock::DOWNLOAD_CMDS.iter().copied().filter(|id| self.host_allows(id)).collect() } else { Vec::new() });
+        host_lock::set_downloads_allowed(if self.host_lock { self.host_downloads_allowed() } else { Vec::new() });
         // A viewer works in the one workspace that has the comment tools on the page.
         if self.host_lock && self.mode != Mode::AllTools && !self.host_mode_shown(self.mode) {
             self.select_mode(Mode::AllTools);

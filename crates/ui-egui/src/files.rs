@@ -692,6 +692,7 @@ impl PdfCraftApp {
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
     pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, cmds: &[&str], after: impl FnOnce(&mut Self) + Send + 'static) {
         if !self.host_any(cmds) {
+            self.notify("The administrator has turned this off.");
             return;
         }
         if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {
@@ -958,7 +959,9 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = crate::editing::download(&["comment.export", "form.export_data"], "report.csv", csv.as_bytes());
+        if let Err(e) = crate::editing::download(&["comment.export", "form.export_data"], "report.csv", csv.as_bytes()) {
+            self.notify(e);
+        }
     }
 
     pub fn export_data_dialog(&mut self, comments: bool, fields: bool) {
@@ -1017,7 +1020,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         match self.session.export_data(id, pdfcraft_engine::DataFormat::Xfdf, comments, fields) {
             Ok(bytes) => {
-                let _ = crate::editing::download(&["comment.export", "form.export_data"], &format!("{stem}.xfdf"), &bytes);
+                if let Err(e) = crate::editing::download(&["comment.export", "form.export_data"], &format!("{stem}.xfdf"), &bytes) {
+                    self.notify(e);
+                }
             }
             Err(e) => self.notify_error(e),
         }

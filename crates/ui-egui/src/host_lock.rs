@@ -296,7 +296,8 @@ pub(crate) const EXPORT_CMDS: &[&str] = &[
     "page.split",
 ];
 
-/// The commands that open a web page; turning one on lets links open.
+/// The Help menu's commands that open a web page (a document's links are [`DOCUMENT_LINKS`]).
+#[cfg(test)]
 pub(crate) const LINK_CMDS: &[&str] = &[
     "help.discord",
     "help.app_page",
@@ -347,6 +348,55 @@ pub(crate) const EDIT_CMDS: &[(EditClass, &[&str])] = &[
 ]),
 ];
 
+/// The commands an interface edit comes from. A locked build applies a page or content edit only
+/// when one of them is on, so a screen that offers more than its command (the page grid's delete,
+/// move and duplicate, a drag, a key) cannot do what the administrator turned off. `None`: the
+/// edit isn't one of these kinds, or has no single owner, and the engine's own limit decides.
+pub(crate) fn edit_commands(edit: &pdfcraft_engine::Edit) -> Option<&'static [&'static str]> {
+    use pdfcraft_engine::Edit as E;
+    Some(match edit {
+        E::RotatePages { .. } => &["page.rotate", "page.rotate_ccw", "page.rotate_dialog"],
+        E::DeletePages { .. } => &["page.delete", "page.cut"],
+        E::MovePages { .. } => &["page.organize"],
+        E::ReversePages { .. } => &["page.reverse"],
+        E::InsertBlankPage { .. } => &["page.insert_blank"],
+        E::DuplicatePages { .. } => &["page.duplicate", "page.paste"],
+        E::ReplacePages { .. } => &["page.replace"],
+        E::SetPageBox { .. } => &["page.crop", "page.boxes"],
+        E::InsertPagesFrom { .. } => &["page.insert", "page.paste", "page.combine"],
+        E::NumberPages { .. } => &["page.number"],
+        E::EditTextLine { .. }
+        | E::EditTextBlock { .. }
+        | E::RegisterTextFont { .. }
+        | E::AddText { .. }
+        | E::UpdateContent { .. }
+        | E::DeleteContent { .. }
+        | E::MoveObjects { .. }
+        | E::EditPageImage { .. } => &["edit.text", "edit.edit_text", "edit.image"],
+        E::AddImage { .. } | E::ReplaceImage { .. } => &["edit.image", "form.add.image"],
+        E::AddLink { .. } | E::SetLink { .. } | E::DeleteLink { .. } | E::RemoveLinks { .. } | E::AddLinks { .. } => {
+            &["edit.link", "edit.links_from_urls", "edit.remove_links"]
+        }
+        _ => return None,
+    })
+}
+
+/// A setting the administrator can turn on that is no menu command: it has an id, a label and a
+/// default, and the interface asks [`PdfCraftApp::host_allows`] about it where the thing happens.
+pub(crate) struct PolicyOnly {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub label_ko: &'static str,
+}
+
+/// Off for viewers and builders alike until the policy turns them on.
+pub(crate) const POLICY_ONLY: &[PolicyOnly] =
+    &[PolicyOnly { id: DOCUMENT_LINKS, label: "Open document links", label_ko: "문서 안 링크 열기" }];
+
+/// Links inside a document (a link annotation, a button's address, a script's `app.launchURL`).
+/// Not tied to the Help menu's links.
+pub(crate) const DOCUMENT_LINKS: &str = "link.document";
+
 /// How a command stands by default in a host build.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Grade {
@@ -376,7 +426,7 @@ pub(crate) fn grade(id: &str, scope: EditScope) -> Grade {
         if scope == EditScope::All { Grade::On } else { Grade::Off }
     } else if BUILDER_ONLY.contains(&id) {
         if scope == EditScope::All { Grade::On } else { Grade::Locked }
-    } else if OFF.contains(&id) {
+    } else if OFF.contains(&id) || POLICY_ONLY.iter().any(|p| p.id == id) {
         Grade::Off
     } else {
         Grade::Locked
@@ -447,7 +497,7 @@ pub(crate) fn scope_allows(own: &Ownership, class: EditClass) -> bool {
 pub fn with_policy(mut own: Ownership, overrides: Vec<(String, bool)>) -> Ownership {
     let mut known: Vec<(String, bool)> = Vec::new();
     for (id, on) in overrides {
-        if COMMANDS.iter().any(|c| c.id == id) {
+        if COMMANDS.iter().any(|c| c.id == id) || POLICY_ONLY.iter().any(|p| p.id == id) {
             known.retain(|(k, _)| *k != id);
             known.push((id, on));
         }
@@ -484,6 +534,15 @@ pub fn commands_manifest() -> String {
                 },
             })
         })
+        .chain(POLICY_ONLY.iter().map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "label": p.label,
+                "labelKo": p.label_ko,
+                "location": Vec::<&str>::new(),
+                "grades": { "viewer": grade(p.id, EditScope::Viewer).name(), "builder": grade(p.id, EditScope::All).name() },
+            })
+        }))
         .collect();
     let mut out = serde_json::to_string_pretty(&serde_json::json!({ "app": "pdf", "schema": 1, "commands": commands })).unwrap_or_default();
     out.push('\n');
@@ -515,6 +574,18 @@ impl PdfCraftApp {
     /// The scope of the active document; a viewer's when there is none.
     fn host_scope(&self) -> EditScope {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(EditScope::Viewer, |d| d.ownership().scope)
+    }
+
+    /// The downloads every open document's policy allows. A file may be asked for by a task that
+    /// finishes after the user went to another tab, and a download can't tell which document it
+    /// came from, so one document's policy never opens what another's keeps shut.
+    pub(crate) fn host_downloads_allowed(&self) -> Vec<&'static str> {
+        let docs: Vec<_> = self.views.iter().filter_map(|v| self.session.get(v.id)).map(|d| d.ownership()).collect();
+        DOWNLOAD_CMDS
+            .iter()
+            .copied()
+            .filter(|id| if docs.is_empty() { enabled(id, EditScope::Viewer, &[]) } else { docs.iter().all(|o| enabled(id, o.scope, &o.overrides)) })
+            .collect()
     }
 
     /// The active document's scope and policy; a viewer's with no policy when there is none.
@@ -592,11 +663,26 @@ mod tests {
 
     /// One blank page.
     fn pdf() -> Vec<u8> {
-        let objs = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
-            "<< /Type /Page /Parent 2 0 R >>",
-        ];
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+        ])
+    }
+
+    /// A one-page file with another PDF attached.
+    fn pdf_with_attachment() -> Vec<u8> {
+        let inner = String::from_utf8(pdf()).unwrap();
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(in.pdf) 4 0 R] >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Type /Filespec /F (in.pdf) /UF (in.pdf) /EF << /F 5 0 R /UF 5 0 R >> >>".into(),
+            format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Length {} >>\nstream\n{inner}\nendstream", inner.len()),
+        ])
+    }
+
+    fn build(objs: &[String]) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -797,6 +883,55 @@ mod tests {
         assert!(!app.host_mode_shown(crate::Mode::Convert) && !app.host_mode_shown(crate::Mode::Sign));
     }
 
+    /// Every command id a download or file write is told about is a real command and one the
+    /// download gate knows, so a rename can't leave a button blocked for good.
+    #[test]
+    fn download_call_sites_name_known_commands() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut ids = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") || path.ends_with("host_lock.rs") {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                if !(line.contains("download(&[") || line.contains("write_files(") || line.contains("write_files_then(")) || line.contains("fn ") {
+                    continue;
+                }
+                for part in line.split('"').skip(1).step_by(2).filter(|p| p.contains('.') && !p.contains(' ') && !p.contains('/') && !p.contains('{')) {
+                    if part.ends_with(".csv") || part.ends_with(".pdf") || part.ends_with(".xfdf") {
+                        continue;
+                    }
+                    assert!(DOWNLOAD_CMDS.contains(&part) && COMMANDS.iter().any(|c| c.id == part), "{part} in {}", path.display());
+                    ids += 1;
+                }
+            }
+        }
+        assert!(ids > 15, "the scan found the call sites ({ids})");
+        assert!(DOWNLOAD_CMDS.iter().all(|id| COMMANDS.iter().any(|c| c.id == *id)));
+    }
+
+    /// A document's links have an id of their own that no Help link turns on, and it can be turned on.
+    #[test]
+    fn document_links_follow_their_own_setting() {
+        assert!(!COMMANDS.iter().any(|c| c.id == DOCUMENT_LINKS) && !LINK_CMDS.contains(&DOCUMENT_LINKS));
+        for scope in [EditScope::Viewer, EditScope::All] {
+            assert_eq!(grade(DOCUMENT_LINKS, scope), Grade::Off);
+        }
+        let mut app = locked();
+        let own = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        app.session.set_open_ownership(own(&[("help.github", true), ("help.website", true)]));
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        app.request_document_url("https://example.com", crate::LinkOrigin::Link);
+        assert!(app.pending_link.is_none(), "Help links on, document links still off");
+        app.session.set_open_ownership(own(&[(DOCUMENT_LINKS, true)]));
+        app.open_bytes("b.pdf", None, pdf()).unwrap();
+        app.request_document_url("https://example.com", crate::LinkOrigin::Link);
+        assert!(app.pending_link.is_some());
+        let json = commands_manifest();
+        assert!(json.contains("\"link.document\"") && json.contains("문서 안 링크 열기"));
+    }
+
     /// A help link opens only for its own command.
     #[test]
     fn a_link_opens_for_its_own_command_only() {
@@ -807,6 +942,55 @@ mod tests {
         assert_eq!(app.last_opened_url, None);
         app.open_url("https://example.com/g", &["help.github"]);
         assert_eq!(app.last_opened_url.as_deref(), Some("https://example.com/g"));
+    }
+
+    /// Every command an edit is tied to exists, and every page or content command opens its kind.
+    #[test]
+    fn edit_commands_are_real_commands() {
+        let known: std::collections::HashSet<_> = COMMANDS.iter().map(|c| c.id).collect();
+        let all = EDIT_CMDS.iter().flat_map(|(_, ids)| ids.iter().copied()).collect::<std::collections::HashSet<_>>();
+        let sample = [
+            pdfcraft_engine::Edit::RotatePages { pages: vec![], degrees: 90 },
+            pdfcraft_engine::Edit::DeletePages { pages: vec![] },
+            pdfcraft_engine::Edit::MovePages { pages: vec![], to: 0 },
+            pdfcraft_engine::Edit::ReversePages { pages: vec![] },
+            pdfcraft_engine::Edit::DuplicatePages { pages: vec![], at: None },
+        ];
+        for e in sample {
+            for id in edit_commands(&e).expect("mapped") {
+                assert!(known.contains(id) && all.contains(id), "{id}");
+            }
+        }
+    }
+
+    /// An attachment opened from a locked document is read-only, so saving it can't reach the host.
+    #[test]
+    fn an_attachment_opens_read_only_under_the_lock() {
+        let mut app = locked();
+        app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, Vec::new()));
+        app.open_bytes("a.pdf", None, pdf_with_attachment()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        assert_eq!(app.session.get(id).unwrap().info.attachments.len(), 1);
+        let before = app.views.len();
+        app.attachment_action(id, 0, true);
+        assert_eq!(app.views.len(), before + 1, "the attachment opened");
+        let (_, new) = app.active_ids().unwrap();
+        assert!(app.session.get(new).unwrap().ownership().read_only);
+        assert!(!app.session.get(id).unwrap().ownership().read_only);
+    }
+
+    /// Only the page tool the administrator turned on works; the grid's other edits do not.
+    #[test]
+    fn one_page_tool_on_does_not_open_the_others() {
+        let mut app = locked();
+        app.session.set_open_ownership(with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, vec![("page.rotate".into(), true)]));
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        let n = app.session.get(app.active_ids().unwrap().1).unwrap().info.pages.len();
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        assert!(!app.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] }));
+        assert!(!app.apply_edit(pdfcraft_engine::Edit::MovePages { pages: vec![0], to: 1 }));
+        assert!(!app.apply_edit(pdfcraft_engine::Edit::DuplicatePages { pages: vec![0], at: None }));
+        assert_eq!(app.session.get(app.active_ids().unwrap().1).unwrap().info.pages.len(), n);
     }
 
     /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
@@ -821,7 +1005,7 @@ mod tests {
         let file = std::fs::read_to_string(path).expect("ppm/commands.json exists (UPDATE_COMMANDS_JSON=1 writes it)");
         assert!(file == now, "ppm/commands.json is out of date: run with UPDATE_COMMANDS_JSON=1");
         let v: serde_json::Value = serde_json::from_str(&file).unwrap();
-        assert_eq!(v["commands"].as_array().unwrap().len(), COMMANDS.len());
+        assert_eq!(v["commands"].as_array().unwrap().len(), COMMANDS.len() + POLICY_ONLY.len());
     }
 
     /// `pdfcraft:open` `mode`: `builder` is the only way to the wider scope.
