@@ -10,7 +10,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pdfcraft_engine::{EditScope, Ownership, PolicyGroup};
+use pdfcraft_engine::commands::COMMANDS;
+use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
 
 /// Whether this build is made for an embedding page.
 pub const HOST_LOCK: bool = cfg!(feature = "host-lock");
@@ -201,17 +202,16 @@ pub(crate) const BUILDER: &[&str] = &[
     "page.number",
 ];
 
-/// Commands no host build runs: they open the user's files, save or export to them, print,
-/// reach the web, add local files to a document, keep it in the browser, or change the settings
-/// that turn those back on.
-// Read by the drift test only: what is in no allow list is denied anyway.
+/// Commands no policy can turn on: they open the user's files, start a new document, close or
+/// revert the one the host gave (the parent's file could be overwritten with an empty or old
+/// one), keep a document in the browser, run scripts, or change the settings that bring those back.
+// Read by the drift test only: a command in no list is locked anyway.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const DENIED: &[&str] = &[
+pub(crate) const LOCKED: &[&str] = &[
     "file.open",
     "file.open_recent",
     "file.clear_recent",
     "file.pin_folder",
-    "file.save_as",
     "file.close",
     "file.close_all",
     "file.revert",
@@ -221,6 +221,17 @@ pub(crate) const DENIED: &[&str] = &[
     "create.multiple_separate",
     "create.images",
     "create.clipboard",
+    "app.preferences",
+    "tools.js_console",
+    "tools.document_js",
+];
+
+/// Commands that are off in every host build until the host's policy turns them on: they save
+/// or export to the user's disk, print, or reach the web.
+// Read by the drift test only.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const OFF: &[&str] = &[
+    "file.save_as",
     "measure.export",
     "print.dialog",
     "comment.export",
@@ -235,9 +246,6 @@ pub(crate) const DENIED: &[&str] = &[
     "export.html",
     "export.rtf",
     "export.all_images",
-    "app.preferences",
-    "tools.js_console",
-    "tools.document_js",
     "ocr.enhance_camera",
     "ocr.recognize_batch",
     "page.split",
@@ -248,86 +256,121 @@ pub(crate) const DENIED: &[&str] = &[
     "help.check_updates",
 ];
 
-/// The commands each policy group turns on. The first three groups' commands are in [`DENIED`]
-/// and are the only way out of it; the others' are in [`BUILDER`], which a viewer runs when its
-/// policy names the group. A command is in at most one group.
-pub(crate) const GROUPS: &[(PolicyGroup, &[&str])] = &[
-    (PolicyGroup::Print, &["print.dialog"]),
-    (
-        PolicyGroup::Export,
-        &[
-            "file.save_as",
-            "measure.export",
-            "comment.export",
-            "form.export_data",
-            "export.image",
-            "export.text",
-            "export.docx",
-            "export.pptx",
-            "export.html",
-            "export.rtf",
-            "export.all_images",
-            "page.split",
-        ],
-    ),
-    (PolicyGroup::ExternalLinks, &["help.discord", "help.app_page", "help.github", "help.website", "help.check_updates"]),
-    (PolicyGroup::Measure, &["measure.distance", "measure.perimeter", "measure.area", "measure.scale", "measure.info", "measure.snap"]),
-    (
-        PolicyGroup::FillSign,
-        &[
-            "sign.fill.text",
-            "sign.fill.check",
-            "sign.fill.cross",
-            "sign.fill.dot",
-            "sign.fill.line",
-            "sign.fill.date",
-            "sign.fill.signature",
-            "sign.fill.initials",
-            "sign.fill.signature.change",
-            "sign.fill.signature.remove",
-            "sign.fill.initials.remove",
-            "sign.fill.initials.change",
-        ],
-    ),
-    (
-        PolicyGroup::PageEdit,
-        &[
-            "page.copy",
-            "page.cut",
-            "page.paste",
-            "page.organize",
-            "page.rotate",
-            "page.rotate_ccw",
-            "page.delete",
-            "page.insert_blank",
-            "page.rotate_dialog",
-            "page.duplicate",
-            "page.reverse",
-            "page.crop",
-            "page.boxes",
-            "page.extract",
-            "page.number",
-            "page.combine",
-            "page.insert",
-            "page.replace",
-        ],
-    ),
-    (PolicyGroup::ContentEdit, &["edit.text", "edit.edit_text", "edit.link", "edit.links_from_urls", "edit.remove_links"]),
+/// The commands that reach the user's disk (save, export, download, a folder to write to).
+/// Turning any of them on lets the platform functions behind them work.
+pub(crate) const EXPORT_CMDS: &[&str] = &[
+    "file.save_as",
+    "measure.export",
+    "comment.export",
+    "form.export_data",
+    "actions.wizard",
+    "actions.distribution",
+    "actions.optimize_scans",
+    "export.image",
+    "export.text",
+    "export.docx",
+    "export.pptx",
+    "export.html",
+    "export.rtf",
+    "export.all_images",
+    "ocr.enhance_camera",
+    "ocr.recognize_batch",
+    "page.split",
 ];
 
-/// The group that turns `id` on, if there is one.
-pub(crate) fn group_of(id: &str) -> Option<PolicyGroup> {
-    GROUPS.iter().find(|(_, ids)| ids.contains(&id)).map(|(g, _)| *g)
+/// The commands that open a web page; turning one on lets links open.
+pub(crate) const LINK_CMDS: &[&str] = &[
+    "help.discord",
+    "help.app_page",
+    "help.github",
+    "help.website",
+    "help.check_updates",
+];
+
+/// The viewer-off commands each kind of edit comes from. A viewer's policy turning one of them on
+/// opens its kind in the engine (see [`EditClass`]).
+pub(crate) const EDIT_CMDS: &[(EditClass, &[&str])] = &[
+    (EditClass::Page, &[
+    "page.copy",
+    "page.cut",
+    "page.paste",
+    "page.organize",
+    "page.rotate",
+    "page.rotate_ccw",
+    "page.delete",
+    "page.insert_blank",
+    "page.rotate_dialog",
+    "page.duplicate",
+    "page.reverse",
+    "page.crop",
+    "page.boxes",
+    "page.extract",
+    "page.number",
+    "page.combine",
+    "page.insert",
+    "page.replace",
+]),
+    (EditClass::Content, &[
+    "edit.text",
+    "edit.edit_text",
+    "edit.link",
+    "edit.links_from_urls",
+    "edit.remove_links",
+]),
+    (EditClass::Measure, &[
+    "measure.distance",
+    "measure.perimeter",
+    "measure.area",
+    "measure.scale",
+    "measure.info",
+    "measure.snap",
+]),
+];
+
+/// How a command stands by default in a host build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grade {
+    /// No policy turns it on.
+    Locked,
+    /// Off until the policy turns it on.
+    Off,
+    /// On until the policy turns it off.
+    On,
 }
 
-/// Groups that can lift the lock on [`DENIED`] commands; the others only widen a viewer.
-#[cfg_attr(not(test), allow(dead_code))]
-fn opens_denied(group: PolicyGroup) -> bool {
-    matches!(group, PolicyGroup::Print | PolicyGroup::Export | PolicyGroup::ExternalLinks)
+impl Grade {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Grade::Locked => "locked",
+            Grade::Off => "off",
+            Grade::On => "on",
+        }
+    }
 }
 
-/// Whether a downloaded file may leave (the host's policy turned exporting or printing on for
-/// the document being shown). Platform code that cannot reach the app reads it.
+/// The grade of `id` for documents of `scope`. A command in no list is locked.
+pub(crate) fn grade(id: &str, scope: EditScope) -> Grade {
+    if VIEWER.contains(&id) {
+        Grade::On
+    } else if BUILDER.contains(&id) {
+        if scope == EditScope::All { Grade::On } else { Grade::Off }
+    } else if OFF.contains(&id) {
+        Grade::Off
+    } else {
+        Grade::Locked
+    }
+}
+
+/// Whether the host's policy `overrides` leave `id` on, for a document of `scope`.
+pub(crate) fn enabled(id: &str, scope: EditScope, overrides: &[(String, bool)]) -> bool {
+    match grade(id, scope) {
+        Grade::Locked => false,
+        g => overrides.binary_search_by(|(k, _)| k.as_str().cmp(id)).map_or(g == Grade::On, |i| overrides[i].1),
+    }
+}
+
+/// Whether a downloaded file may leave (the host's policy turned an export or print command on
+/// for the document being shown). Platform code that cannot reach the app reads it.
 static DOWNLOADS_OPEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_downloads_open(open: bool) {
@@ -340,40 +383,56 @@ pub(crate) fn downloads_open() -> bool {
     DOWNLOADS_OPEN.load(Ordering::Relaxed)
 }
 
-/// Whether a document with `own` may have work of `group` done on it: a builder's always, a
-/// viewer's when its policy names the group (`None`: never, nothing opens that to a viewer).
-pub(crate) fn scope_allows(own: &Ownership, group: Option<PolicyGroup>) -> bool {
-    own.scope == EditScope::All || group.is_some_and(|g| own.allow.has(g))
+/// Whether work of `class` may be done on a document with `own`: a builder's always, a viewer's
+/// when its policy opened that kind of edit.
+pub(crate) fn scope_allows(own: &Ownership, class: EditClass) -> bool {
+    own.scope == EditScope::All || own.allow.has(class)
 }
 
-/// Who may run a command in a host build.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Allow {
-    /// Viewer and builder.
-    Viewer,
-    /// Builder only.
-    Builder,
-}
-
-/// What a host build lets `id` do; `None` is denied, and so is any command not in the lists.
-pub(crate) fn allowed(id: &str) -> Option<Allow> {
-    if VIEWER.contains(&id) {
-        Some(Allow::Viewer)
-    } else if BUILDER.contains(&id) {
-        Some(Allow::Builder)
-    } else {
-        None
+/// `own` with the host's `policy.overrides` applied: the commands it names (unknown ids and
+/// anything not true or false are dropped by the caller or here), and for a viewer the edit
+/// kinds its turned-on commands open. A missing or malformed policy is no overrides.
+pub fn with_policy(mut own: Ownership, overrides: Vec<(String, bool)>) -> Ownership {
+    let mut known: Vec<(String, bool)> = Vec::new();
+    for (id, on) in overrides {
+        if COMMANDS.iter().any(|c| c.id == id) {
+            known.retain(|(k, _)| *k != id);
+            known.push((id, on));
+        }
     }
+    known.sort();
+    own.allow = EditClasses::default();
+    if own.scope == EditScope::Viewer {
+        for (class, ids) in EDIT_CMDS {
+            if ids.iter().any(|id| grade(id, EditScope::Viewer) == Grade::Off && enabled(id, EditScope::Viewer, &known)) {
+                own.allow = own.allow.with(*class);
+            }
+        }
+    }
+    own.overrides = known;
+    own
 }
 
-/// The groups of `pdfcraft:open` `policy.allow`: `None` when there is no policy or its `allow`
-/// is not a list, and a list with anything but text in it counts as no list. Ids that are not a
-/// group are ignored.
-pub fn policy_groups(allow: Option<&[Option<String>]>) -> pdfcraft_engine::PolicyGroups {
-    match allow {
-        Some(ids) if ids.iter().all(Option::is_some) => pdfcraft_engine::PolicyGroups::from_ids(ids.iter().flatten().map(String::as_str)),
-        _ => Default::default(),
-    }
+/// The list of commands the admin screen shows (`ppm/commands.json`): id, the label the app
+/// shows (English: the app has no Korean catalog), the top-level menu if any, and the grade for
+/// a viewer's and a builder's documents. Built from the engine's command table, and a test holds
+/// the checked-in file to it.
+pub fn commands_manifest() -> String {
+    let commands: Vec<serde_json::Value> = COMMANDS
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "label": c.label,
+                "menu": c.menu,
+                "viewer": grade(c.id, EditScope::Viewer).name(),
+                "builder": grade(c.id, EditScope::All).name(),
+            })
+        })
+        .collect();
+    let mut out = serde_json::to_string_pretty(&serde_json::json!({ "app": "pdfcraft", "commands": commands })).unwrap_or_default();
+    out.push('\n');
+    out
 }
 
 /// The rules of a document the host opened without naming any: a viewer's, the narrowest.
@@ -403,14 +462,12 @@ impl PdfCraftApp {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(EditScope::Viewer, |d| d.ownership().scope)
     }
 
-    /// What the host's policy turned on for the active document; nothing with no document.
-    fn host_groups(&self) -> pdfcraft_engine::PolicyGroups {
-        self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or_else(Default::default, |d| d.ownership().allow)
-    }
-
-    /// Whether the host's policy turned `group` on for the active document.
-    pub(crate) fn host_group(&self, group: PolicyGroup) -> bool {
-        self.host_groups().has(group)
+    /// The active document's scope and policy; a viewer's with no policy when there is none.
+    fn host_rules(&self) -> (EditScope, &[(String, bool)]) {
+        match self.active_ids().and_then(|(_, id)| self.session.get(id)) {
+            Some(d) => (d.ownership().scope, &d.ownership().overrides),
+            None => (EditScope::Viewer, &[]),
+        }
     }
 
     /// A locked build showing a viewer's document (or none): the interface offers comments and
@@ -419,20 +476,23 @@ impl PdfCraftApp {
     pub(crate) fn host_viewer(&self) -> bool {
         self.host_lock
             && self.host_scope() == EditScope::Viewer
-            && ![PolicyGroup::PageEdit, PolicyGroup::ContentEdit, PolicyGroup::Measure].into_iter().any(|g| self.host_group(g))
+            && self.active_ids().and_then(|(_, id)| self.session.get(id)).is_none_or(|d| d.ownership().allow.is_empty())
     }
 
-    /// Whether the host lock lets command `id` run now. Always true without the lock.
+    /// Whether the host lock and the host's policy let command `id` run now, and show where it
+    /// has a button. Always true without the lock.
     pub(crate) fn host_allows(&self, id: &str) -> bool {
         if !self.host_lock {
             return true;
         }
-        let by_policy = || group_of(id).is_some_and(|g| self.host_group(g));
-        match allowed(id) {
-            Some(Allow::Viewer) => true,
-            Some(Allow::Builder) => self.host_scope() == EditScope::All || by_policy(),
-            None => by_policy(),
-        }
+        let (scope, overrides) = self.host_rules();
+        enabled(id, scope, overrides)
+    }
+
+    /// Whether any of `ids` is on: the platform functions behind a whole kind of command (writing
+    /// files, opening links) work when one of its commands is.
+    pub(crate) fn host_any(&self, ids: &[&str]) -> bool {
+        !self.host_lock || ids.iter().any(|id| self.host_allows(id))
     }
 
     /// A locked build with no embedding page connected: it opens nothing and shows only
@@ -483,7 +543,7 @@ mod tests {
     #[test]
     fn every_command_is_classified_exactly_once() {
         let mut seen = std::collections::HashMap::new();
-        for (list, ids) in [("VIEWER", VIEWER), ("BUILDER", BUILDER), ("DENIED", DENIED)] {
+        for (list, ids) in [("VIEWER", VIEWER), ("BUILDER", BUILDER), ("OFF", OFF), ("LOCKED", LOCKED)] {
             for id in ids {
                 assert!(COMMANDS.iter().any(|c| c.id == *id), "{id} in {list} is not a command (renamed or removed?)");
                 if let Some(other) = seen.insert(*id, list) {
@@ -492,79 +552,94 @@ mod tests {
             }
         }
         let missing: Vec<&str> = COMMANDS.iter().map(|c| c.id).filter(|id| !seen.contains_key(id)).collect();
-        assert!(missing.is_empty(), "commands with no host classification (add them to VIEWER, BUILDER or DENIED in host_lock.rs): {missing:?}");
+        assert!(missing.is_empty(), "commands with no host classification (add them to VIEWER, BUILDER, OFF or LOCKED in host_lock.rs): {missing:?}");
     }
 
-    /// What the contract names as shut in every host build is in no allow list.
+    /// What the contract names as shut in every host build is not on, in either mode.
     #[test]
-    fn what_reaches_the_users_files_or_the_web_is_denied() {
-        for id in [
-            "file.open", "file.open_recent", "file.save_as", "create.blank", "create.file", "print.dialog", "export.image", "export.docx",
-            "comment.export", "tools.js_console", "tools.document_js",
-            "app.preferences", "help.discord", "help.github", "help.website", "help.check_updates", "help.app_page",
-        ] {
-            assert_eq!(allowed(id), None, "{id}");
+    fn what_reaches_the_users_files_or_the_web_is_off_or_locked() {
+        for id in ["file.open", "file.open_recent", "create.blank", "create.file", "file.close", "file.revert", "tools.js_console", "app.preferences"] {
+            assert_eq!(grade(id, EditScope::All), Grade::Locked, "{id}");
         }
-        assert_eq!(allowed("help.about"), Some(Allow::Viewer));
-        assert_eq!(allowed("file.save"), Some(Allow::Viewer));
-        assert_eq!(allowed("not.a.command"), None, "what is unknown is denied");
+        for id in ["file.save_as", "print.dialog", "export.image", "export.docx", "comment.export", "help.discord", "help.github", "help.check_updates"] {
+            assert_eq!((grade(id, EditScope::All), grade(id, EditScope::Viewer)), (Grade::Off, Grade::Off), "{id}");
+        }
+        assert_eq!(grade("help.about", EditScope::Viewer), Grade::On);
+        assert_eq!(grade("file.save", EditScope::Viewer), Grade::On);
+        assert_eq!((grade("page.rotate", EditScope::Viewer), grade("page.rotate", EditScope::All)), (Grade::Off, Grade::On));
+        assert_eq!(grade("not.a.command", EditScope::All), Grade::Locked, "what is unknown is locked");
     }
 
-    /// Every command a group turns on is in the list that group widens, in one group only, and
-    /// what no policy may turn on is in none.
+    /// Every command a kind of edit comes from is a viewer-off command; the lists name real ones.
     #[test]
-    fn every_policy_group_names_its_commands_once() {
-        let mut seen = std::collections::HashMap::new();
-        for (group, ids) in GROUPS {
-            assert!(!ids.is_empty(), "{group:?}");
+    fn the_edit_kind_lists_name_viewer_off_commands() {
+        let mut seen = std::collections::HashSet::new();
+        for (class, ids) in EDIT_CMDS {
             for id in *ids {
-                assert!(COMMANDS.iter().any(|c| c.id == *id), "{id} in {group:?} is not a command");
-                if let Some(other) = seen.insert(*id, *group) {
-                    panic!("{id} is in both {other:?} and {group:?}");
-                }
-                let list = if opens_denied(*group) { DENIED } else { BUILDER };
-                assert!(list.contains(id), "{id} ({group:?}) should be in {}", if opens_denied(*group) { "DENIED" } else { "BUILDER" });
+                assert!(seen.insert(*id), "{id} is in two kinds");
+                assert!(COMMANDS.iter().any(|c| c.id == *id), "{id} ({class:?}) is not a command");
+                assert_eq!(grade(id, EditScope::Viewer), Grade::Off, "{id}");
             }
         }
-        for g in PolicyGroup::ALL {
-            assert!(GROUPS.iter().any(|(x, _)| *x == g), "{g:?} turns nothing on");
-        }
-        for id in [
-            "file.open", "file.open_recent", "file.clear_recent", "file.close", "file.revert", "create.blank", "create.file", "create.images",
-            "tools.js_console", "tools.document_js", "app.preferences",
-        ] {
-            assert_eq!(group_of(id), None, "{id} can't be turned on by a policy");
+        for id in EXPORT_CMDS.iter().chain(LINK_CMDS) {
+            assert_eq!(grade(id, EditScope::Viewer), Grade::Off, "{id}");
+            assert!(OFF.contains(id), "{id}");
         }
     }
 
+    /// `policy.overrides`: true turns an off command on, never a locked one; false turns an on one off.
     #[test]
-    fn a_policy_that_is_missing_or_malformed_turns_nothing_on() {
-        let s = |v: &[&str]| v.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>();
-        assert_eq!(policy_groups(None), Default::default());
-        assert_eq!(policy_groups(Some(&[Some("print".into()), None])), Default::default(), "one item that isn't text spoils the list");
-        assert_eq!(policy_groups(Some(&s(&["nope", "insert_local"]))), Default::default(), "unknown ids are ignored");
-        let on = policy_groups(Some(&s(&["print", "page_edit", "nope"])));
-        assert!(on.has(PolicyGroup::Print) && on.has(PolicyGroup::PageEdit) && !on.has(PolicyGroup::Export));
+    fn overrides_turn_commands_on_and_off_but_never_a_locked_one() {
+        let viewer = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        let own = viewer(&[("print.dialog", true), ("file.open", true), ("comment.note", false), ("no.such", true), ("page.rotate", true)]);
+        let ok = |id: &str| enabled(id, EditScope::Viewer, &own.overrides);
+        assert!(ok("print.dialog") && ok("page.rotate") && !ok("comment.note") && ok("comment.ink"));
+        assert!(!ok("file.open"), "locked stays locked");
+        assert!(!ok("file.save_as") && !ok("sign.fill.text"), "what is not named keeps its default");
+        assert!(own.overrides.iter().all(|(k, _)| k != "no.such"), "unknown ids are dropped");
+        assert!(own.allow.has(EditClass::Page) && !own.allow.has(EditClass::Content), "only the kind of the turned-on command opens in the engine");
+        assert!(viewer(&[]).allow.is_empty() && viewer(&[("page.rotate", false)]).allow.is_empty());
+        // The last of two settings for one command wins.
+        assert!(enabled("print.dialog", EditScope::Viewer, &viewer(&[("print.dialog", false), ("print.dialog", true)]).overrides));
+        // A builder has no edit kinds to open.
+        let b = with_policy(Ownership::default(), vec![("page.rotate".into(), false)]);
+        assert!(b.allow.is_empty() && !enabled("page.rotate", EditScope::All, &b.overrides));
     }
 
     /// A viewer gets what its policy names, and nothing else.
     #[test]
-    fn a_policy_widens_a_viewer_by_group_only() {
+    fn a_policy_widens_and_narrows_a_document_by_command() {
         let mut app = locked();
-        let allow = |ids: &[&str]| Ownership { scope: EditScope::Viewer, allow: policy_groups(Some(&ids.iter().map(|x| Some(x.to_string())).collect::<Vec<_>>())), ..Default::default() };
-        app.session.set_open_ownership(allow(&["print", "page_edit", "fill_sign"]));
+        let viewer = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        app.session.set_open_ownership(viewer(&[("print.dialog", true), ("page.rotate", true), ("sign.fill.text", true), ("comment.ink", false)]));
         app.open_bytes("p.pdf", None, pdf()).unwrap();
         assert!(app.host_allows("print.dialog") && app.host_allows("page.rotate") && app.host_allows("sign.fill.text"));
+        assert!(!app.host_allows("comment.ink") && app.host_allows("comment.note"));
         assert!(!app.host_allows("file.save_as") && !app.host_allows("measure.distance") && !app.host_allows("edit.text"));
         assert!(!app.host_allows("file.open") && !app.host_allows("redact.apply") && !app.host_allows("help.github"));
-        assert!(!app.host_viewer(), "page tools come back with page_edit");
-        assert!(app.host_group(PolicyGroup::Print) && !app.host_group(PolicyGroup::Export));
+        assert!(!app.host_viewer(), "page tools come back with page.rotate");
+        assert!(app.host_any(&["file.save_as", "print.dialog"]) && !app.host_any(EXPORT_CMDS) && !app.host_any(LINK_CMDS));
         // The engine follows the same policy.
         let (_, id) = app.active_ids().unwrap();
         assert!(app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).is_ok());
-        app.session.set_open_ownership(allow(&["fill_sign"]));
+        app.session.set_open_ownership(viewer(&[("sign.fill.text", true)]));
         app.open_bytes("q.pdf", None, pdf()).unwrap();
         assert!(app.host_viewer() && app.host_allows("sign.fill.text") && !app.host_allows("page.rotate"));
+    }
+
+    /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
+    /// `UPDATE_COMMANDS_JSON=1 cargo test -p pdfcraft-ui-egui --lib commands_json` rewrites it.
+    #[test]
+    fn the_checked_in_commands_json_matches_the_table() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ppm/commands.json");
+        let now = commands_manifest();
+        if std::env::var_os("UPDATE_COMMANDS_JSON").is_some() {
+            std::fs::write(path, &now).unwrap();
+        }
+        let file = std::fs::read_to_string(path).expect("ppm/commands.json exists (UPDATE_COMMANDS_JSON=1 writes it)");
+        assert!(file == now, "ppm/commands.json is out of date: run with UPDATE_COMMANDS_JSON=1");
+        let v: serde_json::Value = serde_json::from_str(&file).unwrap();
+        assert_eq!(v["commands"].as_array().unwrap().len(), COMMANDS.len());
     }
 
     /// `pdfcraft:open` `mode`: `builder` is the only way to the wider scope.
@@ -611,7 +686,7 @@ mod tests {
         let app = locked();
         let shown: Vec<&str> = COMMANDS.iter().map(|c| c.id).filter(|id| app.host_allows(id)).collect();
         assert!(shown.contains(&"comment.note") && shown.contains(&"help.about"));
-        for id in DENIED.iter().chain(BUILDER) {
+        for id in LOCKED.iter().chain(OFF).chain(BUILDER) {
             assert!(!shown.contains(id), "{id}");
         }
     }

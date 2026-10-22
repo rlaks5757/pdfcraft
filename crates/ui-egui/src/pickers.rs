@@ -186,7 +186,7 @@ impl PdfCraftApp {
     pub(crate) fn ask(&mut self, ask: Ask, target: Option<DocId>, then: impl FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send + 'static) -> bool {
         // Host lock: no picker that saves (a file or a folder) unless the host's policy turned
         // exporting on. Choosing files to put into the document is an edit like any other.
-        if self.host_lock && matches!(ask, Ask::Save(_) | Ask::Folder(_)) && !self.host_group(pdfcraft_engine::PolicyGroup::Export) {
+        if self.host_lock && matches!(ask, Ask::Save(_) | Ask::Folder(_)) && !self.host_any(crate::host_lock::EXPORT_CMDS) {
             return false;
         }
         if self.pickers.showing.swap(true, Ordering::SeqCst) {

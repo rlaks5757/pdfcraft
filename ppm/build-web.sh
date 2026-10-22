@@ -19,3 +19,5 @@ esac
 # OFL-1.1 §2: the license travels with the embedded font.
 mkdir -p "$root/dist/web/licenses"
 cp "$root/ppm/fonts-ko/fonts/nanum-gothic/OFL.txt" "$root/dist/web/licenses/NanumGothic-OFL.txt"
+# 관리자 화면이 읽는 명령 목록. 명령 표와 같은지는 테스트(the_checked_in_commands_json_matches_the_table)가 확인한다.
+cp "$root/ppm/commands.json" "$root/dist/web/commands.json"

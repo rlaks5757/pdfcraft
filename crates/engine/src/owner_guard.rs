@@ -4,7 +4,7 @@
 
 use pdfcraft_annot::ownership as owner;
 
-use crate::{Edit, EditError, EditScope, Ownership, PolicyGroup, PolicyGroups};
+use crate::{Edit, EditError, EditScope, Ownership, EditClass, EditClasses};
 
 /// Refuse `edit` on `doc` when the session is read-only, or when it would change a comment the
 /// actor doesn't own. What an edit does to comments beyond its named target (page operations,
@@ -64,11 +64,11 @@ pub(crate) fn creates_comments(edit: &Edit) -> bool {
 enum Work {
     /// Comments of every kind, answering them, filling in form values: always a viewer's.
     Comment,
-    /// Page operations: `page_edit`.
+    /// Page operations.
     Page,
-    /// Direct editing of text, pictures and links: `content_edit`.
+    /// Direct editing of text, pictures and links.
     Content,
-    /// Measurements: `measure`.
+    /// Measurements.
     Measure,
     /// Everything else, which no policy opens to a viewer.
     Other,
@@ -77,15 +77,15 @@ enum Work {
 /// Refuse `edit` when the host opened the document as a viewer and the edit is not a comment or
 /// something its policy turned on. A `Batch` passes here and is held to the rule edit by edit,
 /// as each one goes through [`crate::run_edit`].
-pub(crate) fn check_scope(edit: &Edit, scope: EditScope, allow: PolicyGroups) -> Result<(), EditError> {
+pub(crate) fn check_scope(edit: &Edit, scope: EditScope, allow: EditClasses) -> Result<(), EditError> {
     if scope == EditScope::All {
         return Ok(());
     }
     let ok = match work(edit) {
         Work::Comment => true,
-        Work::Page => allow.has(PolicyGroup::PageEdit),
-        Work::Content => allow.has(PolicyGroup::ContentEdit),
-        Work::Measure => allow.has(PolicyGroup::Measure),
+        Work::Page => allow.has(EditClass::Page),
+        Work::Content => allow.has(EditClass::Content),
+        Work::Measure => allow.has(EditClass::Measure),
         Work::Other => false,
     };
     if ok { Ok(()) } else { Err(EditError::HostViewerOnly) }

@@ -6513,27 +6513,24 @@ mod ownership {
         }
     }
 
-    /// The host's policy opens a viewer to one kind of work at a time, and no further.
+    /// The host's policy opens a viewer to one kind of edit at a time, and no further.
     #[test]
     fn a_policy_group_opens_a_viewer_to_its_own_kind_of_edit_only() {
         let rotate = || Edit::RotatePages { pages: vec![0], degrees: 90 };
         let (mut s, id) = session_with(2);
-        let on = |ids: &[&str]| Ownership { scope: EditScope::Viewer, allow: PolicyGroups::from_ids(ids.iter().copied()), ..Default::default() };
-        s.set_ownership(on(&["page_edit"]));
+        let on = |c: &[EditClass]| Ownership { scope: EditScope::Viewer, allow: c.iter().fold(EditClasses::default(), |a, c| a.with(*c)), ..Default::default() };
+        s.set_ownership(on(&[EditClass::Page]));
         s.apply(id, rotate()).unwrap();
         refused(&mut s, id, Edit::SetInfo { key: "Title".into(), value: "x".into() }, VIEWER_ONLY);
         refused(&mut s, id, Edit::DeleteContent { page: 0, index: 0 }, VIEWER_ONLY);
-        s.set_ownership(on(&["content_edit", "print", "no_such_group"]));
+        s.set_ownership(on(&[EditClass::Content]));
         refused(&mut s, id, rotate(), VIEWER_ONLY);
         refused(&mut s, id, Edit::AddMeasurement(measurement_for_test()), VIEWER_ONLY);
-        s.set_ownership(on(&["measure"]));
+        s.set_ownership(on(&[EditClass::Measure]));
         s.apply(id, Edit::AddMeasurement(measurement_for_test())).unwrap();
         s.set_ownership(on(&[]));
         refused(&mut s, id, rotate(), VIEWER_ONLY);
-        assert!(!PolicyGroups::from_ids(["Page_Edit", ""]).has(PolicyGroup::PageEdit), "ids match exactly");
-        for g in PolicyGroup::ALL {
-            assert!(PolicyGroups::from_ids([g.id()]).has(g) && !PolicyGroups::default().has(g), "{}", g.id());
-        }
+        assert!(EditClasses::default().is_empty() && !EditClasses::default().with(EditClass::Page).has(EditClass::Content));
     }
 
     /// A signature is a change to the document too.

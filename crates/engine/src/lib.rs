@@ -212,8 +212,11 @@ pub struct Ownership {
     pub read_only: bool,
     /// Which edits the host lets through (see [`EditScope`]).
     pub scope: EditScope,
-    /// What the host's policy turns on beyond the scope (see [`PolicyGroups`]).
-    pub allow: PolicyGroups,
+    /// The edit kinds the host's policy opened to a viewer (see [`EditClasses`]).
+    pub allow: EditClasses,
+    /// The host's per-command policy (`policy.overrides`), sorted by command id. The engine only
+    /// carries it; the interface decides what a command's setting means.
+    pub overrides: Vec<(String, bool)>,
 }
 
 /// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
@@ -227,63 +230,36 @@ pub enum EditScope {
     Viewer,
 }
 
-/// A feature the host's policy can turn on (`pdfcraft:open` `policy.allow`). The first three are
-/// shut in every host build; the others are a viewer's page, content and measuring work, and
-/// Fill & Sign (a builder has them anyway).
+/// A kind of document edit a viewer is refused unless the host's policy turned the command for
+/// it on (`pdfcraft:open` `policy.overrides`). The policy works per command; the engine tells
+/// edits apart only by these kinds, so one command turned on opens its whole kind here and the
+/// interface keeps the other commands of the kind hidden.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PolicyGroup {
-    Print,
-    Export,
-    ExternalLinks,
+pub enum EditClass {
+    /// Page operations: rotate, delete, move, insert, crop, number.
+    Page,
+    /// Direct editing of text, pictures and links.
+    Content,
+    /// Measurements.
     Measure,
-    FillSign,
-    PageEdit,
-    ContentEdit,
 }
 
-impl PolicyGroup {
-    pub const ALL: [PolicyGroup; 7] = [
-        Self::Print,
-        Self::Export,
-        Self::ExternalLinks,
-        Self::Measure,
-        Self::FillSign,
-        Self::PageEdit,
-        Self::ContentEdit,
-    ];
-
-    /// The id the host sends.
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Print => "print",
-            Self::Export => "export",
-            Self::ExternalLinks => "external_links",
-            Self::Measure => "measure",
-            Self::FillSign => "fill_sign",
-            Self::PageEdit => "page_edit",
-            Self::ContentEdit => "content_edit",
-        }
-    }
-}
-
-/// The groups a host turned on. Empty by default: nothing is on unless the host names it.
+/// The edit kinds a host's policy opened to a viewer. Empty by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PolicyGroups(u8);
+pub struct EditClasses(u8);
 
-impl PolicyGroups {
-    /// The groups named by `ids`; ids that are not a group are ignored.
-    pub fn from_ids<'a>(ids: impl IntoIterator<Item = &'a str>) -> Self {
-        let mut out = Self::default();
-        for id in ids {
-            if let Some(g) = PolicyGroup::ALL.into_iter().find(|g| g.id() == id) {
-                out.0 |= 1 << g as u8;
-            }
-        }
-        out
+impl EditClasses {
+    pub fn with(mut self, class: EditClass) -> Self {
+        self.0 |= 1 << class as u8;
+        self
     }
 
-    pub fn has(self, group: PolicyGroup) -> bool {
-        self.0 & (1 << group as u8) != 0
+    pub fn has(self, class: EditClass) -> bool {
+        self.0 & (1 << class as u8) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 

@@ -520,10 +520,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let hosted = app.host_save.is_some();
     let mut bm_rename = app.bookmark_rename.clone();
     let doc_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
-    // A viewer's host scope has no bookmarks to edit, and pages to edit only when its policy says.
-    let (bm_editable, pages_editable) = app.session.get(id).map_or((false, false), |d| {
-        (doc_editable && crate::host_lock::scope_allows(d.ownership(), None), doc_editable && crate::host_lock::scope_allows(d.ownership(), Some(pdfcraft_engine::PolicyGroup::PageEdit)))
-    });
+    // Bookmark and page controls follow the commands they stand for: a host build that has the
+    // command off (a viewer, by default) shows no button for it.
+    let bm_editable = doc_editable && app.host_allows("bookmark.add");
+    let pages_editable = doc_editable && app.host_allows("page.organize");
+    let page_menu = PageMenu {
+        editable: pages_editable,
+        extract: app.host_allows("page.extract"),
+        replace: app.host_allows("page.replace"),
+        cut: app.host_allows("page.cut"),
+        copy: app.host_allows("page.copy"),
+        paste: app.host_allows("page.paste"),
+        delete: app.host_allows("page.delete"),
+    };
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
     {
@@ -676,7 +685,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
                         }
                     }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, pages_editable, &mut nav),
+                    RightPanel::Pages => pages(ui, &t, info, view, modal, page_menu, &mut nav),
                     RightPanel::Fields => field_properties = fields(ui, &t, info, &doc.form, preparing, &mut view.prepare, &mut nav, &mut panel_edit),
                     RightPanel::Layers => {
                         if info.layers.is_empty() {
@@ -1047,11 +1056,31 @@ fn outline_item(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, item: &OutlineIte
     }
 }
 
+/// Which items of the thumbnails' right-click menu the host build shows.
+#[derive(Clone, Copy)]
+struct PageMenu {
+    /// Pages can be dragged, deleted with the key, and edited by the menu's items.
+    editable: bool,
+    extract: bool,
+    replace: bool,
+    cut: bool,
+    copy: bool,
+    paste: bool,
+    delete: bool,
+}
+
+impl PageMenu {
+    fn any(self) -> bool {
+        self.extract || self.replace || self.cut || self.copy || self.paste || self.delete
+    }
+}
+
 /// The page thumbnails. A click goes to the page; ⌘/Ctrl-click and ⇧-click pick several pages
 /// (the selection page commands and Print act on) without moving the document. Right-click
 /// offers Extract, Cut, Copy and Paste on the selection, or on the page clicked; dragging
 /// moves the selection, or the page grabbed, to the gap it is dropped on.
-fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocView, modal: bool, editable: bool, nav: &mut Option<Nav>) {
+fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocView, modal: bool, menu: PageMenu, nav: &mut Option<Nav>) {
+    let editable = menu.editable;
     // Escape drops the selection while the pointer is over the panel and nothing else wants the key.
     if !modal
         && !view.selected.is_empty()
@@ -1064,6 +1093,7 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
     // Delete (or Backspace) deletes the selection, or the current page, likewise.
     if !modal
         && editable
+        && menu.delete
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.rect_contains_pointer(ui.clip_rect())
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
@@ -1139,38 +1169,37 @@ fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocVie
                     *nav = Some(Nav::Page(i));
                 }
             }
-            // A viewer without the policy has no page menu: Extract, Replace and Cut are page edits.
-            if editable {
+            if menu.any() {
                 resp.context_menu(|ui| {
                     // A page outside the selection becomes the selection, as in the organize grid.
                     if !view.target_pages().contains(&i) {
                         view.click_page(i, egui::Modifiers::NONE, true);
                     }
-                    if ui.button(tl!("Extract pages")).clicked() {
+                    if menu.extract && ui.button(tl!("Extract pages")).clicked() {
                         view.pending_action = Some(crate::canvas::ViewAction::Extract);
                         ui.close();
                     }
-                    if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
+                    if menu.replace && ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
                         view.pending_action = Some(crate::canvas::ViewAction::ReplacePages);
                         ui.close();
                     }
                     ui.separator();
-                    if ui.add_enabled(editable, egui::Button::new(tl!("Cut"))).clicked() {
+                    if menu.cut && ui.add_enabled(editable, egui::Button::new(tl!("Cut"))).clicked() {
                         view.pending_action = Some(crate::canvas::ViewAction::CopyPages { cut: true });
                         ui.close();
                     }
-                    if ui.button(tl!("Copy")).clicked() {
+                    if menu.copy && ui.button(tl!("Copy")).clicked() {
                         view.pending_action = Some(crate::canvas::ViewAction::CopyPages { cut: false });
                         ui.close();
                     }
-                    if ui.add_enabled(editable, egui::Button::new(tl!("Paste after"))).clicked() {
+                    if menu.paste && ui.add_enabled(editable, egui::Button::new(tl!("Paste after"))).clicked() {
                         view.pending_action = Some(crate::canvas::ViewAction::PastePages);
                         ui.close();
                     }
                     ui.separator();
                     let some_left = view.target_pages().len() < count;
                     // Never every page: a document keeps at least one.
-                    if ui.add_enabled(editable && some_left, egui::Button::new(tl!("Delete pages"))).clicked() {
+                    if menu.delete && ui.add_enabled(editable && some_left, egui::Button::new(tl!("Delete pages"))).clicked() {
                         delete_pages(view, count);
                         ui.close();
                     }

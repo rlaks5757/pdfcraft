@@ -1,0 +1,1412 @@
+{
+  "app": "pdfcraft",
+  "commands": [
+    {
+      "builder": "locked",
+      "id": "file.open",
+      "label": "Open…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "file.open_recent",
+      "label": "Open Recent",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "file.clear_recent",
+      "label": "Clear Recent Files",
+      "menu": null,
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "file.pin_folder",
+      "label": "Pin folder to Home…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "create.blank",
+      "label": "New blank PDF",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "on",
+      "id": "measure.distance",
+      "label": "Measure distance",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "measure.perimeter",
+      "label": "Measure perimeter",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "measure.area",
+      "label": "Measure area",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "measure.scale",
+      "label": "Set measurement scale",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "measure.info",
+      "label": "Measurement information",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "measure.snap",
+      "label": "Measurement snapping",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "measure.export",
+      "label": "Export measurements as CSV",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.copy",
+      "label": "Copy pages",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.cut",
+      "label": "Cut pages",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.paste",
+      "label": "Paste pages",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "locked",
+      "id": "create.file",
+      "label": "Create PDF from file…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "create.multiple",
+      "label": "Create PDF from multiple files…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "create.multiple_separate",
+      "label": "Create separate PDFs…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "create.images",
+      "label": "Create PDF from images…",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "create.clipboard",
+      "label": "Create PDF from clipboard",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "on",
+      "id": "page.combine",
+      "label": "Combine files…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "file.save",
+      "label": "Save",
+      "menu": "File",
+      "viewer": "on"
+    },
+    {
+      "builder": "off",
+      "id": "file.save_as",
+      "label": "Save as…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "locked",
+      "id": "file.close",
+      "label": "Close file",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "file.close_all",
+      "label": "Close all",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "file.revert",
+      "label": "Revert",
+      "menu": "File",
+      "viewer": "locked"
+    },
+    {
+      "builder": "off",
+      "id": "print.dialog",
+      "label": "Print…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "file.properties",
+      "label": "Document properties…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "file.word_count",
+      "label": "Word count…",
+      "menu": "File",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.undo",
+      "label": "Undo",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.redo",
+      "label": "Redo",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.find",
+      "label": "Find…",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.advanced_search",
+      "label": "Advanced search…",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.palette",
+      "label": "Find tools and commands…",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.layout.single",
+      "label": "Single page",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.layout.two_up",
+      "label": "Two-page view",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.continuous",
+      "label": "Continuous scrolling",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.layout.cover",
+      "label": "Show cover page in two-page view",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.fit_width_scrolling",
+      "label": "Fit to width scrolling",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.fit_one_page",
+      "label": "Fit one full page",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.fit_visible",
+      "label": "Fit visible",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.marquee_zoom",
+      "label": "Marquee zoom",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.copy",
+      "label": "Copy",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "edit.column_select",
+      "label": "Column select",
+      "menu": "Edit",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.snapshot",
+      "label": "Take a snapshot",
+      "menu": "Edit",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "view.full_screen",
+      "label": "Full screen mode",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.read_mode",
+      "label": "Read mode",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.next_tab",
+      "label": "Next tab",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.previous_tab",
+      "label": "Previous tab",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.previous_view",
+      "label": "Previous view",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.next_view",
+      "label": "Next view",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.focus_page_input",
+      "label": "Go to page…",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "ui.dock.reset",
+      "label": "Reset panel layout",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.theme",
+      "label": "Switch light / dark theme",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.theme.system",
+      "label": "Use system setting",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.theme.light",
+      "label": "Light gray",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "view.theme.dark",
+      "label": "Dark gray",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.list",
+      "label": "Comments panel",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.note",
+      "label": "Add a sticky note",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.freetext",
+      "label": "Add a text box",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.highlight",
+      "label": "Highlight text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.underline",
+      "label": "Underline text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.strikeout",
+      "label": "Strikethrough text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.squiggly",
+      "label": "Squiggly underline text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.ink",
+      "label": "Draw freehand",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.line",
+      "label": "Draw a line",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.arrow",
+      "label": "Draw an arrow",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.square",
+      "label": "Draw a rectangle",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.circle",
+      "label": "Draw an oval",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.polygon",
+      "label": "Draw a polygon",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.polyline",
+      "label": "Draw connected lines",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.cloud",
+      "label": "Draw a cloud",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.callout",
+      "label": "Add a callout",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.caret",
+      "label": "Insert text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.replace",
+      "label": "Replace text",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.attach",
+      "label": "Attach a file",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "comment.eraser",
+      "label": "Erase drawings",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "form.fields",
+      "label": "Form fields panel",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "form.clear",
+      "label": "Clear form",
+      "menu": "Edit",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.flatten",
+      "label": "Flatten comments",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "comment.import",
+      "label": "Import comments…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "comment.stamp",
+      "label": "Add a stamp",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "comment.export",
+      "label": "Export all comments to data file…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "comment.hide_all",
+      "label": "Hide all comments",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "comment.summarize",
+      "label": "Summarize comments",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.import_data",
+      "label": "Import form data…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "form.export_data",
+      "label": "Export form data…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "standards.pdfa",
+      "label": "PDF/A…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "actions.wizard",
+      "label": "Action Wizard…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "actions.distribution",
+      "label": "Prepare for distribution…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "actions.optimize_scans",
+      "label": "Optimize scanned documents…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "doc.compare",
+      "label": "Compare files…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.detect",
+      "label": "Detect form fields",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.merge_data",
+      "label": "Merge data files into spreadsheet…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.flatten",
+      "label": "Flatten form fields",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.prepare",
+      "label": "Prepare a form",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.tab_order.row",
+      "label": "Tab order: by rows",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.tab_order.column",
+      "label": "Tab order: by columns",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.tab_order.structure",
+      "label": "Tab order: by document structure",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.text",
+      "label": "Add text",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.edit_text",
+      "label": "Edit text & images",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.link",
+      "label": "Add or edit links",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.links_from_urls",
+      "label": "Create links from URLs",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.remove_links",
+      "label": "Remove all links",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.bates",
+      "label": "Add Bates numbering…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.image",
+      "label": "Add image…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.mark",
+      "label": "Redact text and images",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.pages",
+      "label": "Redact pages…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.search",
+      "label": "Find text and redact…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.properties",
+      "label": "Redaction properties…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.apply",
+      "label": "Apply redactions…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.clear",
+      "label": "Clear redaction marks",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "protect.remove_hidden",
+      "label": "Remove hidden information…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "redact.sanitize",
+      "label": "Sanitize document…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.field.properties",
+      "label": "Field properties…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.text",
+      "label": "Add a text field",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.checkbox",
+      "label": "Add a checkbox",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.radio",
+      "label": "Add a radio button",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.combo",
+      "label": "Add a drop-down list",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.list",
+      "label": "Add a list box",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.button",
+      "label": "Add a button",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.image",
+      "label": "Add an image field",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.date",
+      "label": "Add a date field",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "form.add.signature",
+      "label": "Add a digital signature field",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.digital",
+      "label": "Digitally sign",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.certify",
+      "label": "Certify (visible signature)",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.certify_invisible",
+      "label": "Certify (invisible signature)",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.validate",
+      "label": "Validate all signatures",
+      "menu": null,
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "sign.panel",
+      "label": "Signatures panel",
+      "menu": "View",
+      "viewer": "on"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.text",
+      "label": "Fill & Sign: add text",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.check",
+      "label": "Fill & Sign: checkmark",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.cross",
+      "label": "Fill & Sign: cross",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.dot",
+      "label": "Fill & Sign: dot",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.line",
+      "label": "Fill & Sign: line",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.date",
+      "label": "Fill & Sign: date",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.signature",
+      "label": "Fill & Sign: sign",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.initials",
+      "label": "Fill & Sign: initials",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.signature.change",
+      "label": "Fill & Sign: change signature",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.signature.remove",
+      "label": "Fill & Sign: remove saved signature",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.initials.remove",
+      "label": "Fill & Sign: remove saved initials",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "sign.fill.initials.change",
+      "label": "Fill & Sign: change initials",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.image",
+      "label": "Export to image…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "optimize.reduce",
+      "label": "Reduce file size…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "optimize.advanced",
+      "label": "Optimize PDF…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.text",
+      "label": "Export to text…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.docx",
+      "label": "Export to Word…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.pptx",
+      "label": "Export to PowerPoint…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.html",
+      "label": "Export to HTML…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.rtf",
+      "label": "Export to RTF…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "locked",
+      "id": "app.preferences",
+      "label": "Preferences…",
+      "menu": "Edit",
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "tools.js_console",
+      "label": "JavaScript console…",
+      "menu": null,
+      "viewer": "locked"
+    },
+    {
+      "builder": "locked",
+      "id": "tools.document_js",
+      "label": "Document JavaScripts…",
+      "menu": null,
+      "viewer": "locked"
+    },
+    {
+      "builder": "on",
+      "id": "ocr.recognize",
+      "label": "Recognize text…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "ocr.enhance_camera",
+      "label": "Enhance camera image",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "ocr.recognize_batch",
+      "label": "Recognize text in multiple files…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.check",
+      "label": "Check for accessibility…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.find_untagged",
+      "label": "Find untagged content",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.autotag",
+      "label": "Automatically tag PDF",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.report",
+      "label": "Open accessibility report",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.reading_options",
+      "label": "Change reading options…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.alt_text",
+      "label": "Add alternate text…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.autotag_fields",
+      "label": "Tag form fields",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "a11y.tags",
+      "label": "Tags panel",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "export.all_images",
+      "label": "Export all images…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.header_footer",
+      "label": "Add header & footer…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.header_footer.update",
+      "label": "Update header & footer…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.header_footer.remove",
+      "label": "Remove header & footer",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.watermark",
+      "label": "Add watermark…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.watermark.update",
+      "label": "Update watermark…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.watermark.remove",
+      "label": "Remove watermark",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.background",
+      "label": "Add background…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.background.update",
+      "label": "Update background…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "edit.background.remove",
+      "label": "Remove background",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "protect.password",
+      "label": "Protect using password…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "protect.remove",
+      "label": "Remove security",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "protect.unlock",
+      "label": "Enter permissions password…",
+      "menu": null,
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "protect.properties",
+      "label": "Security properties…",
+      "menu": "File",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.organize",
+      "label": "Organize pages",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "bookmark.add",
+      "label": "New bookmark",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "bookmark.from_structure",
+      "label": "New bookmarks from structure",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.rotate",
+      "label": "Rotate pages clockwise",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.rotate_ccw",
+      "label": "Rotate pages counterclockwise",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.delete",
+      "label": "Delete pages",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.insert_blank",
+      "label": "Insert blank page",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.rotate_dialog",
+      "label": "Rotate pages…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.duplicate",
+      "label": "Duplicate pages",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.reverse",
+      "label": "Reverse pages",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.crop",
+      "label": "Crop pages",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.boxes",
+      "label": "Set page boxes…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.insert",
+      "label": "Insert pages from file…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.replace",
+      "label": "Replace pages…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.extract",
+      "label": "Extract pages…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "page.split",
+      "label": "Split document…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "page.number",
+      "label": "Number pages…",
+      "menu": "Pages",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "help.shortcuts",
+      "label": "Keyboard shortcuts",
+      "menu": "Help",
+      "viewer": "on"
+    },
+    {
+      "builder": "off",
+      "id": "help.discord",
+      "label": "Join the ArtCraft Discord",
+      "menu": "Help",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "help.app_page",
+      "label": "PdfCraft web page",
+      "menu": "Help",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "help.github",
+      "label": "PdfCraft on GitHub",
+      "menu": "Help",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "help.website",
+      "label": "ArtCraft website",
+      "menu": "Help",
+      "viewer": "off"
+    },
+    {
+      "builder": "off",
+      "id": "help.check_updates",
+      "label": "Check for updates…",
+      "menu": "Help",
+      "viewer": "off"
+    },
+    {
+      "builder": "on",
+      "id": "help.about",
+      "label": "About PdfCraft",
+      "menu": "Help",
+      "viewer": "on"
+    }
+  ]
+}
