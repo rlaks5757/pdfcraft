@@ -255,6 +255,8 @@ mod tests {
         assert!(h.query_by_label("Report…").is_none());
     }
 
+    /// Without an embedding page; a host-lock build has no such mode (it shows only the notice).
+    #[cfg(not(feature = "host-lock"))]
     #[test]
     fn standalone_compare_panel_keeps_marks_and_report() {
         let (mut h, _) = app(false);
