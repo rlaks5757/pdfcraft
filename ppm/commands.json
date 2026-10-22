@@ -8,7 +8,7 @@
       },
       "id": "file.open",
       "label": "Open…",
-      "labelKo": null,
+      "labelKo": "열기…",
       "location": [
         "File"
       ]
@@ -20,7 +20,7 @@
       },
       "id": "file.open_recent",
       "label": "Open Recent",
-      "labelKo": null,
+      "labelKo": "최근 파일 열기",
       "location": [
         "File"
       ]
@@ -32,7 +32,7 @@
       },
       "id": "file.clear_recent",
       "label": "Clear Recent Files",
-      "labelKo": null,
+      "labelKo": "최근 파일 목록 지우기",
       "location": []
     },
     {
@@ -42,7 +42,7 @@
       },
       "id": "file.pin_folder",
       "label": "Pin folder to Home…",
-      "labelKo": null,
+      "labelKo": "홈에 폴더 고정…",
       "location": [
         "File"
       ]
@@ -54,7 +54,7 @@
       },
       "id": "create.blank",
       "label": "New blank PDF",
-      "labelKo": null,
+      "labelKo": "새 빈 PDF",
       "location": [
         "File"
       ]
@@ -66,7 +66,7 @@
       },
       "id": "measure.distance",
       "label": "Measure distance",
-      "labelKo": null,
+      "labelKo": "거리 측정",
       "location": []
     },
     {
@@ -76,7 +76,7 @@
       },
       "id": "measure.perimeter",
       "label": "Measure perimeter",
-      "labelKo": null,
+      "labelKo": "둘레 측정",
       "location": []
     },
     {
@@ -86,7 +86,7 @@
       },
       "id": "measure.area",
       "label": "Measure area",
-      "labelKo": null,
+      "labelKo": "면적 측정",
       "location": []
     },
     {
@@ -96,7 +96,7 @@
       },
       "id": "measure.scale",
       "label": "Set measurement scale",
-      "labelKo": null,
+      "labelKo": "측정 배율 설정",
       "location": []
     },
     {
@@ -106,7 +106,7 @@
       },
       "id": "measure.info",
       "label": "Measurement information",
-      "labelKo": null,
+      "labelKo": "측정 정보",
       "location": []
     },
     {
@@ -116,7 +116,7 @@
       },
       "id": "measure.snap",
       "label": "Measurement snapping",
-      "labelKo": null,
+      "labelKo": "측정 맞춤",
       "location": []
     },
     {
@@ -126,7 +126,7 @@
       },
       "id": "measure.export",
       "label": "Export measurements as CSV",
-      "labelKo": null,
+      "labelKo": "측정값을 CSV로 내보내기",
       "location": []
     },
     {
@@ -136,7 +136,7 @@
       },
       "id": "page.copy",
       "label": "Copy pages",
-      "labelKo": null,
+      "labelKo": "페이지 복사",
       "location": []
     },
     {
@@ -146,7 +146,7 @@
       },
       "id": "page.cut",
       "label": "Cut pages",
-      "labelKo": null,
+      "labelKo": "페이지 잘라내기",
       "location": []
     },
     {
@@ -156,7 +156,7 @@
       },
       "id": "page.paste",
       "label": "Paste pages",
-      "labelKo": null,
+      "labelKo": "페이지 붙여넣기",
       "location": []
     },
     {
@@ -166,7 +166,7 @@
       },
       "id": "create.file",
       "label": "Create PDF from file…",
-      "labelKo": null,
+      "labelKo": "파일에서 PDF 만들기…",
       "location": [
         "File"
       ]
@@ -178,7 +178,7 @@
       },
       "id": "create.multiple",
       "label": "Create PDF from multiple files…",
-      "labelKo": null,
+      "labelKo": "여러 파일에서 PDF 만들기…",
       "location": [
         "File"
       ]
@@ -190,7 +190,7 @@
       },
       "id": "create.multiple_separate",
       "label": "Create separate PDFs…",
-      "labelKo": null,
+      "labelKo": "개별 PDF 만들기…",
       "location": [
         "File"
       ]
@@ -202,7 +202,7 @@
       },
       "id": "create.images",
       "label": "Create PDF from images…",
-      "labelKo": null,
+      "labelKo": "이미지에서 PDF 만들기…",
       "location": [
         "File"
       ]
@@ -214,7 +214,7 @@
       },
       "id": "create.clipboard",
       "label": "Create PDF from clipboard",
-      "labelKo": null,
+      "labelKo": "클립보드에서 PDF 만들기",
       "location": [
         "File"
       ]
@@ -226,7 +226,7 @@
       },
       "id": "page.combine",
       "label": "Combine files…",
-      "labelKo": null,
+      "labelKo": "파일 결합…",
       "location": [
         "File"
       ]
@@ -238,7 +238,7 @@
       },
       "id": "file.save",
       "label": "Save",
-      "labelKo": null,
+      "labelKo": "저장",
       "location": [
         "File"
       ]
@@ -250,7 +250,7 @@
       },
       "id": "file.save_as",
       "label": "Save as…",
-      "labelKo": null,
+      "labelKo": "다른 이름으로 저장…",
       "location": [
         "File"
       ]
@@ -262,7 +262,7 @@
       },
       "id": "file.close",
       "label": "Close file",
-      "labelKo": null,
+      "labelKo": "파일 닫기",
       "location": [
         "File"
       ]
@@ -274,7 +274,7 @@
       },
       "id": "file.close_all",
       "label": "Close all",
-      "labelKo": null,
+      "labelKo": "모두 닫기",
       "location": [
         "File"
       ]
@@ -286,7 +286,7 @@
       },
       "id": "file.revert",
       "label": "Revert",
-      "labelKo": null,
+      "labelKo": "되돌리기",
       "location": [
         "File"
       ]
@@ -298,7 +298,7 @@
       },
       "id": "print.dialog",
       "label": "Print…",
-      "labelKo": null,
+      "labelKo": "인쇄…",
       "location": [
         "File"
       ]
@@ -310,7 +310,7 @@
       },
       "id": "file.properties",
       "label": "Document properties…",
-      "labelKo": null,
+      "labelKo": "문서 속성…",
       "location": [
         "File"
       ]
@@ -322,7 +322,7 @@
       },
       "id": "file.word_count",
       "label": "Word count…",
-      "labelKo": null,
+      "labelKo": "단어 수…",
       "location": [
         "File"
       ]
@@ -334,7 +334,7 @@
       },
       "id": "edit.undo",
       "label": "Undo",
-      "labelKo": null,
+      "labelKo": "실행 취소",
       "location": [
         "Edit"
       ]
@@ -346,7 +346,7 @@
       },
       "id": "edit.redo",
       "label": "Redo",
-      "labelKo": null,
+      "labelKo": "다시 실행",
       "location": [
         "Edit"
       ]
@@ -358,7 +358,7 @@
       },
       "id": "edit.find",
       "label": "Find…",
-      "labelKo": null,
+      "labelKo": "찾기…",
       "location": [
         "Edit"
       ]
@@ -370,7 +370,7 @@
       },
       "id": "edit.advanced_search",
       "label": "Advanced search…",
-      "labelKo": null,
+      "labelKo": "고급 검색…",
       "location": [
         "Edit"
       ]
@@ -382,7 +382,7 @@
       },
       "id": "view.palette",
       "label": "Find tools and commands…",
-      "labelKo": null,
+      "labelKo": "도구 및 명령 찾기…",
       "location": [
         "View"
       ]
@@ -394,7 +394,7 @@
       },
       "id": "view.layout.single",
       "label": "Single page",
-      "labelKo": null,
+      "labelKo": "한 페이지씩 보기",
       "location": []
     },
     {
@@ -404,7 +404,7 @@
       },
       "id": "view.layout.two_up",
       "label": "Two-page view",
-      "labelKo": null,
+      "labelKo": "두 페이지 보기",
       "location": []
     },
     {
@@ -414,7 +414,7 @@
       },
       "id": "view.continuous",
       "label": "Continuous scrolling",
-      "labelKo": null,
+      "labelKo": "연속 스크롤",
       "location": []
     },
     {
@@ -424,7 +424,7 @@
       },
       "id": "view.layout.cover",
       "label": "Show cover page in two-page view",
-      "labelKo": null,
+      "labelKo": "두 페이지 보기에서 표지 표시",
       "location": []
     },
     {
@@ -434,7 +434,7 @@
       },
       "id": "view.fit_width_scrolling",
       "label": "Fit to width scrolling",
-      "labelKo": null,
+      "labelKo": "너비 맞춤 스크롤",
       "location": []
     },
     {
@@ -444,7 +444,7 @@
       },
       "id": "view.fit_one_page",
       "label": "Fit one full page",
-      "labelKo": null,
+      "labelKo": "한 페이지 전체 맞춤",
       "location": []
     },
     {
@@ -454,7 +454,7 @@
       },
       "id": "view.fit_visible",
       "label": "Fit visible",
-      "labelKo": null,
+      "labelKo": "보이는 영역에 맞춤",
       "location": []
     },
     {
@@ -464,7 +464,7 @@
       },
       "id": "view.marquee_zoom",
       "label": "Marquee zoom",
-      "labelKo": null,
+      "labelKo": "영역 확대",
       "location": [
         "View"
       ]
@@ -476,7 +476,7 @@
       },
       "id": "edit.copy",
       "label": "Copy",
-      "labelKo": null,
+      "labelKo": "복사",
       "location": [
         "Edit"
       ]
@@ -488,7 +488,7 @@
       },
       "id": "edit.column_select",
       "label": "Column select",
-      "labelKo": null,
+      "labelKo": "열 선택",
       "location": [
         "Edit"
       ]
@@ -500,7 +500,7 @@
       },
       "id": "edit.snapshot",
       "label": "Take a snapshot",
-      "labelKo": null,
+      "labelKo": "스냅샷 찍기",
       "location": [
         "Edit"
       ]
@@ -512,7 +512,7 @@
       },
       "id": "view.full_screen",
       "label": "Full screen mode",
-      "labelKo": null,
+      "labelKo": "전체 화면 모드",
       "location": [
         "View"
       ]
@@ -524,7 +524,7 @@
       },
       "id": "view.read_mode",
       "label": "Read mode",
-      "labelKo": null,
+      "labelKo": "읽기 모드",
       "location": [
         "View"
       ]
@@ -536,7 +536,7 @@
       },
       "id": "view.next_tab",
       "label": "Next tab",
-      "labelKo": null,
+      "labelKo": "다음 탭",
       "location": [
         "View"
       ]
@@ -548,7 +548,7 @@
       },
       "id": "view.previous_tab",
       "label": "Previous tab",
-      "labelKo": null,
+      "labelKo": "이전 탭",
       "location": [
         "View"
       ]
@@ -560,7 +560,7 @@
       },
       "id": "view.previous_view",
       "label": "Previous view",
-      "labelKo": null,
+      "labelKo": "이전 보기",
       "location": []
     },
     {
@@ -570,7 +570,7 @@
       },
       "id": "view.next_view",
       "label": "Next view",
-      "labelKo": null,
+      "labelKo": "다음 보기",
       "location": []
     },
     {
@@ -580,7 +580,7 @@
       },
       "id": "view.focus_page_input",
       "label": "Go to page…",
-      "labelKo": null,
+      "labelKo": "페이지로 이동…",
       "location": [
         "View"
       ]
@@ -592,7 +592,7 @@
       },
       "id": "ui.dock.reset",
       "label": "Reset panel layout",
-      "labelKo": null,
+      "labelKo": "패널 레이아웃 초기화",
       "location": [
         "View"
       ]
@@ -604,7 +604,7 @@
       },
       "id": "view.theme",
       "label": "Switch light / dark theme",
-      "labelKo": null,
+      "labelKo": "밝은/어두운 테마 전환",
       "location": []
     },
     {
@@ -614,7 +614,7 @@
       },
       "id": "view.theme.system",
       "label": "Use system setting",
-      "labelKo": null,
+      "labelKo": "시스템 설정 사용",
       "location": []
     },
     {
@@ -624,7 +624,7 @@
       },
       "id": "view.theme.light",
       "label": "Light gray",
-      "labelKo": null,
+      "labelKo": "밝은 회색",
       "location": []
     },
     {
@@ -634,7 +634,7 @@
       },
       "id": "view.theme.dark",
       "label": "Dark gray",
-      "labelKo": null,
+      "labelKo": "진한 회색",
       "location": []
     },
     {
@@ -644,7 +644,7 @@
       },
       "id": "comment.list",
       "label": "Comments panel",
-      "labelKo": null,
+      "labelKo": "주석 패널",
       "location": [
         "View"
       ]
@@ -656,7 +656,7 @@
       },
       "id": "comment.note",
       "label": "Add a sticky note",
-      "labelKo": null,
+      "labelKo": "스티커 메모 추가",
       "location": []
     },
     {
@@ -666,7 +666,7 @@
       },
       "id": "comment.freetext",
       "label": "Add a text box",
-      "labelKo": null,
+      "labelKo": "텍스트 상자 추가",
       "location": []
     },
     {
@@ -676,7 +676,7 @@
       },
       "id": "comment.highlight",
       "label": "Highlight text",
-      "labelKo": null,
+      "labelKo": "텍스트 강조 표시",
       "location": []
     },
     {
@@ -686,7 +686,7 @@
       },
       "id": "comment.underline",
       "label": "Underline text",
-      "labelKo": null,
+      "labelKo": "텍스트에 밑줄",
       "location": []
     },
     {
@@ -696,7 +696,7 @@
       },
       "id": "comment.strikeout",
       "label": "Strikethrough text",
-      "labelKo": null,
+      "labelKo": "텍스트에 취소선",
       "location": []
     },
     {
@@ -706,7 +706,7 @@
       },
       "id": "comment.squiggly",
       "label": "Squiggly underline text",
-      "labelKo": null,
+      "labelKo": "텍스트에 물결 밑줄",
       "location": []
     },
     {
@@ -716,7 +716,7 @@
       },
       "id": "comment.ink",
       "label": "Draw freehand",
-      "labelKo": null,
+      "labelKo": "자유롭게 그리기",
       "location": []
     },
     {
@@ -726,7 +726,7 @@
       },
       "id": "comment.line",
       "label": "Draw a line",
-      "labelKo": null,
+      "labelKo": "선 그리기",
       "location": []
     },
     {
@@ -736,7 +736,7 @@
       },
       "id": "comment.arrow",
       "label": "Draw an arrow",
-      "labelKo": null,
+      "labelKo": "화살표 그리기",
       "location": []
     },
     {
@@ -746,7 +746,7 @@
       },
       "id": "comment.square",
       "label": "Draw a rectangle",
-      "labelKo": null,
+      "labelKo": "사각형 그리기",
       "location": []
     },
     {
@@ -756,7 +756,7 @@
       },
       "id": "comment.circle",
       "label": "Draw an oval",
-      "labelKo": null,
+      "labelKo": "원 그리기",
       "location": []
     },
     {
@@ -766,7 +766,7 @@
       },
       "id": "comment.polygon",
       "label": "Draw a polygon",
-      "labelKo": null,
+      "labelKo": "다각형 그리기",
       "location": []
     },
     {
@@ -776,7 +776,7 @@
       },
       "id": "comment.polyline",
       "label": "Draw connected lines",
-      "labelKo": null,
+      "labelKo": "연결선 그리기",
       "location": []
     },
     {
@@ -786,7 +786,7 @@
       },
       "id": "comment.cloud",
       "label": "Draw a cloud",
-      "labelKo": null,
+      "labelKo": "구름 그리기",
       "location": []
     },
     {
@@ -796,7 +796,7 @@
       },
       "id": "comment.callout",
       "label": "Add a callout",
-      "labelKo": null,
+      "labelKo": "말풍선 추가",
       "location": []
     },
     {
@@ -806,7 +806,7 @@
       },
       "id": "comment.caret",
       "label": "Insert text",
-      "labelKo": null,
+      "labelKo": "텍스트 삽입",
       "location": []
     },
     {
@@ -816,7 +816,7 @@
       },
       "id": "comment.replace",
       "label": "Replace text",
-      "labelKo": null,
+      "labelKo": "텍스트 바꾸기",
       "location": []
     },
     {
@@ -826,7 +826,7 @@
       },
       "id": "comment.attach",
       "label": "Attach a file",
-      "labelKo": null,
+      "labelKo": "파일 첨부",
       "location": []
     },
     {
@@ -836,7 +836,7 @@
       },
       "id": "comment.eraser",
       "label": "Erase drawings",
-      "labelKo": null,
+      "labelKo": "그림 지우기",
       "location": []
     },
     {
@@ -846,7 +846,7 @@
       },
       "id": "form.fields",
       "label": "Form fields panel",
-      "labelKo": null,
+      "labelKo": "양식 필드 패널",
       "location": [
         "View"
       ]
@@ -858,7 +858,7 @@
       },
       "id": "form.clear",
       "label": "Clear form",
-      "labelKo": null,
+      "labelKo": "양식 지우기",
       "location": [
         "Edit"
       ]
@@ -870,7 +870,7 @@
       },
       "id": "comment.flatten",
       "label": "Flatten comments",
-      "labelKo": null,
+      "labelKo": "주석 평면화",
       "location": []
     },
     {
@@ -880,7 +880,7 @@
       },
       "id": "comment.import",
       "label": "Import comments…",
-      "labelKo": null,
+      "labelKo": "주석 가져오기…",
       "location": []
     },
     {
@@ -890,7 +890,7 @@
       },
       "id": "comment.stamp",
       "label": "Add a stamp",
-      "labelKo": null,
+      "labelKo": "스탬프 추가",
       "location": []
     },
     {
@@ -900,7 +900,7 @@
       },
       "id": "comment.export",
       "label": "Export all comments to data file…",
-      "labelKo": null,
+      "labelKo": "모든 주석을 데이터 파일로 내보내기…",
       "location": []
     },
     {
@@ -910,7 +910,7 @@
       },
       "id": "comment.hide_all",
       "label": "Hide all comments",
-      "labelKo": null,
+      "labelKo": "모든 주석 숨기기",
       "location": []
     },
     {
@@ -920,7 +920,7 @@
       },
       "id": "comment.summarize",
       "label": "Summarize comments",
-      "labelKo": null,
+      "labelKo": "주석 요약",
       "location": []
     },
     {
@@ -930,7 +930,7 @@
       },
       "id": "form.import_data",
       "label": "Import form data…",
-      "labelKo": null,
+      "labelKo": "양식 데이터 가져오기…",
       "location": []
     },
     {
@@ -940,7 +940,7 @@
       },
       "id": "form.export_data",
       "label": "Export form data…",
-      "labelKo": null,
+      "labelKo": "양식 데이터 내보내기…",
       "location": []
     },
     {
@@ -950,7 +950,7 @@
       },
       "id": "standards.pdfa",
       "label": "PDF/A…",
-      "labelKo": null,
+      "labelKo": "PDF/A…",
       "location": []
     },
     {
@@ -960,7 +960,7 @@
       },
       "id": "actions.wizard",
       "label": "Action Wizard…",
-      "labelKo": null,
+      "labelKo": "동작 마법사…",
       "location": []
     },
     {
@@ -970,7 +970,7 @@
       },
       "id": "actions.distribution",
       "label": "Prepare for distribution…",
-      "labelKo": null,
+      "labelKo": "배포 준비…",
       "location": []
     },
     {
@@ -980,7 +980,7 @@
       },
       "id": "actions.optimize_scans",
       "label": "Optimize scanned documents…",
-      "labelKo": null,
+      "labelKo": "스캔한 문서 최적화…",
       "location": []
     },
     {
@@ -990,7 +990,7 @@
       },
       "id": "doc.compare",
       "label": "Compare files…",
-      "labelKo": null,
+      "labelKo": "파일 비교…",
       "location": []
     },
     {
@@ -1000,7 +1000,7 @@
       },
       "id": "form.detect",
       "label": "Detect form fields",
-      "labelKo": null,
+      "labelKo": "양식 필드 감지",
       "location": []
     },
     {
@@ -1010,7 +1010,7 @@
       },
       "id": "form.merge_data",
       "label": "Merge data files into spreadsheet…",
-      "labelKo": null,
+      "labelKo": "데이터 파일을 스프레드시트로 병합…",
       "location": []
     },
     {
@@ -1020,7 +1020,7 @@
       },
       "id": "form.flatten",
       "label": "Flatten form fields",
-      "labelKo": null,
+      "labelKo": "양식 필드 평면화",
       "location": []
     },
     {
@@ -1030,7 +1030,7 @@
       },
       "id": "form.prepare",
       "label": "Prepare a form",
-      "labelKo": null,
+      "labelKo": "양식 준비",
       "location": []
     },
     {
@@ -1040,7 +1040,7 @@
       },
       "id": "form.tab_order.row",
       "label": "Tab order: by rows",
-      "labelKo": null,
+      "labelKo": "탭 순서: 행 기준",
       "location": []
     },
     {
@@ -1050,7 +1050,7 @@
       },
       "id": "form.tab_order.column",
       "label": "Tab order: by columns",
-      "labelKo": null,
+      "labelKo": "탭 순서: 열 기준",
       "location": []
     },
     {
@@ -1060,7 +1060,7 @@
       },
       "id": "form.tab_order.structure",
       "label": "Tab order: by document structure",
-      "labelKo": null,
+      "labelKo": "탭 순서: 문서 구조 기준",
       "location": []
     },
     {
@@ -1070,7 +1070,7 @@
       },
       "id": "edit.text",
       "label": "Add text",
-      "labelKo": null,
+      "labelKo": "텍스트 추가",
       "location": []
     },
     {
@@ -1080,7 +1080,7 @@
       },
       "id": "edit.edit_text",
       "label": "Edit text & images",
-      "labelKo": null,
+      "labelKo": "텍스트 및 이미지 편집",
       "location": []
     },
     {
@@ -1090,7 +1090,7 @@
       },
       "id": "edit.link",
       "label": "Add or edit links",
-      "labelKo": null,
+      "labelKo": "링크 추가 또는 편집",
       "location": []
     },
     {
@@ -1100,7 +1100,7 @@
       },
       "id": "edit.links_from_urls",
       "label": "Create links from URLs",
-      "labelKo": null,
+      "labelKo": "URL에서 링크 만들기",
       "location": []
     },
     {
@@ -1110,7 +1110,7 @@
       },
       "id": "edit.remove_links",
       "label": "Remove all links",
-      "labelKo": null,
+      "labelKo": "모든 링크 제거",
       "location": []
     },
     {
@@ -1120,7 +1120,7 @@
       },
       "id": "edit.bates",
       "label": "Add Bates numbering…",
-      "labelKo": null,
+      "labelKo": "베이츠 번호 추가…",
       "location": []
     },
     {
@@ -1130,7 +1130,7 @@
       },
       "id": "edit.image",
       "label": "Add image…",
-      "labelKo": null,
+      "labelKo": "이미지 추가…",
       "location": []
     },
     {
@@ -1140,7 +1140,7 @@
       },
       "id": "redact.mark",
       "label": "Redact text and images",
-      "labelKo": null,
+      "labelKo": "텍스트 및 이미지 교정",
       "location": []
     },
     {
@@ -1150,7 +1150,7 @@
       },
       "id": "redact.pages",
       "label": "Redact pages…",
-      "labelKo": null,
+      "labelKo": "페이지 교정…",
       "location": []
     },
     {
@@ -1160,7 +1160,7 @@
       },
       "id": "redact.search",
       "label": "Find text and redact…",
-      "labelKo": null,
+      "labelKo": "텍스트 찾아 교정…",
       "location": []
     },
     {
@@ -1170,7 +1170,7 @@
       },
       "id": "redact.properties",
       "label": "Redaction properties…",
-      "labelKo": null,
+      "labelKo": "교정 속성…",
       "location": []
     },
     {
@@ -1180,7 +1180,7 @@
       },
       "id": "redact.apply",
       "label": "Apply redactions…",
-      "labelKo": null,
+      "labelKo": "교정 적용…",
       "location": []
     },
     {
@@ -1190,7 +1190,7 @@
       },
       "id": "redact.clear",
       "label": "Clear redaction marks",
-      "labelKo": null,
+      "labelKo": "교정 표시 지우기",
       "location": []
     },
     {
@@ -1200,7 +1200,7 @@
       },
       "id": "protect.remove_hidden",
       "label": "Remove hidden information…",
-      "labelKo": null,
+      "labelKo": "숨겨진 정보 제거…",
       "location": []
     },
     {
@@ -1210,7 +1210,7 @@
       },
       "id": "redact.sanitize",
       "label": "Sanitize document…",
-      "labelKo": null,
+      "labelKo": "문서 정리…",
       "location": []
     },
     {
@@ -1220,7 +1220,7 @@
       },
       "id": "form.field.properties",
       "label": "Field properties…",
-      "labelKo": null,
+      "labelKo": "필드 속성…",
       "location": []
     },
     {
@@ -1230,7 +1230,7 @@
       },
       "id": "form.add.text",
       "label": "Add a text field",
-      "labelKo": null,
+      "labelKo": "텍스트 필드 추가",
       "location": []
     },
     {
@@ -1240,7 +1240,7 @@
       },
       "id": "form.add.checkbox",
       "label": "Add a checkbox",
-      "labelKo": null,
+      "labelKo": "확인란 추가",
       "location": []
     },
     {
@@ -1250,7 +1250,7 @@
       },
       "id": "form.add.radio",
       "label": "Add a radio button",
-      "labelKo": null,
+      "labelKo": "라디오 단추 추가",
       "location": []
     },
     {
@@ -1260,7 +1260,7 @@
       },
       "id": "form.add.combo",
       "label": "Add a drop-down list",
-      "labelKo": null,
+      "labelKo": "드롭다운 목록 추가",
       "location": []
     },
     {
@@ -1270,7 +1270,7 @@
       },
       "id": "form.add.list",
       "label": "Add a list box",
-      "labelKo": null,
+      "labelKo": "목록 상자 추가",
       "location": []
     },
     {
@@ -1280,7 +1280,7 @@
       },
       "id": "form.add.button",
       "label": "Add a button",
-      "labelKo": null,
+      "labelKo": "버튼 추가",
       "location": []
     },
     {
@@ -1290,7 +1290,7 @@
       },
       "id": "form.add.image",
       "label": "Add an image field",
-      "labelKo": null,
+      "labelKo": "이미지 필드 추가",
       "location": []
     },
     {
@@ -1300,7 +1300,7 @@
       },
       "id": "form.add.date",
       "label": "Add a date field",
-      "labelKo": null,
+      "labelKo": "날짜 필드 추가",
       "location": []
     },
     {
@@ -1310,7 +1310,7 @@
       },
       "id": "form.add.signature",
       "label": "Add a digital signature field",
-      "labelKo": null,
+      "labelKo": "디지털 서명 필드 추가",
       "location": []
     },
     {
@@ -1320,7 +1320,7 @@
       },
       "id": "sign.digital",
       "label": "Digitally sign",
-      "labelKo": null,
+      "labelKo": "디지털 서명",
       "location": []
     },
     {
@@ -1330,7 +1330,7 @@
       },
       "id": "sign.certify",
       "label": "Certify (visible signature)",
-      "labelKo": null,
+      "labelKo": "인증(보이는 서명)",
       "location": []
     },
     {
@@ -1340,7 +1340,7 @@
       },
       "id": "sign.certify_invisible",
       "label": "Certify (invisible signature)",
-      "labelKo": null,
+      "labelKo": "인증(보이지 않는 서명)",
       "location": []
     },
     {
@@ -1350,7 +1350,7 @@
       },
       "id": "sign.validate",
       "label": "Validate all signatures",
-      "labelKo": null,
+      "labelKo": "모든 서명 검증",
       "location": []
     },
     {
@@ -1360,7 +1360,7 @@
       },
       "id": "sign.panel",
       "label": "Signatures panel",
-      "labelKo": null,
+      "labelKo": "서명 패널",
       "location": [
         "View"
       ]
@@ -1372,7 +1372,7 @@
       },
       "id": "sign.fill.text",
       "label": "Fill & Sign: add text",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 텍스트 추가",
       "location": []
     },
     {
@@ -1382,7 +1382,7 @@
       },
       "id": "sign.fill.check",
       "label": "Fill & Sign: checkmark",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 확인 표시",
       "location": []
     },
     {
@@ -1392,7 +1392,7 @@
       },
       "id": "sign.fill.cross",
       "label": "Fill & Sign: cross",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 가위표",
       "location": []
     },
     {
@@ -1402,7 +1402,7 @@
       },
       "id": "sign.fill.dot",
       "label": "Fill & Sign: dot",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 점",
       "location": []
     },
     {
@@ -1412,7 +1412,7 @@
       },
       "id": "sign.fill.line",
       "label": "Fill & Sign: line",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 선",
       "location": []
     },
     {
@@ -1422,7 +1422,7 @@
       },
       "id": "sign.fill.date",
       "label": "Fill & Sign: date",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 날짜",
       "location": []
     },
     {
@@ -1432,7 +1432,7 @@
       },
       "id": "sign.fill.signature",
       "label": "Fill & Sign: sign",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 서명",
       "location": []
     },
     {
@@ -1442,7 +1442,7 @@
       },
       "id": "sign.fill.initials",
       "label": "Fill & Sign: initials",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 이니셜",
       "location": []
     },
     {
@@ -1452,7 +1452,7 @@
       },
       "id": "sign.fill.signature.change",
       "label": "Fill & Sign: change signature",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 서명 변경",
       "location": []
     },
     {
@@ -1462,7 +1462,7 @@
       },
       "id": "sign.fill.signature.remove",
       "label": "Fill & Sign: remove saved signature",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 저장된 서명 제거",
       "location": []
     },
     {
@@ -1472,7 +1472,7 @@
       },
       "id": "sign.fill.initials.remove",
       "label": "Fill & Sign: remove saved initials",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 저장된 이니셜 제거",
       "location": []
     },
     {
@@ -1482,7 +1482,7 @@
       },
       "id": "sign.fill.initials.change",
       "label": "Fill & Sign: change initials",
-      "labelKo": null,
+      "labelKo": "채우기 및 서명: 이니셜 변경",
       "location": []
     },
     {
@@ -1492,7 +1492,7 @@
       },
       "id": "export.image",
       "label": "Export to image…",
-      "labelKo": null,
+      "labelKo": "이미지로 내보내기…",
       "location": [
         "File"
       ]
@@ -1504,7 +1504,7 @@
       },
       "id": "optimize.reduce",
       "label": "Reduce file size…",
-      "labelKo": null,
+      "labelKo": "파일 크기 줄이기…",
       "location": [
         "File"
       ]
@@ -1516,7 +1516,7 @@
       },
       "id": "optimize.advanced",
       "label": "Optimize PDF…",
-      "labelKo": null,
+      "labelKo": "PDF 최적화…",
       "location": [
         "File"
       ]
@@ -1528,7 +1528,7 @@
       },
       "id": "export.text",
       "label": "Export to text…",
-      "labelKo": null,
+      "labelKo": "텍스트로 내보내기…",
       "location": [
         "File"
       ]
@@ -1540,7 +1540,7 @@
       },
       "id": "export.docx",
       "label": "Export to Word…",
-      "labelKo": null,
+      "labelKo": "Word로 내보내기…",
       "location": [
         "File"
       ]
@@ -1552,7 +1552,7 @@
       },
       "id": "export.pptx",
       "label": "Export to PowerPoint…",
-      "labelKo": null,
+      "labelKo": "PowerPoint로 내보내기…",
       "location": [
         "File"
       ]
@@ -1564,7 +1564,7 @@
       },
       "id": "export.html",
       "label": "Export to HTML…",
-      "labelKo": null,
+      "labelKo": "HTML로 내보내기…",
       "location": [
         "File"
       ]
@@ -1576,7 +1576,7 @@
       },
       "id": "export.rtf",
       "label": "Export to RTF…",
-      "labelKo": null,
+      "labelKo": "RTF로 내보내기…",
       "location": [
         "File"
       ]
@@ -1588,7 +1588,7 @@
       },
       "id": "app.preferences",
       "label": "Preferences…",
-      "labelKo": null,
+      "labelKo": "환경설정…",
       "location": [
         "Edit"
       ]
@@ -1600,7 +1600,7 @@
       },
       "id": "tools.js_console",
       "label": "JavaScript console…",
-      "labelKo": null,
+      "labelKo": "JavaScript 콘솔…",
       "location": []
     },
     {
@@ -1610,7 +1610,7 @@
       },
       "id": "tools.document_js",
       "label": "Document JavaScripts…",
-      "labelKo": null,
+      "labelKo": "문서 JavaScript…",
       "location": []
     },
     {
@@ -1620,7 +1620,7 @@
       },
       "id": "ocr.recognize",
       "label": "Recognize text…",
-      "labelKo": null,
+      "labelKo": "텍스트 인식…",
       "location": []
     },
     {
@@ -1630,7 +1630,7 @@
       },
       "id": "ocr.enhance_camera",
       "label": "Enhance camera image",
-      "labelKo": null,
+      "labelKo": "카메라 이미지 개선",
       "location": []
     },
     {
@@ -1640,7 +1640,7 @@
       },
       "id": "ocr.recognize_batch",
       "label": "Recognize text in multiple files…",
-      "labelKo": null,
+      "labelKo": "여러 파일의 텍스트 인식…",
       "location": []
     },
     {
@@ -1650,7 +1650,7 @@
       },
       "id": "a11y.check",
       "label": "Check for accessibility…",
-      "labelKo": null,
+      "labelKo": "접근성 검사…",
       "location": []
     },
     {
@@ -1660,7 +1660,7 @@
       },
       "id": "a11y.find_untagged",
       "label": "Find untagged content",
-      "labelKo": null,
+      "labelKo": "태그 없는 콘텐츠 찾기",
       "location": []
     },
     {
@@ -1670,7 +1670,7 @@
       },
       "id": "a11y.autotag",
       "label": "Automatically tag PDF",
-      "labelKo": null,
+      "labelKo": "PDF 자동 태그",
       "location": []
     },
     {
@@ -1680,7 +1680,7 @@
       },
       "id": "a11y.report",
       "label": "Open accessibility report",
-      "labelKo": null,
+      "labelKo": "접근성 보고서 열기",
       "location": []
     },
     {
@@ -1690,7 +1690,7 @@
       },
       "id": "a11y.reading_options",
       "label": "Change reading options…",
-      "labelKo": null,
+      "labelKo": "읽기 옵션 변경…",
       "location": []
     },
     {
@@ -1700,7 +1700,7 @@
       },
       "id": "a11y.alt_text",
       "label": "Add alternate text…",
-      "labelKo": null,
+      "labelKo": "대체 텍스트 추가…",
       "location": []
     },
     {
@@ -1710,7 +1710,7 @@
       },
       "id": "a11y.autotag_fields",
       "label": "Tag form fields",
-      "labelKo": null,
+      "labelKo": "양식 필드 태그 지정",
       "location": []
     },
     {
@@ -1720,7 +1720,7 @@
       },
       "id": "a11y.tags",
       "label": "Tags panel",
-      "labelKo": null,
+      "labelKo": "태그 패널",
       "location": []
     },
     {
@@ -1730,7 +1730,7 @@
       },
       "id": "export.all_images",
       "label": "Export all images…",
-      "labelKo": null,
+      "labelKo": "이미지 모두 내보내기…",
       "location": [
         "File"
       ]
@@ -1742,7 +1742,7 @@
       },
       "id": "edit.header_footer",
       "label": "Add header & footer…",
-      "labelKo": null,
+      "labelKo": "머리글 및 바닥글 추가…",
       "location": []
     },
     {
@@ -1752,7 +1752,7 @@
       },
       "id": "edit.header_footer.update",
       "label": "Update header & footer…",
-      "labelKo": null,
+      "labelKo": "머리글 및 바닥글 업데이트…",
       "location": []
     },
     {
@@ -1762,7 +1762,7 @@
       },
       "id": "edit.header_footer.remove",
       "label": "Remove header & footer",
-      "labelKo": null,
+      "labelKo": "머리글 및 바닥글 제거",
       "location": []
     },
     {
@@ -1772,7 +1772,7 @@
       },
       "id": "edit.watermark",
       "label": "Add watermark…",
-      "labelKo": null,
+      "labelKo": "워터마크 추가…",
       "location": []
     },
     {
@@ -1782,7 +1782,7 @@
       },
       "id": "edit.watermark.update",
       "label": "Update watermark…",
-      "labelKo": null,
+      "labelKo": "워터마크 업데이트…",
       "location": []
     },
     {
@@ -1792,7 +1792,7 @@
       },
       "id": "edit.watermark.remove",
       "label": "Remove watermark",
-      "labelKo": null,
+      "labelKo": "워터마크 제거",
       "location": []
     },
     {
@@ -1802,7 +1802,7 @@
       },
       "id": "edit.background",
       "label": "Add background…",
-      "labelKo": null,
+      "labelKo": "배경 추가…",
       "location": []
     },
     {
@@ -1812,7 +1812,7 @@
       },
       "id": "edit.background.update",
       "label": "Update background…",
-      "labelKo": null,
+      "labelKo": "배경 업데이트…",
       "location": []
     },
     {
@@ -1822,7 +1822,7 @@
       },
       "id": "edit.background.remove",
       "label": "Remove background",
-      "labelKo": null,
+      "labelKo": "배경 제거",
       "location": []
     },
     {
@@ -1832,7 +1832,7 @@
       },
       "id": "protect.password",
       "label": "Protect using password…",
-      "labelKo": null,
+      "labelKo": "암호로 보호…",
       "location": [
         "File"
       ]
@@ -1844,7 +1844,7 @@
       },
       "id": "protect.remove",
       "label": "Remove security",
-      "labelKo": null,
+      "labelKo": "보안 제거",
       "location": [
         "File"
       ]
@@ -1856,7 +1856,7 @@
       },
       "id": "protect.unlock",
       "label": "Enter permissions password…",
-      "labelKo": null,
+      "labelKo": "권한 암호 입력…",
       "location": []
     },
     {
@@ -1866,7 +1866,7 @@
       },
       "id": "protect.properties",
       "label": "Security properties…",
-      "labelKo": null,
+      "labelKo": "보안 속성…",
       "location": [
         "File"
       ]
@@ -1878,7 +1878,7 @@
       },
       "id": "page.organize",
       "label": "Organize pages",
-      "labelKo": null,
+      "labelKo": "페이지 구성",
       "location": [
         "Pages"
       ]
@@ -1890,7 +1890,7 @@
       },
       "id": "bookmark.add",
       "label": "New bookmark",
-      "labelKo": null,
+      "labelKo": "새 책갈피",
       "location": [
         "Pages"
       ]
@@ -1902,7 +1902,7 @@
       },
       "id": "bookmark.from_structure",
       "label": "New bookmarks from structure",
-      "labelKo": null,
+      "labelKo": "구조에서 새 책갈피 만들기",
       "location": [
         "Pages"
       ]
@@ -1914,7 +1914,7 @@
       },
       "id": "page.rotate",
       "label": "Rotate pages clockwise",
-      "labelKo": null,
+      "labelKo": "페이지를 시계 방향으로 회전",
       "location": [
         "Pages"
       ]
@@ -1926,7 +1926,7 @@
       },
       "id": "page.rotate_ccw",
       "label": "Rotate pages counterclockwise",
-      "labelKo": null,
+      "labelKo": "페이지를 시계 반대 방향으로 회전",
       "location": [
         "Pages"
       ]
@@ -1938,7 +1938,7 @@
       },
       "id": "page.delete",
       "label": "Delete pages",
-      "labelKo": null,
+      "labelKo": "페이지 삭제",
       "location": [
         "Pages"
       ]
@@ -1950,7 +1950,7 @@
       },
       "id": "page.insert_blank",
       "label": "Insert blank page",
-      "labelKo": null,
+      "labelKo": "빈 페이지 삽입",
       "location": [
         "Pages"
       ]
@@ -1962,7 +1962,7 @@
       },
       "id": "page.rotate_dialog",
       "label": "Rotate pages…",
-      "labelKo": null,
+      "labelKo": "페이지 회전…",
       "location": [
         "Pages"
       ]
@@ -1974,7 +1974,7 @@
       },
       "id": "page.duplicate",
       "label": "Duplicate pages",
-      "labelKo": null,
+      "labelKo": "페이지 복제",
       "location": [
         "Pages"
       ]
@@ -1986,7 +1986,7 @@
       },
       "id": "page.reverse",
       "label": "Reverse pages",
-      "labelKo": null,
+      "labelKo": "페이지 순서 뒤집기",
       "location": [
         "Pages"
       ]
@@ -1998,7 +1998,7 @@
       },
       "id": "page.crop",
       "label": "Crop pages",
-      "labelKo": null,
+      "labelKo": "페이지 자르기",
       "location": [
         "Pages"
       ]
@@ -2010,7 +2010,7 @@
       },
       "id": "page.boxes",
       "label": "Set page boxes…",
-      "labelKo": null,
+      "labelKo": "페이지 상자 설정…",
       "location": [
         "Pages"
       ]
@@ -2022,7 +2022,7 @@
       },
       "id": "page.insert",
       "label": "Insert pages from file…",
-      "labelKo": null,
+      "labelKo": "파일에서 페이지 삽입…",
       "location": [
         "Pages"
       ]
@@ -2034,7 +2034,7 @@
       },
       "id": "page.replace",
       "label": "Replace pages…",
-      "labelKo": null,
+      "labelKo": "페이지 바꾸기…",
       "location": [
         "Pages"
       ]
@@ -2046,7 +2046,7 @@
       },
       "id": "page.extract",
       "label": "Extract pages…",
-      "labelKo": null,
+      "labelKo": "페이지 추출…",
       "location": [
         "Pages"
       ]
@@ -2058,7 +2058,7 @@
       },
       "id": "page.split",
       "label": "Split document…",
-      "labelKo": null,
+      "labelKo": "문서 분할…",
       "location": [
         "Pages"
       ]
@@ -2070,7 +2070,7 @@
       },
       "id": "page.number",
       "label": "Number pages…",
-      "labelKo": null,
+      "labelKo": "페이지 번호 매기기…",
       "location": [
         "Pages"
       ]
@@ -2082,7 +2082,7 @@
       },
       "id": "help.shortcuts",
       "label": "Keyboard shortcuts",
-      "labelKo": null,
+      "labelKo": "키보드 단축키",
       "location": [
         "Help"
       ]
@@ -2094,7 +2094,7 @@
       },
       "id": "help.discord",
       "label": "Join the ArtCraft Discord",
-      "labelKo": null,
+      "labelKo": "ArtCraft Discord 참여하기",
       "location": [
         "Help"
       ]
@@ -2106,7 +2106,7 @@
       },
       "id": "help.app_page",
       "label": "PdfCraft web page",
-      "labelKo": null,
+      "labelKo": "PdfCraft 웹 페이지",
       "location": [
         "Help"
       ]
@@ -2118,7 +2118,7 @@
       },
       "id": "help.github",
       "label": "PdfCraft on GitHub",
-      "labelKo": null,
+      "labelKo": "GitHub의 PdfCraft",
       "location": [
         "Help"
       ]
@@ -2130,7 +2130,7 @@
       },
       "id": "help.website",
       "label": "ArtCraft website",
-      "labelKo": null,
+      "labelKo": "ArtCraft 웹사이트",
       "location": [
         "Help"
       ]
@@ -2142,7 +2142,7 @@
       },
       "id": "help.check_updates",
       "label": "Check for updates…",
-      "labelKo": null,
+      "labelKo": "업데이트 확인…",
       "location": [
         "Help"
       ]
@@ -2154,7 +2154,7 @@
       },
       "id": "help.about",
       "label": "About PdfCraft",
-      "labelKo": null,
+      "labelKo": "PdfCraft 정보",
       "location": [
         "Help"
       ]

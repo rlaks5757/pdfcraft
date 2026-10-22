@@ -56,7 +56,7 @@ const AR_DAYS: [&str; 7] = ["الأحد", "الاثنين", "الثلاثاء", 
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 23] = [
+pub static DATE_LANGUAGES: [DateLanguage; 24] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -74,6 +74,15 @@ pub static DATE_LANGUAGES: [DateLanguage; 23] = [
         months_short: CJK_MONTHS,
         days: ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"],
         days_short: ["日", "月", "火", "水", "木", "金", "土"],
+    },
+    DateLanguage {
+        code: "ko",
+        name: "한국어",
+        months: CJK_MONTHS,
+        months_with_day: None,
+        months_short: CJK_MONTHS,
+        days: ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
+        days_short: ["일", "월", "화", "수", "목", "금", "토"],
     },
     DateLanguage {
         code: "zh-hans",

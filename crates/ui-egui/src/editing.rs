@@ -1077,7 +1077,7 @@ pub(crate) fn download(cmds: &[&str], name: &str, bytes: &[u8]) -> Result<(), St
     // Host lock: a save goes to the host as a message, never to the user's disk, unless the
     // host's policy turned on a command this file is for (`cmds`: any of them).
     if crate::HOST_LOCK && !crate::host_lock::downloads_allow(cmds) {
-        return Err(crate::i18n::fmt(crate::i18n::t(crate::host_lock::HOST_OFF), &[]));
+        return Err(crate::host_lock::host_off_text().to_string());
     }
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");

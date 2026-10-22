@@ -516,13 +516,15 @@ pub fn with_policy(mut own: Ownership, overrides: Vec<(String, bool)>) -> Owners
 /// a viewer's and a builder's documents. Built from the engine's command table, and a test holds
 /// the checked-in file to it.
 pub fn commands_manifest() -> String {
+    // The Korean catalogue is the one source of every label the admin screen shows in Korean.
+    let ko = crate::i18n::Lang::from_code("ko").unwrap_or(crate::i18n::Lang::EN);
     let commands: Vec<serde_json::Value> = COMMANDS
         .iter()
         .map(|c| {
             serde_json::json!({
                 "id": c.id,
                 "label": c.label,
-                "labelKo": serde_json::Value::Null,
+                "labelKo": crate::i18n::tr(ko, c.label),
                 "location": c.menu.map(|m| vec![m]).unwrap_or_default(),
                 "grades": {
                     "viewer": grade(c.id, EditScope::Viewer).name(),
@@ -561,13 +563,19 @@ pub(crate) fn open_in_ppm_screen(ui: &mut egui::Ui) {
 
 use crate::PdfCraftApp;
 
-/// What a refused action says. Not a `tl!` literal, so the catalogs need no entry: a language
-/// without one shows this English text.
+/// What a refused action says. Not a `tl!` literal, so the 23 other catalogs need no entry for a
+/// text only a host build shows; a host build starts in Korean, so the Korean text is kept here.
 pub(crate) const HOST_OFF: &str = "The administrator has turned this off.";
+const HOST_OFF_KO: &str = "관리자가 이 기능을 꺼 두었습니다.";
+
+/// [`HOST_OFF`] in the current language: Korean, or English in any other.
+pub(crate) fn host_off_text() -> &'static str {
+    if crate::i18n::current().code() == "ko" { HOST_OFF_KO } else { HOST_OFF }
+}
 
 impl PdfCraftApp {
     pub(crate) fn notify_host_off(&mut self) {
-        self.notify_fmt(HOST_OFF, &[]);
+        self.notify(host_off_text().to_string());
     }
 
     /// This build is made for an embedding page (see [`HOST_LOCK`]).
@@ -1119,6 +1127,29 @@ mod tests {
 
     /// `ppm/commands.json` is what the admin screen reads; it must say what the table says.
     /// `UPDATE_COMMANDS_JSON=1 cargo test -p pdfcraft-ui-egui --lib commands_json` rewrites it.
+    /// A refused action says so in Korean in a Korean UI and in English in any other.
+    #[test]
+    fn the_refusal_text_follows_the_language() {
+        use crate::i18n::{set_current, Lang};
+        set_current(Lang::from_code("ko").unwrap());
+        assert_eq!(host_off_text(), HOST_OFF_KO);
+        set_current(Lang::EN);
+        assert_eq!(host_off_text(), HOST_OFF);
+    }
+
+    /// Every command in the manifest carries a Korean label, so the admin screen never shows an
+    /// English-only row. A few labels are a bare term that Korean keeps as is (PDF/A).
+    #[test]
+    fn every_label_ko_is_filled() {
+        let manifest: serde_json::Value = serde_json::from_str(&commands_manifest()).unwrap();
+        let hangul = |s: &str| s.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c));
+        for c in manifest["commands"].as_array().unwrap() {
+            let (id, label, ko) = (c["id"].as_str().unwrap(), c["label"].as_str().unwrap(), c["labelKo"].as_str().unwrap_or_default());
+            assert!(!ko.trim().is_empty(), "{id}: labelKo is empty");
+            assert!(hangul(ko) || ko == label, "{id}: labelKo is not Korean: {ko}");
+        }
+    }
+
     #[test]
     fn the_checked_in_commands_json_matches_the_table() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ppm/commands.json");

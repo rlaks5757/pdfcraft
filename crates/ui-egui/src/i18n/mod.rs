@@ -147,9 +147,11 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 23] = [
+pub static LANGUAGES: [LangInfo; 24] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    // Korean; every `ko-*` locale (`ko-KR`, `ko_KR.UTF-8`) resolves here. A PPM (host-lock) build starts in it.
+    LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
     LangInfo {
         code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
@@ -338,7 +340,16 @@ pub fn system_lang() -> Lang {
         return Lang::EN;
     }
     static SYSTEM: OnceLock<Lang> = OnceLock::new();
-    *SYSTEM.get_or_init(detect_system_lang)
+    *SYSTEM.get_or_init(|| auto_language(crate::HOST_LOCK, detect_system_lang))
+}
+
+/// The language "auto" resolves to. A PPM (host-lock) build always starts in Korean whatever the
+/// browser says; the upstream build follows the system.
+fn auto_language(host_lock: bool, detect: impl FnOnce() -> Lang) -> Lang {
+    if host_lock {
+        return Lang::from_code("ko").unwrap_or(Lang::EN);
+    }
+    detect()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1029,6 +1040,50 @@ mod tests {
         assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
         let missing: Vec<_> = literals.iter().filter(|label| !has(JA(), label)).collect();
         assert!(missing.is_empty(), "untranslated Japanese UI literals: {missing:#?}");
+    }
+
+    /// Korean translates every registered command and every All tools group, section and item.
+    #[test]
+    fn korean_covers_commands_and_catalogue() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        for command in pdfcraft_engine::commands::COMMANDS {
+            assert!(has(ko, command.label), "missing command: {}", command.label);
+        }
+        for group in pdfcraft_engine::catalog::TOOL_GROUPS {
+            assert!(has(ko, group.label), "missing group: {}", group.label);
+            for section in group.sections {
+                assert!(has(ko, section.title), "missing section: {}", section.title);
+                for item in section.items {
+                    assert!(has(ko, item.label), "missing item: {}", item.label);
+                }
+            }
+        }
+    }
+
+    /// Korean translates every `tl!("…")` literal in the UI source.
+    #[test]
+    fn korean_covers_ui_literals() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        let literals = ui_literals();
+        let missing: Vec<_> = literals.iter().filter(|label| !has(ko, label)).collect();
+        assert!(missing.is_empty(), "untranslated Korean UI literals: {missing:#?}");
+    }
+
+    /// Korean locale tags resolve to the Korean catalogue.
+    #[test]
+    fn korean_locale_tags_resolve() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        assert_eq!(lang_from_tag("ko-KR"), Some(ko));
+        assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(ko));
+    }
+
+    /// A host-lock build starts in Korean whatever the system says; the upstream build follows it.
+    #[test]
+    fn host_lock_builds_start_in_korean() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        assert_eq!(auto_language(true, JA), ko);
+        assert_eq!(auto_language(true, || Lang::EN), ko);
+        assert_eq!(auto_language(false, JA), JA());
     }
 
     /// Italian translates every registered command and every All tools group, section and item.
