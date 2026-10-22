@@ -426,13 +426,16 @@ pub fn commands_manifest() -> String {
             serde_json::json!({
                 "id": c.id,
                 "label": c.label,
-                "menu": c.menu,
-                "viewer": grade(c.id, EditScope::Viewer).name(),
-                "builder": grade(c.id, EditScope::All).name(),
+                "labelKo": serde_json::Value::Null,
+                "location": c.menu.map(|m| vec![m]).unwrap_or_default(),
+                "grades": {
+                    "viewer": grade(c.id, EditScope::Viewer).name(),
+                    "builder": grade(c.id, EditScope::All).name(),
+                },
             })
         })
         .collect();
-    let mut out = serde_json::to_string_pretty(&serde_json::json!({ "app": "pdfcraft", "commands": commands })).unwrap_or_default();
+    let mut out = serde_json::to_string_pretty(&serde_json::json!({ "app": "pdf", "schema": 1, "commands": commands })).unwrap_or_default();
     out.push('\n');
     out
 }
