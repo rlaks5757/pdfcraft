@@ -372,3 +372,78 @@ fn full_export_is_unchanged_by_the_database_form() {
     let x = export_xfdf(&src, true, false, "a.pdf");
     assert!(!x.contains("imagedata") && !x.contains("trn-custom-data"), "{x}");
 }
+
+/// The private keys that decide how a PdfCraft annotation is drawn, compared on the destination
+/// dictionary itself: an export that leaves a key out would still compare equal to itself.
+fn look_keys(doc: &Document, nm: &str) -> Vec<(String, String)> {
+    let d = doc.get(find_by_name(doc, nm).unwrap()).as_dict().unwrap().clone();
+    let mut out = Vec::new();
+    for key in ["Name", "IT", "PCStamp", "PCByLine", "PCFillSign", "PCOutline", "PCPictureImage", "BE", "InkList", "Subj"] {
+        if let Some(v) = d.get(key.as_bytes()) {
+            out.push((key.to_string(), format!("{:?}", doc.resolve(v))));
+        }
+    }
+    out
+}
+
+#[test]
+fn fork_only_looks_survive_in_the_destination_dictionary() {
+    let mut src = blank();
+    let shapes: Vec<(&str, Shape)> = vec![
+        ("approved", Shape::Stamp { rect: [10.0, 10.0, 150.0, 60.0], stamp: pdfcraft_annot::StampKind::Approved, by: Some("Ada".into()) }),
+        ("check", Shape::Mark { rect: [10.0, 10.0, 30.0, 30.0], mark: pdfcraft_annot::FillMark::Check }),
+        ("typed", Shape::Typewriter { rect: [10.0, 100.0, 200.0, 120.0], font_size: 12.0 }),
+        ("drawn", Shape::Signature { strokes: vec![vec![[10.0, 10.0], [20.0, 30.0], [40.0, 20.0]]] }),
+        ("cloud", Shape::Polygon { vertices: vec![[10.0, 10.0], [60.0, 10.0], [35.0, 50.0]], cloud: true }),
+    ];
+    let mut dst = blank();
+    for (id, shape) in shapes {
+        add(&mut src, 0, shape, "x", id);
+        round_trip(&src, &mut dst, id);
+        let (a, b) = (look_keys(&src, id), look_keys(&dst, id));
+        assert!(!a.is_empty());
+        assert_eq!(a, b, "{id}");
+        let r = find_by_name(&dst, id).unwrap();
+        assert!(dst.get(r).as_dict().unwrap().get(b"AP").is_some(), "{id} has no appearance");
+    }
+}
+
+#[test]
+fn a_remote_redaction_mark_is_never_hidden() {
+    let mut src = blank();
+    let shape = Shape::Redact {
+        quads: vec![[10.0, 110.0, 90.0, 110.0, 10.0, 100.0, 90.0, 100.0]],
+        overlay: String::new(),
+        look: pdfcraft_annot::OverlayLook::default(),
+    };
+    add(&mut src, 0, shape, "", "red");
+    let x = export_annotation(&src, "red").unwrap().xfdf.replace("flags=\"print\"", "flags=\"print,hidden,noview\"");
+    assert!(x.contains("hidden"), "{x}");
+    let mut dst = blank();
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "red", author_id: "u", xfdf: &x }], &[]).failed, vec![]);
+    let f = dst.get(find_by_name(&dst, "red").unwrap()).as_dict().unwrap().int(b"F").unwrap();
+    assert_eq!(f & (1 | 2 | 32), 0, "flags {f}");
+}
+
+/// With `XFDF_DUMP_DIR` set, writes sample items (`<id>.json`: id, page, kind, xfdf) for checking
+/// against the server's own parser (`packages/contracts/src/xfdf.ts`). Does nothing otherwise.
+#[test]
+fn dump_samples_for_the_server_parser() {
+    let Ok(dir) = std::env::var("XFDF_DUMP_DIR") else { return };
+    let mut src = blank();
+    let note = add(&mut src, 0, Shape::Note { at: [100.0, 500.0], icon: NoteIcon::Comment }, "q", "note");
+    add_reply(&mut src, 0, note, "a", "Bob", &meta("reply")).unwrap();
+    set_review_state(&mut src, 0, note, pdfcraft_annot::ReviewState::Accepted, "Bob", &meta("status")).unwrap();
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    add_text_replacement(&mut src, 1, &quads, "new", "Ada", &style, &style, &meta("strike"), &meta("caret")).unwrap();
+    stamp(&mut src, 1, "stamp", Some(r#"{"templateId":"3f2b1c1e-8f7d-4c53-a0a5-0a0a0a0a0a0a","version":2,"values":{},"sig":"abc"}"#));
+    let tb = add(&mut src, 0, Shape::TextBox { rect: [20.0, 200.0, 200.0, 260.0], font_size: 12.0 }, "서명 \"란\" <1>", "box");
+    set_extra(&mut src, 0, tb, "PpmSignRole", "approver").unwrap();
+    add(&mut src, 0, Shape::TextBox { rect: [20.0, 300.0, 200.0, 360.0], font_size: 12.0 }, "한글 상자", "ko");
+    for id in ["note", "reply", "status", "strike", "caret", "stamp", "box", "ko"] {
+        let it = export_annotation(&src, id).unwrap();
+        let json = serde_json::json!({ "annotId": it.annot_id, "page": it.page, "kind": it.kind, "xfdf": it.xfdf });
+        std::fs::write(std::path::Path::new(&dir).join(format!("{id}.json")), json.to_string()).unwrap();
+    }
+}

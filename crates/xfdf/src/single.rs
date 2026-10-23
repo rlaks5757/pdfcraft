@@ -176,10 +176,12 @@ enum Kind {
     Name,
     Nums,
     NumLists,
+    /// A border-effect dictionary (`/BE`): the cloud style of a cloud polygon.
+    Effect,
 }
 
 /// Keys PdfCraft's own annotations carry that XFDF has no field for.
-const FORK_KEYS: [(&str, Kind); 9] = [
+const FORK_KEYS: [(&str, Kind); 10] = [
     ("IT", Kind::Name),
     ("PCStamp", Kind::Bool),
     ("PCByLine", Kind::Text),
@@ -189,6 +191,7 @@ const FORK_KEYS: [(&str, Kind); 9] = [
     ("PCPictureImage", Kind::Bool),
     ("PCPictureSize", Kind::Nums),
     ("PCPictureRotate", Kind::Int),
+    ("BE", Kind::Effect),
 ];
 
 fn num(v: f64) -> Value {
@@ -206,6 +209,13 @@ fn fork_value(doc: &Document, d: &Dict, key: &str, kind: Kind) -> Option<Value> 
         Kind::Text => Value::String(text_of(doc, d, k)?),
         Kind::Name => Value::String(String::from_utf8_lossy(d.name(k)?).into_owned()),
         Kind::Nums => Value::Array(nums_of(doc, d.get(k)).into_iter().map(num).collect()),
+        Kind::Effect => {
+            let be = d.get(k).map(|o| doc.resolve(o))?.as_dict().cloned()?;
+            let mut m = Map::new();
+            m.insert("S".into(), Value::String(String::from_utf8_lossy(be.name(b"S")?).into_owned()));
+            m.insert("I".into(), be.get(b"I").and_then(|i| doc.resolve(i).as_f64()).map_or(Value::Null, num));
+            Value::Object(m)
+        }
         Kind::NumLists => {
             let list = d.get(k).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())?;
             Value::Array(list.iter().map(|g| Value::Array(nums_of(doc, Some(g)).into_iter().map(num).collect())).collect())
@@ -221,6 +231,14 @@ fn fork_object(v: &Value, kind: Kind) -> Option<Object> {
         Kind::Text => PdfString::text(v.as_str()?).into(),
         Kind::Name => Object::name(v.as_str()?),
         Kind::Nums => arr(&nums(v)?),
+        Kind::Effect => {
+            let mut be = Dict::new();
+            be.set(b"S".to_vec(), Object::name(v.get("S")?.as_str()?));
+            if let Some(i) = v.get("I").and_then(Value::as_f64) {
+                be.set(b"I".to_vec(), Object::Int(i as i64));
+            }
+            Object::Dict(be)
+        }
         Kind::NumLists => Object::Array(v.as_array()?.iter().map(|g| nums(g).map(|n| arr(&n))).collect::<Option<Vec<_>>>()?),
     })
 }
@@ -339,6 +357,11 @@ fn place_item(doc: &mut Document, item: &RemoteItem) -> Result<Placed, String> {
         node.attribute("page").and_then(|p| p.parse::<usize>().ok()).and_then(|p| pages.get(p).copied()).ok_or("the page is outside the document")?;
     let mut d = annot_from_xml(node, subtype, page_ref).ok_or("the annotation has no usable rectangle")?;
     d.set(OWNER_KEY.as_bytes().to_vec(), PdfString::text(item.author_id));
+    // As in a file import: a redaction mark someone else made is always shown to the user.
+    if d.name(b"Subtype") == Some(b"Redact".as_slice()) {
+        let flags = d.int(b"F").unwrap_or(0);
+        d.set(b"F".to_vec(), Object::Int(flags & !REDACT_UNSEEN));
+    }
 
     let mut parent = node.attribute("inreplyto").filter(|p| !p.is_empty()).map(str::to_string);
     if let Some(custom) = read_custom(node)
