@@ -363,7 +363,8 @@ fn card(
             for r in &replies {
                 ui.add_space(8.0);
                 let rkey = (r.page, r.index);
-                let (can_edit, can_delete) = reply_rights(doc, r, allowed);
+                // The ownership checks walk the page tree: only the selected card, the one with menus, pays for them.
+                let (can_edit, can_delete) = if selected { reply_rights(doc, r, allowed) } else { (false, false) };
                 let resp = ui.horizontal(|ui| {
                     avatar(ui, t, None, Some(&initials(r.author.as_deref().unwrap_or("?"))), t.text_faint);
                     ui.vertical(|ui| {
