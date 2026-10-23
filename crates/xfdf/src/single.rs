@@ -94,19 +94,64 @@ struct Spot {
     obj: ObjRef,
 }
 
-/// Every annotation named `nm`, in page order.
-fn locate(doc: &Document, nm: &str) -> Vec<Spot> {
-    let mut found = Vec::new();
-    for (page, p) in pdfcraft_model::pages(doc).iter().enumerate() {
-        let list = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-        for (index, a) in list.iter().enumerate() {
-            if let Some(obj) = a.as_ref()
-                && doc.get(obj).as_dict().and_then(|d| text_of(doc, d, b"NM")).as_deref() == Some(nm)
-            {
-                found.push(Spot { page, page_ref: p.obj, index, obj });
+/// A name index over a document's annotations, built once so that looking an annotation up (or
+/// exporting many) doesn't scan every page each time.
+///
+/// Entries are checked against the page when used, so an index stays right while annotations
+/// are replaced, moved or deleted through [`apply_remote_cached`] and [`remove_by_name_in`]; one
+/// built before other changes to the document must be rebuilt.
+pub struct AnnotIndex {
+    pages: Vec<ObjRef>,
+    /// (page index, object) for every annotation with this `/NM`; links, widgets and pop-ups
+    /// are left out, since an item from the server never stands for one of those.
+    by_name: HashMap<String, Vec<(usize, ObjRef)>>,
+    /// The name of every annotation that has one, for `inreplyto`.
+    names: HashMap<ObjRef, String>,
+}
+
+impl AnnotIndex {
+    pub fn new(doc: &Document) -> Self {
+        let pages = pdfcraft_model::pages(doc);
+        let names = annot_names(doc, &pages);
+        let mut by_name: HashMap<String, Vec<(usize, ObjRef)>> = HashMap::new();
+        for (pi, p) in pages.iter().enumerate() {
+            for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+                if let Some(r) = a.as_ref()
+                    && let Some(nm) = names.get(&r)
+                    && !is_server_blind(doc, r)
+                {
+                    by_name.entry(nm.clone()).or_default().push((pi, r));
+                }
             }
         }
+        Self { pages: pages.iter().map(|p| p.obj).collect(), by_name, names }
     }
+
+    fn add(&mut self, nm: &str, page: usize, obj: ObjRef) {
+        let list = self.by_name.entry(nm.into()).or_default();
+        if !list.contains(&(page, obj)) {
+            list.push((page, obj));
+        }
+        self.names.insert(obj, nm.into());
+    }
+}
+
+/// Form widgets, links and pop-ups are not annotations of the server's kind.
+fn is_server_blind(doc: &Document, r: ObjRef) -> bool {
+    doc.get(r).as_dict().and_then(|d| d.name(b"Subtype")).is_some_and(|s| matches!(s, b"Widget" | b"Link" | b"Popup"))
+}
+
+/// Every annotation named `nm`, in page order.
+fn locate(doc: &Document, idx: &AnnotIndex, nm: &str) -> Vec<Spot> {
+    let mut found = Vec::new();
+    for &(page, obj) in idx.by_name.get(nm).map(Vec::as_slice).unwrap_or_default() {
+        let page_ref = idx.pages[page];
+        // An entry whose object has since left the page (replaced, moved, deleted) is stale.
+        if let Some(index) = annots_of(doc, page_ref).iter().position(|e| e.as_ref() == Some(obj)) {
+            found.push(Spot { page, page_ref, index, obj });
+        }
+    }
+    found.sort_by_key(|s| (s.page, s.index));
     found
 }
 
@@ -118,20 +163,29 @@ fn locate(doc: &Document, nm: &str) -> Vec<Spot> {
 /// big stamp picture), [`DataError::Invalid`] (an id longer than the server allows, a reply
 /// whose parent has no `/NM`, or a kind with no XFDF form such as a link).
 pub fn export_annotation(doc: &Document, nm: &str) -> Result<AnnotXfdf, DataError> {
+    export_annotation_in(doc, &AnnotIndex::new(doc), nm)
+}
+
+/// [`export_annotation`] with an index built once for many exports of the same document.
+pub fn export_annotation_in(doc: &Document, idx: &AnnotIndex, nm: &str) -> Result<AnnotXfdf, DataError> {
     if utf16_len(nm) > MAX_ID_LEN {
         return Err(DataError::Invalid("the annotation name is too long".into()));
     }
-    let pages = pdfcraft_model::pages(doc);
-    let names = annot_names(doc, &pages);
-    let Some(spot) = locate(doc, nm).into_iter().next() else { return Err(DataError::NotFound(nm.into())) };
+    let Some(spot) = locate(doc, idx, nm).into_iter().next() else { return Err(DataError::NotFound(nm.into())) };
     let d = doc.get(spot.obj).as_dict().cloned().unwrap_or_default();
     if let Some(parent) = d.get(b"IRT").and_then(Object::as_ref)
-        && !names.contains_key(&parent)
+        && !idx.names.contains_key(&parent)
     {
         return Err(DataError::Invalid("the reply's parent has no name".into()));
     }
+    // A kept picture's size is known before it is encoded: don't encode what can't be sent.
+    if let Some(len) = kept_picture_len(doc, &d)
+        && len.div_ceil(3) * 4 > MAX_XFDF_LEN
+    {
+        return Err(DataError::TooLarge { len: len.div_ceil(3) * 4, max: MAX_XFDF_LEN });
+    }
     let mut element = String::new();
-    let Some(tag) = annot_element(doc, &d, spot.page, &names, true, &mut element) else {
+    let Some(tag) = annot_element(doc, &d, spot.page, &idx.names, true, &mut element) else {
         return Err(DataError::Invalid("this kind of annotation has no XFDF form".into()));
     };
     let xfdf = format!("{PREFIX}{}{SUFFIX}", element.trim_end());
@@ -140,7 +194,24 @@ pub fn export_annotation(doc: &Document, nm: &str) -> Result<AnnotXfdf, DataErro
         return Err(DataError::TooLarge { len, max: MAX_XFDF_LEN });
     }
     let kind = text_of(doc, &d, b"Subj").filter(|s| !s.trim().is_empty()).unwrap_or_else(|| tag.to_string());
-    Ok(AnnotXfdf { annot_id: nm.into(), page: spot.page, kind: kind.chars().take(100).collect(), xfdf })
+    // The server counts UTF-16 units, not characters.
+    let mut kept = 0;
+    let kind: String = kind
+        .chars()
+        .take_while(|c| {
+            kept += c.len_utf16();
+            kept <= 100
+        })
+        .collect();
+    Ok(AnnotXfdf { annot_id: nm.into(), page: spot.page, kind, xfdf })
+}
+
+/// Bytes of the original picture file a stamp keeps, if it keeps one.
+fn kept_picture_len(doc: &Document, d: &Dict) -> Option<usize> {
+    match &*doc.get(d.reference(PICTURE_SOURCE_KEY.as_bytes())?) {
+        Object::Stream(s) => Some(s.raw.len()),
+        _ => None,
+    }
 }
 
 /// The children after the generic ones: the stamp picture and the custom data.
@@ -299,16 +370,37 @@ fn custom_map(doc: &Document, d: &Dict, tag: &str, irt_name: Option<&str>) -> Ma
 /// Remove the annotation `nm` with its pop-up and replies (and theirs), whatever its lock flag
 /// or owner. `true` when something was removed.
 pub fn remove_by_name(doc: &mut Document, nm: &str) -> bool {
+    remove_by_name_in(doc, &AnnotIndex::new(doc), nm)
+}
+
+/// [`remove_by_name`] with an index that is still current ([`AnnotIndex`]).
+pub fn remove_by_name_in(doc: &mut Document, idx: &AnnotIndex, nm: &str) -> bool {
     let mut removed = false;
     // A name can repeat (a file from elsewhere); each pass removes one, so bound the passes.
     for _ in 0..1000 {
-        let Some(spot) = locate(doc, nm).into_iter().next() else { break };
+        let Some(spot) = locate(doc, idx, nm).into_iter().next() else { break };
         if pdfcraft_annot::delete_annotation_unchecked(doc, spot.page, spot.index).is_err() {
             break;
         }
         removed = true;
     }
     removed
+}
+
+/// Pictures decoded for remote items, kept between calls so that applying one item to many
+/// copies of a document (the working one and every undo state) decodes its image once and shares
+/// the bytes.
+#[derive(Default)]
+pub struct PictureCache {
+    by_hash: HashMap<String, Prepared>,
+}
+
+/// A decoded picture, held in a scratch document and copied into the documents that need it.
+struct Prepared {
+    scratch: Document,
+    xobject: ObjRef,
+    size: (f64, f64),
+    source: ObjRef,
 }
 
 /// Apply the server's annotations: first `deletes` (by `/NM`), then `upserts` (inserted, or
@@ -319,17 +411,25 @@ pub fn remove_by_name(doc: &mut Document, nm: &str) -> bool {
 /// Replies may come before their parent in the slice. Nothing here checks ownership or locks,
 /// and applying the same batch twice, or onto a snapshot that lacks the annotation, is fine.
 pub fn apply_remote(doc: &mut Document, upserts: &[RemoteItem], deletes: &[String]) -> RemoteReport {
+    apply_remote_cached(doc, upserts, deletes, &mut PictureCache::default())
+}
+
+/// [`apply_remote`] sharing `pictures` across calls: pass the same cache for every document the
+/// same batch goes to.
+pub fn apply_remote_cached(doc: &mut Document, upserts: &[RemoteItem], deletes: &[String], pictures: &mut PictureCache) -> RemoteReport {
     let mut report = RemoteReport::default();
+    // One scan of the document; every lookup below goes through the index.
+    let mut idx = AnnotIndex::new(doc);
     for nm in deletes {
-        if remove_by_name(doc, nm) {
+        if remove_by_name_in(doc, &idx, nm) {
             report.removed.push(nm.clone());
         }
     }
     let mut by_name: HashMap<&str, ObjRef> = HashMap::new();
-    // (reply, parent name, id) to link once every parent of the batch is placed.
-    let mut replies: Vec<(ObjRef, String, &str)> = Vec::new();
+    // (reply, parent, id) to link once every parent of the batch is placed.
+    let mut replies: Vec<(ObjRef, Parent, &str)> = Vec::new();
     for item in upserts {
-        match place_item(doc, item) {
+        match place_item(doc, &mut idx, pictures, item) {
             Ok(placed) => {
                 by_name.insert(item.annot_id, placed.obj);
                 if let Some(parent) = placed.parent {
@@ -341,13 +441,15 @@ pub fn apply_remote(doc: &mut Document, upserts: &[RemoteItem], deletes: &[Strin
         }
     }
     for (reply, parent, id) in replies {
-        let target = by_name.get(parent.as_str()).copied().or_else(|| find_by_name(doc, &parent));
+        let target = by_name.get(parent.name.as_str()).copied().or_else(|| locate(doc, &idx, &parent.name).first().map(|s| s.obj));
         let linked = target.filter(|t| *t != reply).is_some_and(|t| doc.update_dict(reply, |d| d.set(b"IRT".to_vec(), Object::Ref(t))).is_ok());
-        if !linked {
+        // A caret's parent (a strike-out) is its own row on the server and may arrive in a later
+        // batch: the caret stays, unlinked, until then.
+        if !linked && parent.required {
             // A reply with no parent would show as a top-level note; leave it out.
-            remove_by_name(doc, id);
+            remove_by_name_in(doc, &idx, id);
             report.applied.retain(|a| a != id);
-            report.failed.push((id.into(), format!("its parent {parent} is missing")));
+            report.failed.push((id.into(), format!("its parent {} is missing", parent.name)));
         }
     }
     report
@@ -355,11 +457,17 @@ pub fn apply_remote(doc: &mut Document, upserts: &[RemoteItem], deletes: &[Strin
 
 struct Placed {
     obj: ObjRef,
-    /// The `/NM` this annotation replies to.
-    parent: Option<String>,
+    parent: Option<Parent>,
 }
 
-fn place_item(doc: &mut Document, item: &RemoteItem) -> Result<Placed, String> {
+/// The `/NM` an annotation replies to.
+struct Parent {
+    name: String,
+    /// A note reply (`inreplyto`) can't stand without its parent; a caret's link (`ppmIrt`) can.
+    required: bool,
+}
+
+fn place_item(doc: &mut Document, idx: &mut AnnotIndex, pictures: &mut PictureCache, item: &RemoteItem) -> Result<Placed, String> {
     check_form_xml_depth(item.xfdf).map_err(|e| e.to_string())?;
     let xml = parse_form_xml(item.xfdf).map_err(|e| e.to_string())?;
     let root = xml.root_element();
@@ -374,9 +482,9 @@ fn place_item(doc: &mut Document, item: &RemoteItem) -> Result<Placed, String> {
     }
     let tag = node.tag_name().name().to_ascii_lowercase();
     let (subtype, _) = SUBTYPES.iter().find(|(_, t)| *t == tag).ok_or_else(|| format!("unknown annotation kind {tag}"))?;
-    let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
-    let page_ref =
-        node.attribute("page").and_then(|p| p.parse::<usize>().ok()).and_then(|p| pages.get(p).copied()).ok_or("the page is outside the document")?;
+    let page_no =
+        node.attribute("page").and_then(|p| p.parse::<usize>().ok()).filter(|p| *p < idx.pages.len()).ok_or("the page is outside the document")?;
+    let page_ref = idx.pages[page_no];
     let mut d = annot_from_xml(node, subtype, page_ref).ok_or("the annotation has no usable rectangle")?;
     d.set(OWNER_KEY.as_bytes().to_vec(), PdfString::text(item.author_id));
     // As in a file import: a redaction mark someone else made is always shown to the user.
@@ -385,16 +493,16 @@ fn place_item(doc: &mut Document, item: &RemoteItem) -> Result<Placed, String> {
         d.set(b"F".to_vec(), Object::Int(flags & !REDACT_UNSEEN));
     }
 
-    let mut parent = node.attribute("inreplyto").filter(|p| !p.is_empty()).map(str::to_string);
+    let mut parent = node.attribute("inreplyto").filter(|p| !p.is_empty()).map(|name| Parent { name: name.into(), required: true });
     if let Some(custom) = read_custom(node)
         && let Some(irt) = apply_custom(&mut d, &custom)
     {
-        parent = parent.or(Some(irt));
+        parent = parent.or(Some(Parent { name: irt, required: false }));
     }
-    let existing = locate(doc, item.annot_id);
+    let existing = locate(doc, idx, item.annot_id);
     if let Some(url) = node.children().find(|c| c.has_tag_name("imagedata")).and_then(|c| c.text()) {
         let reuse = existing.first().map(|s| s.obj);
-        attach_picture(doc, &mut d, url.trim(), reuse)?;
+        attach_picture(doc, &mut d, url.trim(), reuse, pictures)?;
     }
 
     // Replace in place (keeping the object, so replies that point at it stay linked), moving it
@@ -429,12 +537,13 @@ fn place_item(doc: &mut Document, item: &RemoteItem) -> Result<Placed, String> {
     if let Some(pop) = node.children().find(|c| c.has_tag_name("popup")) {
         add_popup(doc, page_ref, r, pop).map_err(|e| e.to_string())?;
     }
+    idx.add(item.annot_id, page_no, r);
     // An annotation whose appearance can't be drawn stays (it is the user's data), undrawn.
     let _ = pdfcraft_annot::set_appearance(doc, r);
     Ok(Placed { obj: r, parent })
 }
 
-fn annots_of(doc: &Document, page: ObjRef) -> Vec<Object> {
+pub(crate) fn annots_of(doc: &Document, page: ObjRef) -> Vec<Object> {
     doc.get(page).as_dict().and_then(|p| p.get(b"Annots").cloned()).map(|a| doc.resolve(&a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
@@ -490,7 +599,8 @@ fn hash_of(url: &str) -> String {
 
 /// Make `d` a picture stamp showing the data URL `url`. `reuse` is the object being replaced:
 /// when it was made from the same URL its picture is kept instead of adding the image again.
-fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<ObjRef>) -> Result<(), String> {
+/// Otherwise the picture is decoded once into `pictures` and copied from there.
+fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<ObjRef>, pictures: &mut PictureCache) -> Result<(), String> {
     let hash = hash_of(url);
     let old = reuse.and_then(|r| doc.get(r).as_dict().cloned());
     if let Some(old) = old.filter(|o| text_of(doc, o, PICTURE_HASH_KEY.as_bytes()).as_deref() == Some(&hash))
@@ -505,6 +615,30 @@ fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<Obj
         d.set(PICTURE_HASH_KEY.as_bytes().to_vec(), PdfString::text(&hash));
         return Ok(());
     }
+    if !pictures.by_hash.contains_key(&hash) {
+        let prepared = prepare_picture(url)?;
+        pictures.by_hash.insert(hash.clone(), prepared);
+    }
+    let p = &pictures.by_hash[&hash];
+    let mut copied = HashMap::new();
+    let xobject = import_object(&p.scratch, doc, p.xobject, &mut copied);
+    let source = import_object(&p.scratch, doc, p.source, &mut copied);
+    d.set(PICTURE_SOURCE_KEY.as_bytes().to_vec(), Object::Ref(source));
+    d.set(b"PCPicture".to_vec(), Object::Ref(xobject));
+    d.set(b"PCPictureImage".to_vec(), Object::Bool(true));
+    d.set(b"PCPictureSize".to_vec(), arr(&[p.size.0, p.size.1]));
+    if d.get(b"Name").is_none() {
+        d.set(b"Name".to_vec(), Object::name("PCCustomStamp"));
+    }
+    d.set(PICTURE_HASH_KEY.as_bytes().to_vec(), PdfString::text(&hash));
+    Ok(())
+}
+
+/// The most pixels a remote picture may have.
+const MAX_PICTURE_PIXELS: u64 = 16 * 1024 * 1024;
+
+/// Decode a remote stamp picture (PNG or JPEG only) into a scratch document.
+fn prepare_picture(url: &str) -> Result<Prepared, String> {
     let (header, data) = url.strip_prefix("data:").and_then(|u| u.split_once(',')).ok_or("the stamp picture is not a data URL")?;
     if !header.contains(";base64") {
         return Err("the stamp picture is not base64".into());
@@ -514,15 +648,75 @@ fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<Obj
         return Err("the stamp picture is too large".into());
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(clean).map_err(|e| format!("the stamp picture: {e}"))?;
-    let (xobject, size) = pdfcraft_create::image_xobject(doc, "stamp.png", &bytes).map_err(|e| e.to_string())?;
-    let source = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), bytes)));
-    d.set(PICTURE_SOURCE_KEY.as_bytes().to_vec(), Object::Ref(source));
-    d.set(b"PCPicture".to_vec(), Object::Ref(xobject));
-    d.set(b"PCPictureImage".to_vec(), Object::Bool(true));
-    d.set(b"PCPictureSize".to_vec(), arr(&[size.0, size.1]));
-    if d.get(b"Name").is_none() {
-        d.set(b"Name".to_vec(), Object::name("PCCustomStamp"));
+    // The server's items come from other users: only the two formats the stamp tools produce
+    // reach the image decoders, and a picture's size is checked before it is decoded.
+    if sniff(&bytes).is_none() {
+        return Err("the stamp picture is neither PNG nor JPEG".into());
     }
-    d.set(PICTURE_HASH_KEY.as_bytes().to_vec(), PdfString::text(&hash));
-    Ok(())
+    match pixel_size(&bytes) {
+        Some((w, h)) if w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_PICTURE_PIXELS => {}
+        _ => return Err("the stamp picture has too many pixels".into()),
+    }
+    let mut scratch = Document::new_empty();
+    let (xobject, size) = pdfcraft_create::image_xobject(&mut scratch, "stamp.png", &bytes).map_err(|e| e.to_string())?;
+    let source = scratch.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), bytes)));
+    Ok(Prepared { scratch, xobject, size, source })
+}
+
+/// Width and height from a PNG header or a JPEG frame header, without decoding.
+fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.starts_with(b"\x89PNG") {
+        let w = u32::from_be_bytes(b.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
+        return Some((w, h));
+    }
+    // JPEG: walk the marker segments to the first start-of-frame.
+    let mut at = 2;
+    while at + 4 <= b.len() {
+        if b[at] != 0xFF {
+            return None;
+        }
+        let marker = b[at + 1];
+        if marker == 0xFF {
+            at += 1;
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([b[at + 2], b[at + 3]]));
+        if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            let h = u32::from(u16::from_be_bytes([*b.get(at + 5)?, *b.get(at + 6)?]));
+            let w = u32::from(u16::from_be_bytes([*b.get(at + 7)?, *b.get(at + 8)?]));
+            return Some((w, h));
+        }
+        at += 2 + len.max(2);
+    }
+    None
+}
+
+/// Copy object `r` of `from` into `to` with everything it points to; the byte buffers are shared.
+fn import_object(from: &Document, to: &mut Document, r: ObjRef, copied: &mut HashMap<ObjRef, ObjRef>) -> ObjRef {
+    if let Some(done) = copied.get(&r) {
+        return *done;
+    }
+    let obj = remap(from, to, (*from.get(r)).clone(), copied);
+    let new = to.add(obj);
+    copied.insert(r, new);
+    new
+}
+
+fn remap(from: &Document, to: &mut Document, obj: Object, copied: &mut HashMap<ObjRef, ObjRef>) -> Object {
+    match obj {
+        Object::Ref(r) => Object::Ref(import_object(from, to, r, copied)),
+        Object::Array(items) => Object::Array(items.into_iter().map(|o| remap(from, to, o, copied)).collect()),
+        Object::Dict(d) => Object::Dict(remap_dict(from, to, d, copied)),
+        Object::Stream(s) => Object::Stream(pdfcraft_cos::Stream { dict: remap_dict(from, to, s.dict, copied), raw: s.raw }),
+        other => other,
+    }
+}
+
+fn remap_dict(from: &Document, to: &mut Document, d: Dict, copied: &mut HashMap<ObjRef, ObjRef>) -> Dict {
+    let mut out = Dict::new();
+    for (k, v) in d.iter() {
+        out.set(k.clone(), remap(from, to, v.clone(), copied));
+    }
+    out
 }

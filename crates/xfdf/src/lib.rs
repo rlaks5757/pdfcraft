@@ -19,7 +19,10 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
 mod single;
-pub use single::{AnnotXfdf, MAX_XFDF_LEN, RemoteItem, RemoteReport, apply_remote, export_annotation, remove_by_name};
+pub use single::{
+    AnnotIndex, AnnotXfdf, MAX_XFDF_LEN, PictureCache, RemoteItem, RemoteReport, apply_remote, apply_remote_cached, export_annotation,
+    export_annotation_in, remove_by_name, remove_by_name_in,
+};
 
 #[cfg(test)]
 mod single_tests;

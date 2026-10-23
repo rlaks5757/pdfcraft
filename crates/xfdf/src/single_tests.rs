@@ -5,7 +5,7 @@ use pdfcraft_annot::{
 };
 
 use super::*;
-use crate::single::utf16_len;
+use crate::single::{annots_of, utf16_len};
 use crate::tests::blank;
 
 fn meta(id: &str) -> Meta {
@@ -512,4 +512,111 @@ fn a_dashed_border_stays_dashed() {
     assert!(content.contains("[4 3] 0 d"), "{content}");
     let back = export_annotation(&dst, "sb").unwrap();
     assert!(back.xfdf.contains(r#"style="dash""#) && back.xfdf.contains(r#"dashes="4,3""#), "{}", back.xfdf);
+}
+
+fn stamp_xml(id: &str, url: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><stamp page="0" name="{id}" rect="10,10,110,60"><imagedata>{url}</imagedata></stamp></annots></xfdf>"#
+    )
+}
+
+fn url_of(mime: &str, bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn source_ptr(doc: &Document, nm: &str) -> *const u8 {
+    let d = doc.get(find_by_name(doc, nm).unwrap()).as_dict().unwrap().clone();
+    let Object::Stream(s) = &*doc.get(d.reference(pdfcraft_annot::PICTURE_SOURCE_KEY.as_bytes()).unwrap()) else { panic!() };
+    s.raw.as_ptr()
+}
+
+#[test]
+fn one_picture_cache_decodes_once_for_every_copy_of_the_document() {
+    let original = noisy_png(40_000);
+    let x = stamp_xml("p", &url_of("image/png", &original));
+    let items = [RemoteItem { annot_id: "p", author_id: "u", xfdf: &x }];
+    let (mut a, mut b) = (blank(), blank());
+    let mut cache = PictureCache::default();
+    assert_eq!(apply_remote_cached(&mut a, &items, &[], &mut cache).failed, vec![]);
+    assert_eq!(apply_remote_cached(&mut b, &items, &[], &mut cache).failed, vec![]);
+    // The decoded image and the kept file are the same buffers in both documents.
+    assert_eq!(source_ptr(&a, "p"), source_ptr(&b, "p"));
+    for doc in [&a, &b] {
+        assert!(export_annotation(doc, "p").unwrap().xfdf.contains(&url_of("image/png", &original)));
+        let d = doc.get(find_by_name(doc, "p").unwrap()).as_dict().unwrap().clone();
+        let Object::Stream(img) = &*doc.get(d.reference(b"PCPicture").unwrap()) else { panic!() };
+        // The alpha mask came along and points into this document.
+        assert!(matches!(&*doc.get(img.dict.reference(b"SMask").unwrap()), Object::Stream(_)));
+    }
+}
+
+#[test]
+fn only_png_and_jpeg_pictures_reach_the_decoders() {
+    let mut dst = blank();
+    let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff;".to_vec();
+    let x = stamp_xml("g", &url_of("image/gif", &gif));
+    let r = apply_remote(&mut dst, &[RemoteItem { annot_id: "g", author_id: "u", xfdf: &x }], &[]);
+    assert_eq!(r.failed.len(), 1, "{r:?}");
+    assert!(find_by_name(&dst, "g").is_none());
+
+    // 5000 x 4000 grey pixels: small on the wire, over the pixel limit.
+    let mut big = Vec::new();
+    let mut enc = png::Encoder::new(&mut big, 5000, 4000);
+    enc.set_color(png::ColorType::Grayscale);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut w = enc.write_header().unwrap();
+    w.write_image_data(&vec![0u8; 5000 * 4000]).unwrap();
+    drop(w);
+    let x = stamp_xml("big", &url_of("image/png", &big));
+    let r = apply_remote(&mut dst, &[RemoteItem { annot_id: "big", author_id: "u", xfdf: &x }], &[]);
+    assert_eq!(r.failed.len(), 1, "{r:?}");
+}
+
+#[test]
+fn a_form_widget_with_the_same_name_is_not_the_servers_to_replace() {
+    let mut dst = blank();
+    let page = pdfcraft_model::pages(&dst)[0].obj;
+    let mut w = Dict::new();
+    w.set(b"Type".to_vec(), Object::name("Annot"));
+    w.set(b"Subtype".to_vec(), Object::name("Widget"));
+    w.set(b"NM".to_vec(), PdfString::text("same"));
+    w.set(b"Rect".to_vec(), arr(&[0.0, 0.0, 10.0, 10.0]));
+    let widget = dst.add(Object::Dict(w));
+    dst.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let x = r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><square page="0" name="same" rect="20,20,80,80"/></annots></xfdf>"#;
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "same", author_id: "u", xfdf: x }], &[]).failed, vec![]);
+    assert_eq!(dst.get(widget).as_dict().unwrap().name(b"Subtype"), Some(b"Widget".as_slice()));
+    assert!(remove_by_name(&mut dst, "same"));
+    assert!(dst.get(widget).as_dict().is_some());
+    assert_eq!(annots_of(&dst, page).len(), 1);
+}
+
+#[test]
+fn a_caret_whose_strikeout_comes_later_stays_and_links_then() {
+    let caret = r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><caret page="0" name="c" rect="10,10,20,20"><trn-custom-data bytes='{"ppmIrt":"s"}'/></caret></annots></xfdf>"#;
+    let strike = r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><strikeout page="0" name="s" rect="10,10,80,20" coords="10,20,80,20,10,10,80,10"/></annots></xfdf>"#;
+    let mut dst = blank();
+    let r = apply_remote(&mut dst, &[RemoteItem { annot_id: "c", author_id: "u", xfdf: caret }], &[]);
+    assert_eq!((r.failed.len(), r.applied.len()), (0, 1), "{r:?}");
+    assert!(find_by_name(&dst, "c").is_some());
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "s", author_id: "u", xfdf: strike }], &[]).failed, vec![]);
+    // Re-sending the caret now links it.
+    apply_remote(&mut dst, &[RemoteItem { annot_id: "c", author_id: "u", xfdf: caret }], &[]);
+    let c = dst.get(find_by_name(&dst, "c").unwrap()).as_dict().unwrap().clone();
+    assert_eq!(c.reference(b"IRT"), find_by_name(&dst, "s"));
+}
+
+#[test]
+fn an_index_serves_many_exports_and_the_kind_is_cut_in_utf16() {
+    let mut doc = blank();
+    for i in 0..5 {
+        add(&mut doc, 0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }, "x", &format!("n{i}"));
+    }
+    let idx = AnnotIndex::new(&doc);
+    for i in 0..5 {
+        let nm = format!("n{i}");
+        assert_eq!(export_annotation_in(&doc, &idx, &nm).unwrap(), export_annotation(&doc, &nm).unwrap());
+    }
+    assert!(matches!(export_annotation_in(&doc, &idx, "nope"), Err(DataError::NotFound(_))));
 }
