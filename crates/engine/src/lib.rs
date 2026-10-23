@@ -5245,7 +5245,7 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
 /// pop-ups; the number is the comment's position on its page.
 pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
     use std::fmt::Write;
-    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
+    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| !a.is_reply() && a.state.is_none()).collect();
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
     fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {

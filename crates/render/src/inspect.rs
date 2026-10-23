@@ -401,6 +401,12 @@ impl Annotation {
         to.name.is_some() && self.in_reply_to == to.name
     }
 
+    /// Is this a reply at all: it names a parent by `/NM` or points at one by `/IRT` (a parent without
+    /// `/NM` leaves `in_reply_to` empty).
+    pub fn is_reply(&self) -> bool {
+        self.in_reply_to.is_some() || self.parent.is_some()
+    }
+
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))

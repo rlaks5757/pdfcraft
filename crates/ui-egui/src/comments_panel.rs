@@ -165,7 +165,7 @@ pub(crate) fn show(
     let mut roots: Vec<&Annotation> = info
         .annotations
         .iter()
-        .filter(|a| a.in_reply_to.is_none())
+        .filter(|a| !a.is_reply())
         .filter(|a| query.as_deref().is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q))))
         .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
         .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))
@@ -220,7 +220,7 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let n = info.annotations.iter().filter(|x| x.page == page && x.in_reply_to.is_none()).count();
+            let n = info.annotations.iter().filter(|x| x.page == page && !x.is_reply()).count();
             let open = !view.comments.collapsed_pages.contains(&page);
             ui.add_space(6.0);
             let clicked = ui
@@ -570,15 +570,15 @@ fn legible(c: Color32, t: &Tokens) -> Color32 {
 pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocView, hidden: bool) -> Option<&'static str> {
     let mut command = None;
     let cv = &mut view.comments;
-    let mut types: Vec<String> = info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| kind_label(a).to_string()).collect();
+    let mut types: Vec<String> = info.annotations.iter().filter(|a| !a.is_reply()).map(|a| kind_label(a).to_string()).collect();
     types.sort();
     types.dedup();
     let mut authors: Vec<String> =
-        info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| a.author.clone().unwrap_or_default()).collect();
+        info.annotations.iter().filter(|a| !a.is_reply()).map(|a| a.author.clone().unwrap_or_default()).collect();
     authors.sort();
     authors.dedup();
     let mut colors: Vec<(String, Option<[f32; 3]>)> =
-        info.annotations.iter().filter(|a| a.in_reply_to.is_none()).map(|a| (color_key(a), a.color)).collect();
+        info.annotations.iter().filter(|a| !a.is_reply()).map(|a| (color_key(a), a.color)).collect();
     colors.sort_by(|a, b| a.0.cmp(&b.0));
     colors.dedup_by(|a, b| a.0 == b.0);
     let active = !(cv.hidden_types.is_empty()
@@ -729,7 +729,7 @@ mod replies {
         s.apply(id, Edit::AddAnnotation(note)).expect("note");
         act(&mut s, "u-b");
         s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "B".into() }).expect("reply");
-        let reply = s.get(id).expect("doc").info.annotations.iter().find(|a| a.in_reply_to.is_some()).expect("reply exists").clone();
+        let reply = s.get(id).expect("doc").info.annotations.iter().find(|a| a.is_reply()).expect("reply exists").clone();
         let doc = s.get(id).expect("doc");
         assert_eq!(reply_rights(doc, &reply, true), (true, true), "u-b wrote it");
         assert_eq!(reply_rights(doc, &reply, false), (false, false), "the host does not let comments change");

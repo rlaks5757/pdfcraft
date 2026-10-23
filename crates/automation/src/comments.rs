@@ -188,7 +188,7 @@ impl Automation {
         };
         let roots: Vec<Value> = all
             .iter()
-            .filter(|c| c.in_reply_to.is_none() && only.is_none_or(|p| c.page == p))
+            .filter(|c| !c.is_reply() && only.is_none_or(|p| c.page == p))
             .map(|c| {
                 let mut v = view(c);
                 // Every reply under this comment, at any depth, in document order. A reply to a
@@ -205,7 +205,7 @@ impl Automation {
                     false
                 };
                 let thread: Vec<&Annotation> = match c.name.as_deref() {
-                    Some(nm) => all.iter().filter(|r| r.in_reply_to.is_some() && descends_from(r, nm)).collect(),
+                    Some(nm) => all.iter().filter(|r| r.is_reply() && descends_from(r, nm)).collect(),
                     None => Vec::new(),
                 };
                 let status = thread.iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone());

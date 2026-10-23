@@ -49,7 +49,12 @@ fn deleting_the_comment_clears_the_selection() {
 /// A page with three comments: two notes that share one `/NM` (files made by sessions that
 /// started from the same state do), and a reply to the first.
 fn shared_nm_pdf() -> Vec<u8> {
-    let note = |extra: &str| format!("<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /NM (same) /T (A) /Contents (note) {extra} >>");
+    pdf_with_notes("/NM (same)")
+}
+
+/// The same page with `name` (an `/NM` entry, or nothing) on both notes.
+fn pdf_with_notes(name: &str) -> Vec<u8> {
+    let note = |extra: &str| format!("<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] {name} /T (A) /Contents (note) {extra} >>");
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
@@ -93,4 +98,28 @@ fn deleting_a_reply_keeps_the_right_comment_selected_when_names_collide() {
     app.views[0].comments.selected = Some((0, 1));
     assert!(app.apply_edit(Edit::DeleteAnnotation { page: 0, index: 2 }));
     assert_eq!(app.views[0].comments.selected, Some((0, 0)), "the one the reply was to");
+}
+
+#[test]
+fn a_reply_to_a_comment_without_a_name_is_only_a_reply() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("t.pdf", None, pdf_with_notes("")).unwrap();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let a = &doc.info.annotations;
+    let find = |i: usize| a.iter().find(|x| x.index == i).unwrap();
+    let (first, second, reply) = (find(0), find(1), find(2));
+    assert!(first.name.is_none() && reply.is_reply(), "the reply is not a top-level comment");
+    assert!(!first.is_reply() && !second.is_reply());
+    assert!(reply.replies_to(first) && !reply.replies_to(second));
+    let tops: Vec<usize> = a.iter().filter(|x| !x.is_reply()).map(|x| x.index).collect();
+    assert_eq!(tops, [0, 1], "listed once, under its parent");
+}
+
+#[test]
+fn deleting_a_reply_keeps_a_comment_without_a_name_selected() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("t.pdf", None, pdf_with_notes("")).unwrap();
+    app.views[0].comments.selected = Some((0, 0));
+    assert!(app.apply_edit(Edit::DeleteAnnotation { page: 0, index: 2 }));
+    assert_eq!(app.views[0].comments.selected, Some((0, 0)));
 }

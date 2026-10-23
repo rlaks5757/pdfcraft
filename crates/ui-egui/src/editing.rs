@@ -40,7 +40,7 @@ pub enum SaveTarget {
 
 /// The comment the annotation at `(page, index)` replies to (`None` for a comment of its own).
 fn reply_parent(annotations: &[pdfcraft_render::Annotation], page: usize, index: usize) -> Option<pdfcraft_render::Annotation> {
-    let a = annotations.iter().find(|a| a.page == page && a.index == index && a.in_reply_to.is_some())?;
+    let a = annotations.iter().find(|a| a.page == page && a.index == index && a.is_reply())?;
     annotations.iter().find(|p| a.replies_to(p)).cloned()
 }
 
@@ -52,7 +52,7 @@ fn find_after_delete(annotations: &[pdfcraft_render::Annotation], parent: &pdfcr
         .filter(|x| {
             x.page == parent.page
                 && x.index <= parent.index
-                && x.in_reply_to.is_none()
+                && !x.is_reply()
                 && (x.name.as_ref(), &x.subtype, x.rect, x.contents.as_ref(), x.author.as_ref())
                     == (parent.name.as_ref(), &parent.subtype, parent.rect, parent.contents.as_ref(), parent.author.as_ref())
         })
@@ -183,7 +183,7 @@ impl PdfCraftApp {
                     }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
-                        let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
+                        let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
                         // A new highlight opens its note for typing straight away, as in Acrobat,
@@ -537,7 +537,7 @@ impl PdfCraftApp {
                 let newest = self
                     .session
                     .get(view.id)
-                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max());
+                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
                 view.comments.selected = newest.map(|index| (page, index));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;

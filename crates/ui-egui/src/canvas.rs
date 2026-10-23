@@ -2067,7 +2067,7 @@ impl DocView {
 /// The hover popup for an annotation. Replies and Fill & Sign marks (typed text, checks, signatures)
 /// show none: they are page content being edited, not comments.
 fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
-    if a.in_reply_to.is_some() || a.fill_sign {
+    if a.is_reply() || a.fill_sign {
         return None;
     }
     let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
@@ -4843,7 +4843,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                         .info
                                         .annotations
                                         .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.in_reply_to.is_none() && comments::made_by(a, tool))
+                                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
                             })
                         {
                             app.apply_edit(Edit::StyleAnnotation {
