@@ -108,6 +108,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     changed
                 });
                 let mut action = None;
+                // Closing and reopening tabs are File commands a host build locks.
+                let (can_close, can_reopen) = (app.host_allows("file.close"), app.host_allows("file.open"));
                 let mut close = None;
                 // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
                 let mut drag_x = None;
@@ -143,6 +145,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     cap,
                                     tab_h,
                                     true,
+                                    can_close,
                                 );
                                 slots.push((i, response.rect));
                                 if response.dragged() || response.drag_stopped() {
@@ -154,11 +157,13 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 let id = app.views[i].id;
                                 let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
                                 response.context_menu(|ui| {
-                                    if ui.button(tl!("Close Tab")).clicked() {
+                                    if can_close && ui.button(tl!("Close Tab")).clicked() {
                                         action = Some(crate::tab_context::Action::Close(id));
                                         ui.close();
                                     }
-                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                    if can_reopen
+                                        && ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked()
+                                    {
                                         action = Some(crate::tab_context::Action::Reopen);
                                         ui.close();
                                     }
@@ -173,7 +178,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 }
                                 // A middle click closes the tab, as in Acrobat and browsers (#1853);
                                 // unsaved changes ask first, as the close button does.
-                                if response.middle_clicked() {
+                                if can_close && response.middle_clicked() {
                                     close = Some(i);
                                 }
                             }
@@ -225,6 +230,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     cap,
                                     tab_h,
                                     false,
+                                    true,
                                 );
                                 if changed && app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
@@ -265,9 +271,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.ctx().request_repaint();
                 }
                 ui.add_space(4.0);
-                let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
-                    app.open_dialog();
+                if !app.host_locked() {
+                    let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
+                    if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
+                        app.open_dialog();
+                    }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if !controls.right.is_empty() {
@@ -426,6 +434,7 @@ fn tab(
     cap: Option<f32>,
     height: f32,
     draggable: bool,
+    closable: bool,
 ) -> egui::Response {
     let font = theme::regular(13.0);
     let mut label = tab_name(name);
@@ -465,17 +474,22 @@ fn tab(
         ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
     });
     let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, id.with("close"), Sense::click());
-    let x_press = theme::Press::track(ui, &x);
-    x_press.wash(ui, x_rect, 4, false);
-    // Unsaved changes: a dot where the close button sits, until the tab is hovered.
-    if dirty && !resp.hovered() && !x.hovered() {
+    // A host build that locks File ▸ Close has no close button.
+    if closable {
+        let x = ui.interact(x_rect, id.with("close"), Sense::click());
+        let x_press = theme::Press::track(ui, &x);
+        x_press.wash(ui, x_rect, 4, false);
+        // Unsaved changes: a dot where the close button sits, until the tab is hovered.
+        if dirty && !resp.hovered() && !x.hovered() {
+            ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
+        } else if active || resp.hovered() || x.hovered() {
+            icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
+        }
+        if theme::hand(x).clicked() {
+            *close = Some(index);
+        }
+    } else if dirty {
         ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
-    } else if active || resp.hovered() || x.hovered() {
-        icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
-    }
-    if theme::hand(x).clicked() {
-        *close = Some(index);
     }
     let shown = match file {
         Some(file) => std::borrow::Cow::Owned(format!("{}\n{}", crate::bidi::visual(name), crate::bidi::visual(file))),
@@ -500,28 +514,40 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.add_space(6.0);
                 ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
                 ui.add_space(10.0);
-                for (mode, label) in
-                    [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
+                // A viewer has no workspaces to switch between: the tools of Edit, Convert and E-Sign
+                // are not its to use.
                 {
-                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
-                        app.switch_mode(mode, true);
+                    for (mode, label) in [
+                        (Mode::AllTools, "All tools"),
+                        (Mode::Read, "Read"),
+                        (Mode::Edit, "Edit"),
+                        (Mode::Convert, "Convert"),
+                        (Mode::Sign, "E-Sign"),
+                    ] {
+                        if app.host_mode_shown(mode) && widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                            app.switch_mode(mode, true);
+                        }
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
-                        if icons::button(ui, "printer", 32.0, false, &tip).clicked() {
-                            app.run_command("print.dialog");
+                        if app.host_allows("print.dialog") {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
+                            if icons::button(ui, "printer", 32.0, false, &tip).clicked() {
+                                app.run_command("print.dialog");
+                            }
                         }
                         let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
                         if icons::button(ui, "save", 32.0, false, &tip).clicked() {
                             app.run_command("file.save");
                         }
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
-                        if icons::button(ui, "info", 32.0, false, &tip).clicked() {
-                            app.dialog = Some(Dialog::Properties(PropsTab::Description));
+                        if app.host_allows("file.properties") {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
+                            if icons::button(ui, "info", 32.0, false, &tip).clicked() {
+                                app.dialog = Some(Dialog::Properties(PropsTab::Description));
+                            }
                         }
                     });
                     ui.add_space(8.0);
@@ -639,6 +665,11 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
+            // Each rail button follows the command that opens its panel; a build that has the
+            // command off shows no button. Attachments have no command: a viewer's rail has none.
+            let (comments, fields, signatures) = (app.host_allows("comment.list"), app.host_allows("form.fields"), app.host_allows("sign.panel"));
+            let (accessibility, tags) = (app.host_allows("a11y.report"), app.host_allows("a11y.tags"));
+            let viewer = app.host_viewer();
             let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
                 let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
                 let r = icons::button(ui, icon, 34.0, selected, tl!(tip));
@@ -650,17 +681,34 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.choose_right_panel(if selected { None } else { Some(panel) });
                 }
             };
-            rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
-            rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
-            rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
-            rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
-            rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
-            rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
-            rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
-            if has_check {
-                rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
-            }
-            rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
+            // The panel buttons scroll when the window is too short to hold them above the page
+            // cluster. The cluster's height is the one drawn last frame (a guess on the first).
+            let bottom_id = egui::Id::new("rail-bottom-height");
+            let bottom_h = ui.data(|d| d.get_temp::<f32>(bottom_id)).unwrap_or(300.0);
+            let top_max = (ui.available_height() - bottom_h - ui.spacing().item_spacing.y).max(0.0);
+            egui::ScrollArea::vertical().id_salt("rail-buttons").max_height(top_max).auto_shrink([false, true]).show(ui, |ui| {
+                if comments {
+                    rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
+                }
+                rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
+                rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
+                if fields {
+                    rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
+                }
+                rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
+                if !viewer {
+                    rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
+                }
+                if signatures {
+                    rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
+                }
+                if has_check && accessibility {
+                    rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
+                }
+                if tags {
+                    rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
+                }
+            });
 
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
@@ -776,6 +824,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
                 }
+                let used = ui.min_rect().height();
+                ui.data_mut(|d| d.insert_temp(bottom_id, used));
             });
             if let Some(id) = page_display {
                 app.execute(id);

@@ -84,7 +84,9 @@ impl std::fmt::Display for BlockedLink {
 fn hides_text(c: char) -> bool {
     (c.is_whitespace() && c != ' ')
         || c.is_control()
-        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+        || matches!(c, '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}' | '\u{0890}'..='\u{0891}' | '\u{08E2}' | '\u{180E}'
+            | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
 }
 
 /// Check an address that came from a document (a link, a button's URI action or a script's
@@ -612,6 +614,8 @@ mod tests {
         for hidden in [
             "https://exa\u{202E}gro.elpmaxe",
             "https://example.org\u{200B}.evil",
+            "https://exa\u{00AD}mple.org/",
+            "https://example.org/\u{061C}x",
             "https://a.org/\u{0007}",
             "https://a.org/x\ty",
             "https://a.org/x\ny",

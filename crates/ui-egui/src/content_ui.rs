@@ -722,7 +722,11 @@ impl crate::PdfCraftApp {
         let file = self.session.get(id).map(|d| d.page_image_file(page, index));
         match file {
             Some(Ok((ext, bytes))) => {
-                self.write_files(&[(format!("Image page {} #{}.{ext}", page + 1, index + 1), std::sync::Arc::new(bytes))], "Save image");
+                self.write_files(
+                    &[(format!("Image page {} #{}.{ext}", page + 1, index + 1), std::sync::Arc::new(bytes))],
+                    "Save image",
+                    &["export.image"],
+                );
             }
             Some(Err(e)) => self.notify_fmt("Couldn't save the image: {e}", &[("e", &e.to_string())]),
             None => {}

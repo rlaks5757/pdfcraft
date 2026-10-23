@@ -263,25 +263,28 @@ fn reading_mode_label(mode: &str) -> &'static str {
 /// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Interface language"));
-        let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
-        let before = app.language.clone();
-        egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
-            if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                ui.close();
-            }
-            for language in crate::i18n::Lang::all() {
-                if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+    // A host build is always Korean, so it offers no choice of language.
+    if !crate::HOST_LOCK {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Interface language"));
+            let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
+            let before = app.language.clone();
+            egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
+                if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
                     ui.close();
                 }
+                for language in crate::i18n::Lang::all() {
+                    if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+                        ui.close();
+                    }
+                }
+            });
+            // Relabel the rest of this dialog in the new language right away, not next frame.
+            if app.language != before {
+                crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
             }
         });
-        // Relabel the rest of this dialog in the new language right away, not next frame.
-        if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
-        }
-    });
+    }
     ui.horizontal(|ui| {
         use crate::ui_scale;
         ui.label(tl!("Interface size"));
@@ -467,7 +470,8 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         let label = ui.label(tl!("Name on new comments"));
         // Read-only while the host names the user, so the field can't differ from what signs comments.
         let locked = app.stored_author.is_some();
-        ui.add_enabled(!locked, crate::widgets::line(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
+        ui.add_enabled(!locked, crate::widgets::line(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
+            .labelled_by(label.id);
     });
     ui.add(widgets::checkbox(&mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text")));
     ui.add_space(8.0);
@@ -479,19 +483,22 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.add_space(8.0);
     date_format(ui, app, t);
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let mut on = app.session.javascript();
-        if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
-            app.session.set_javascript(on);
-        }
-        ui.label(
-            egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
-                .small()
-                .color(t.text_muted),
-        );
-    });
+    // Scripting is locked in a host build; its switch is not offered.
+    if !app.host_locked() {
+        ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
+        egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let mut on = app.session.javascript();
+            if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
+                app.session.set_javascript(on);
+            }
+            ui.label(
+                egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
+                    .small()
+                    .color(t.text_muted),
+            );
+        });
+    }
     ui.add_space(10.0);
     buttons(ui, tl!("OK"), &[]).is_some()
 }

@@ -285,7 +285,7 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        match crate::editing::download(&name, &bytes) {
+        match crate::editing::download(&["file.save_as"], &name, &bytes) {
             Ok(()) => saved(self, name),
             Err(e) => self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
         }

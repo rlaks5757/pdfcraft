@@ -276,7 +276,13 @@ impl PdfCraftApp {
                 min_side,
                 pages,
                 stem,
-                |name, bytes| crate::editing::download(name, &bytes),
+                |name, bytes| {
+                    crate::editing::download(
+                        &["export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"],
+                        name,
+                        &bytes,
+                    )
+                },
                 &status,
                 crate::i18n::current(),
             );

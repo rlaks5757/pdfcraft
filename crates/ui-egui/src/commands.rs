@@ -84,7 +84,8 @@ impl PdfCraftApp {
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
-        commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+        self.host_allows(spec.id)
+            && commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.id != "edit.copy"
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.organize && v.selected_text().is_some_and(|t| !t.is_empty())))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
@@ -112,6 +113,11 @@ impl PdfCraftApp {
 
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
+        // Host lock: a command the host build doesn't allow does nothing, silently, whether it
+        // came from a menu, a shortcut, the palette or automation.
+        if !self.host_allows(id) {
+            return false;
+        }
         if !self.command_enabled(spec) {
             let why = match spec.needs {
                 commands::Needs::Undo => tl!("Nothing to undo").to_string(),
@@ -209,7 +215,7 @@ impl PdfCraftApp {
             }
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
-                    self.open_url(l.url);
+                    self.open_url(l.url, &[link]);
                 }
             }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
@@ -766,6 +772,10 @@ fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usiz
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
+        // Host lock: what the host build doesn't allow isn't in the menu.
+        if !app.host_allows(spec.id) {
+            continue;
+        }
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
         // Open Recent is a submenu of the live recent list, not one action: disabled while the

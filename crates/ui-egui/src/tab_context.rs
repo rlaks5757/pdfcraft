@@ -10,6 +10,10 @@ pub(crate) enum Action {
 impl crate::PdfCraftApp {
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
+            // The tab menu, the close button and a middle click skip the command, so the lock is
+            // here too.
+            Action::Close(_) if !self.host_allows("file.close") => {}
+            Action::Reopen if !self.host_allows("file.open") => {}
             Action::Close(id) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id) {
                     self.request_close_tab(i);

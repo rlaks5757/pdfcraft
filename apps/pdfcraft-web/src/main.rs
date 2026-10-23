@@ -23,12 +23,23 @@ fn main() {
                 options,
                 Box::new(|cc| {
                     let mut app = PdfCraftApp::new();
+                    // The browser has no system clock for wasm32-unknown-unknown: without one a comment gets
+                    // no /M or /CreationDate and Fill & Sign dates read 1 Jan 1970. This is the only Session.
+                    app.session = std::mem::take(&mut app.session)
+                        // New comment ids (/NM) must differ between sessions: wasm32 has no random source of its own.
+                        .with_entropy(|| (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64)
+                        .with_wall_clock(
+                            || (js_sys::Date::now() / 1000.0) as i64,
+                            // getTimezoneOffset is minutes *west* of UTC, for today's date (daylight saving).
+                            || -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60,
+                        );
                     // "printcraft": settings saved under the app's former name, PrintCraft.
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
                     }
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
-                    if let Some(url) = query_param("file") {
+                    // A host-lock build (PPM) opens only what the host sends, so it never fetches one.
+                    if let Some(url) = query_param("file").filter(|_| !pdfcraft_ui_egui::HOST_LOCK) {
                         let inbox = app.startup_inbox.clone();
                         let failed = app.failed_inbox.clone();
                         let ctx = cc.egui_ctx.clone();
@@ -64,7 +75,13 @@ fn main() {
                         if let Some(author) = query_param("author") {
                             app.set_host_author(&author);
                         }
-                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), app.ownership_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(
+                            app.startup_inbox.clone(),
+                            app.stamp_inbox.clone(),
+                            app.compare_inbox.clone(),
+                            app.ownership_inbox.clone(),
+                            cc.egui_ctx.clone(),
+                        );
                         app.host_stamp = Some(bridge.stamp_fn());
                         app.host_compare = Some(bridge.compare_fn());
                         app.host_save = Some(bridge.save_fn());
@@ -75,6 +92,8 @@ fn main() {
                             &"PdfCraft: ?host=parent needs a framing page on the same origin; saves download instead".into(),
                         );
                     }
+                    // Without the bridge above `host_save` stays unset, and a host-lock build then
+                    // shows only its "open it in PPM" page and opens nothing.
                     Ok(Box::new(app))
                 }),
             )
@@ -127,13 +146,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// `type`:
 ///
 /// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
-/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly? }`, where `bytes` is an
+/// - `pdfcraft:open` (from the parent): `{ name, bytes, actor?, readOnly?, mode?, policy? }`, where `bytes` is an
 ///   `ArrayBuffer` or `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
 ///   `actor` (a string of 1 to 200 characters, the user's id) makes every comment the app creates
 ///   the user's, and lets only that user change or delete comments; comments without an owner are
 ///   locked. `readOnly` (a boolean) refuses every edit that changes the document. Both default
 ///   to off, and each open sets them anew. A wrong type or length refuses the open with
-///   `pdfcraft:failed` instead of opening without the checks.
+///   `pdfcraft:failed` instead of opening without the checks. `mode` (`"viewer"` or `"builder"`)
+///   is how much editing a host-lock build allows: `"builder"` everything it doesn't lock for
+///   every host, anything else, or nothing, only comments. A build without the lock ignores it.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
@@ -142,7 +163,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
-/// - `pdfcraft:compare` (from the parent): `{ id, old: { name, bytes }, new: { name, bytes } }`
+/// - `pdfcraft:compare` (from the parent): `{ id, old: { name, bytes }, new: { name, bytes }, mode?, policy? }`
 ///   opens the old file in a background tab and the new file as the active one, then runs the
 ///   Compare Files comparison. A window compares once; `pdfcraft:compare-done`
 ///   `{ id, replaced, inserted, deleted, visual }` or `pdfcraft:compare-failed` `{ id, error }`
@@ -398,7 +419,10 @@ mod host {
     /// Read a `pdfcraft:compare` message; the error is what the parent is told.
     fn compare_request(data: &JsValue) -> Result<pdfcraft_ui_egui::CompareCommand, String> {
         let id = string(data, "id").ok_or_else(|| "id must be a string".to_string())?;
-        Ok(pdfcraft_ui_egui::CompareCommand { id, old: compare_file(data, "old")?, new: compare_file(data, "new")? })
+        // The same rules as an open: `mode` and `policy`, and the narrowest without them.
+        let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
+        let ownership = pdfcraft_ui_egui::with_policy(pdfcraft_ui_egui::Ownership { scope, ..Default::default() }, policy_overrides(data));
+        Ok(pdfcraft_ui_egui::CompareCommand { id, old: compare_file(data, "old")?, new: compare_file(data, "new")?, ownership })
     }
 
     /// Read a `pdfcraft:stamp-add` message; the error is what the parent is told.
@@ -429,7 +453,7 @@ mod host {
         })
     }
 
-    /// Read `actor` and `readOnly` of a `pdfcraft:open` message. Missing means off; a wrong type or
+    /// Read `actor`, `readOnly`, `mode` and `policy.overrides` of a `pdfcraft:open` message. Missing means off; a wrong type or
     /// length is an error (the open is refused), never a way around the checks.
     fn open_ownership(data: &JsValue) -> Result<pdfcraft_ui_egui::Ownership, String> {
         let get = |key: &str| js_sys::Reflect::get(data, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED);
@@ -445,7 +469,19 @@ mod host {
         } else {
             read_only.as_bool().ok_or_else(|| "readOnly must be a boolean".to_string())?
         };
-        Ok(pdfcraft_ui_egui::Ownership { actor, read_only })
+        // Any other type than a string is "no mode", the narrowest.
+        let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
+        let own = pdfcraft_ui_egui::Ownership { actor, read_only, scope, ..Default::default() };
+        Ok(pdfcraft_ui_egui::with_policy(own, policy_overrides(data)))
+    }
+
+    /// `policy.overrides` of a `pdfcraft:open` or `pdfcraft:compare` message: command id to true
+    /// or false. The reading is `pdfcraft_ui_egui::policy_overrides`, on the policy as JSON.
+    fn policy_overrides(data: &JsValue) -> Vec<(String, bool)> {
+        let policy = js_sys::Reflect::get(data, &JsValue::from_str("policy")).unwrap_or(JsValue::UNDEFINED);
+        let json = js_sys::JSON::stringify(&policy).ok().and_then(|s| s.as_string());
+        let value = json.and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+        value.map(|v| pdfcraft_ui_egui::policy_overrides(&v)).unwrap_or_default()
     }
 
     fn string(data: &JsValue, key: &str) -> Option<String> {

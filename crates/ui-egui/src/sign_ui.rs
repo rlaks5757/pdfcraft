@@ -269,7 +269,7 @@ impl PdfCraftApp {
     /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
     pub(crate) fn export_certificate(&mut self, c: &Certificate) {
         let name = format!("{}.cer", crate::files::attachment_file_name(&c.display_name()));
-        self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
+        self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate", &["file.save_as"]);
     }
 
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.

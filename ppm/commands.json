@@ -1,0 +1,2174 @@
+{
+  "app": "pdf",
+  "commands": [
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.open",
+      "label": "Open…",
+      "labelKo": "열기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.open_recent",
+      "label": "Open Recent",
+      "labelKo": "최근 파일 열기",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.clear_recent",
+      "label": "Clear Recent Files",
+      "labelKo": "최근 파일 목록 지우기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.pin_folder",
+      "label": "Pin folder to Home…",
+      "labelKo": "홈에 폴더 고정…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.blank",
+      "label": "New blank PDF",
+      "labelKo": "새 빈 PDF",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.distance",
+      "label": "Measure distance",
+      "labelKo": "거리 측정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.perimeter",
+      "label": "Measure perimeter",
+      "labelKo": "둘레 측정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.area",
+      "label": "Measure area",
+      "labelKo": "면적 측정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.scale",
+      "label": "Set measurement scale",
+      "labelKo": "측정 배율 설정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.info",
+      "label": "Measurement information",
+      "labelKo": "측정 정보",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "measure.snap",
+      "label": "Measurement snapping",
+      "labelKo": "측정 맞춤",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "measure.export",
+      "label": "Export measurements as CSV",
+      "labelKo": "측정값을 CSV로 내보내기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.copy",
+      "label": "Copy pages",
+      "labelKo": "페이지 복사",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.cut",
+      "label": "Cut pages",
+      "labelKo": "페이지 잘라내기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.paste",
+      "label": "Paste pages",
+      "labelKo": "페이지 붙여넣기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.file",
+      "label": "Create PDF from file…",
+      "labelKo": "파일에서 PDF 만들기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.multiple",
+      "label": "Create PDF from multiple files…",
+      "labelKo": "여러 파일에서 PDF 만들기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.multiple_separate",
+      "label": "Create separate PDFs…",
+      "labelKo": "개별 PDF 만들기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.images",
+      "label": "Create PDF from images…",
+      "labelKo": "이미지에서 PDF 만들기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "create.clipboard",
+      "label": "Create PDF from clipboard",
+      "labelKo": "클립보드에서 PDF 만들기",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.combine",
+      "label": "Combine files…",
+      "labelKo": "파일 결합…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "file.save",
+      "label": "Save",
+      "labelKo": "저장",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "file.save_as",
+      "label": "Save as…",
+      "labelKo": "다른 이름으로 저장…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.close",
+      "label": "Close file",
+      "labelKo": "파일 닫기",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.close_all",
+      "label": "Close all",
+      "labelKo": "모두 닫기",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "file.revert",
+      "label": "Revert",
+      "labelKo": "되돌리기",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "print.dialog",
+      "label": "Print…",
+      "labelKo": "인쇄…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "file.properties",
+      "label": "Document properties…",
+      "labelKo": "문서 속성…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "file.word_count",
+      "label": "Word count…",
+      "labelKo": "단어 수…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "edit.undo",
+      "label": "Undo",
+      "labelKo": "실행 취소",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "edit.redo",
+      "label": "Redo",
+      "labelKo": "다시 실행",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "edit.find",
+      "label": "Find…",
+      "labelKo": "찾기…",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "edit.advanced_search",
+      "label": "Advanced search…",
+      "labelKo": "고급 검색…",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.palette",
+      "label": "Find tools and commands…",
+      "labelKo": "도구 및 명령 찾기…",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.layout.single",
+      "label": "Single page",
+      "labelKo": "한 페이지씩 보기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.layout.two_up",
+      "label": "Two-page view",
+      "labelKo": "두 페이지 보기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.continuous",
+      "label": "Continuous scrolling",
+      "labelKo": "연속 스크롤",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.layout.cover",
+      "label": "Show cover page in two-page view",
+      "labelKo": "두 페이지 보기에서 표지 표시",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.fit_width_scrolling",
+      "label": "Fit to width scrolling",
+      "labelKo": "너비 맞춤 스크롤",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.fit_one_page",
+      "label": "Fit one full page",
+      "labelKo": "한 페이지 전체 맞춤",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.fit_visible",
+      "label": "Fit visible",
+      "labelKo": "보이는 영역에 맞춤",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.marquee_zoom",
+      "label": "Marquee zoom",
+      "labelKo": "영역 확대",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "edit.copy",
+      "label": "Copy",
+      "labelKo": "복사",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.column_select",
+      "label": "Column select",
+      "labelKo": "열 선택",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.snapshot",
+      "label": "Take a snapshot",
+      "labelKo": "스냅샷 찍기",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.full_screen",
+      "label": "Full screen mode",
+      "labelKo": "전체 화면 모드",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.read_mode",
+      "label": "Read mode",
+      "labelKo": "읽기 모드",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.next_tab",
+      "label": "Next tab",
+      "labelKo": "다음 탭",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.previous_tab",
+      "label": "Previous tab",
+      "labelKo": "이전 탭",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.previous_view",
+      "label": "Previous view",
+      "labelKo": "이전 보기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.next_view",
+      "label": "Next view",
+      "labelKo": "다음 보기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.focus_page_input",
+      "label": "Go to page…",
+      "labelKo": "페이지로 이동…",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "ui.dock.reset",
+      "label": "Reset panel layout",
+      "labelKo": "패널 레이아웃 초기화",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.theme",
+      "label": "Switch light / dark theme",
+      "labelKo": "밝은/어두운 테마 전환",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.theme.system",
+      "label": "Use system setting",
+      "labelKo": "시스템 설정 사용",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.theme.light",
+      "label": "Light gray",
+      "labelKo": "밝은 회색",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "view.theme.dark",
+      "label": "Dark gray",
+      "labelKo": "진한 회색",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.list",
+      "label": "Comments panel",
+      "labelKo": "주석 패널",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.note",
+      "label": "Add a sticky note",
+      "labelKo": "스티커 메모 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.freetext",
+      "label": "Add a text box",
+      "labelKo": "텍스트 상자 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.highlight",
+      "label": "Highlight text",
+      "labelKo": "텍스트 강조 표시",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.underline",
+      "label": "Underline text",
+      "labelKo": "텍스트에 밑줄",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.strikeout",
+      "label": "Strikethrough text",
+      "labelKo": "텍스트에 취소선",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.squiggly",
+      "label": "Squiggly underline text",
+      "labelKo": "텍스트에 물결 밑줄",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.ink",
+      "label": "Draw freehand",
+      "labelKo": "자유롭게 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.line",
+      "label": "Draw a line",
+      "labelKo": "선 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.arrow",
+      "label": "Draw an arrow",
+      "labelKo": "화살표 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.square",
+      "label": "Draw a rectangle",
+      "labelKo": "사각형 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.circle",
+      "label": "Draw an oval",
+      "labelKo": "타원 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.polygon",
+      "label": "Draw a polygon",
+      "labelKo": "다각형 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.polyline",
+      "label": "Draw connected lines",
+      "labelKo": "연결선 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.cloud",
+      "label": "Draw a cloud",
+      "labelKo": "구름 모양 그리기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.callout",
+      "label": "Add a callout",
+      "labelKo": "말풍선 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.caret",
+      "label": "Insert text",
+      "labelKo": "텍스트 삽입",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.replace",
+      "label": "Replace text",
+      "labelKo": "텍스트 바꾸기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "comment.attach",
+      "label": "Attach a file",
+      "labelKo": "파일 첨부",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.eraser",
+      "label": "Erase drawings",
+      "labelKo": "그림 지우기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "form.fields",
+      "label": "Form fields panel",
+      "labelKo": "양식 필드 패널",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "form.clear",
+      "label": "Clear form",
+      "labelKo": "양식 지우기",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "comment.flatten",
+      "label": "Flatten comments",
+      "labelKo": "주석 평면화",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "comment.import",
+      "label": "Import comments…",
+      "labelKo": "주석 가져오기…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "comment.stamp",
+      "label": "Add a stamp",
+      "labelKo": "스탬프 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "comment.export",
+      "label": "Export all comments to data file…",
+      "labelKo": "모든 주석을 데이터 파일로 내보내기…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "comment.hide_all",
+      "label": "Hide all comments",
+      "labelKo": "모든 주석 숨기기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "comment.summarize",
+      "label": "Summarize comments",
+      "labelKo": "주석 요약",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.import_data",
+      "label": "Import form data…",
+      "labelKo": "양식 데이터 가져오기…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "form.export_data",
+      "label": "Export form data…",
+      "labelKo": "양식 데이터 내보내기…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "standards.pdfa",
+      "label": "PDF/A…",
+      "labelKo": "PDF/A…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "actions.wizard",
+      "label": "Action Wizard…",
+      "labelKo": "동작 마법사…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "actions.distribution",
+      "label": "Prepare for distribution…",
+      "labelKo": "배포 준비…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "actions.optimize_scans",
+      "label": "Optimize scanned documents…",
+      "labelKo": "스캔한 문서 최적화…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "doc.compare",
+      "label": "Compare files…",
+      "labelKo": "파일 비교…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.detect",
+      "label": "Detect form fields",
+      "labelKo": "양식 필드 감지",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.merge_data",
+      "label": "Merge data files into spreadsheet…",
+      "labelKo": "데이터 파일을 스프레드시트로 병합…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.flatten",
+      "label": "Flatten form fields",
+      "labelKo": "양식 필드 평면화",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.prepare",
+      "label": "Prepare a form",
+      "labelKo": "양식 준비",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.tab_order.row",
+      "label": "Tab order: by rows",
+      "labelKo": "탭 순서: 행 기준",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.tab_order.column",
+      "label": "Tab order: by columns",
+      "labelKo": "탭 순서: 열 기준",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.tab_order.structure",
+      "label": "Tab order: by document structure",
+      "labelKo": "탭 순서: 문서 구조 기준",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.text",
+      "label": "Add text",
+      "labelKo": "텍스트 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.edit_text",
+      "label": "Edit text & images",
+      "labelKo": "텍스트 및 이미지 편집",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.link",
+      "label": "Add or edit links",
+      "labelKo": "링크 추가 또는 편집",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.links_from_urls",
+      "label": "Create links from URLs",
+      "labelKo": "URL에서 링크 만들기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.remove_links",
+      "label": "Remove all links",
+      "labelKo": "모든 링크 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.bates",
+      "label": "Add Bates numbering…",
+      "labelKo": "베이츠 번호 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "edit.image",
+      "label": "Add image…",
+      "labelKo": "이미지 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "redact.mark",
+      "label": "Redact text and images",
+      "labelKo": "텍스트 및 이미지 교정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "redact.pages",
+      "label": "Redact pages…",
+      "labelKo": "페이지 교정…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "redact.search",
+      "label": "Find text and redact…",
+      "labelKo": "텍스트 찾아 교정…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "redact.properties",
+      "label": "Redaction properties…",
+      "labelKo": "교정 속성…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "redact.apply",
+      "label": "Apply redactions…",
+      "labelKo": "교정 적용…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "redact.clear",
+      "label": "Clear redaction marks",
+      "labelKo": "교정 표시 지우기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "protect.remove_hidden",
+      "label": "Remove hidden information…",
+      "labelKo": "숨겨진 정보 제거…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "redact.sanitize",
+      "label": "Sanitize document…",
+      "labelKo": "문서 정리…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.field.properties",
+      "label": "Field properties…",
+      "labelKo": "필드 속성…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.text",
+      "label": "Add a text field",
+      "labelKo": "텍스트 필드 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.checkbox",
+      "label": "Add a checkbox",
+      "labelKo": "확인란 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.radio",
+      "label": "Add a radio button",
+      "labelKo": "라디오 단추 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.combo",
+      "label": "Add a drop-down list",
+      "labelKo": "드롭다운 목록 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.list",
+      "label": "Add a list box",
+      "labelKo": "목록 상자 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.button",
+      "label": "Add a button",
+      "labelKo": "버튼 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "form.add.image",
+      "label": "Add an image field",
+      "labelKo": "이미지 필드 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.date",
+      "label": "Add a date field",
+      "labelKo": "날짜 필드 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "form.add.signature",
+      "label": "Add a digital signature field",
+      "labelKo": "디지털 서명 필드 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "sign.digital",
+      "label": "Digitally sign",
+      "labelKo": "디지털 서명",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "sign.certify",
+      "label": "Certify (visible signature)",
+      "labelKo": "인증(보이는 서명)",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "sign.certify_invisible",
+      "label": "Certify (invisible signature)",
+      "labelKo": "인증(보이지 않는 서명)",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "sign.validate",
+      "label": "Validate all signatures",
+      "labelKo": "모든 서명 검증",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "sign.panel",
+      "label": "Signatures panel",
+      "labelKo": "서명 패널",
+      "location": [
+        "View"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.text",
+      "label": "Fill & Sign: add text",
+      "labelKo": "채우기 및 서명: 텍스트 추가",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.check",
+      "label": "Fill & Sign: checkmark",
+      "labelKo": "채우기 및 서명: 확인 표시",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.cross",
+      "label": "Fill & Sign: cross",
+      "labelKo": "채우기 및 서명: 가위표",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.dot",
+      "label": "Fill & Sign: dot",
+      "labelKo": "채우기 및 서명: 점",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.line",
+      "label": "Fill & Sign: line",
+      "labelKo": "채우기 및 서명: 선",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.date",
+      "label": "Fill & Sign: date",
+      "labelKo": "채우기 및 서명: 날짜",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.signature",
+      "label": "Fill & Sign: sign",
+      "labelKo": "채우기 및 서명: 서명",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.initials",
+      "label": "Fill & Sign: initials",
+      "labelKo": "채우기 및 서명: 이니셜",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.signature.change",
+      "label": "Fill & Sign: change signature",
+      "labelKo": "채우기 및 서명: 서명 변경",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.signature.remove",
+      "label": "Fill & Sign: remove saved signature",
+      "labelKo": "채우기 및 서명: 저장된 서명 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.initials.remove",
+      "label": "Fill & Sign: remove saved initials",
+      "labelKo": "채우기 및 서명: 저장된 이니셜 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "sign.fill.initials.change",
+      "label": "Fill & Sign: change initials",
+      "labelKo": "채우기 및 서명: 이니셜 변경",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.image",
+      "label": "Export to image…",
+      "labelKo": "이미지로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "optimize.reduce",
+      "label": "Reduce file size…",
+      "labelKo": "파일 크기 줄이기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "optimize.advanced",
+      "label": "Optimize PDF…",
+      "labelKo": "PDF 최적화…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.text",
+      "label": "Export to text…",
+      "labelKo": "텍스트로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.docx",
+      "label": "Export to Word…",
+      "labelKo": "Word로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.pptx",
+      "label": "Export to PowerPoint…",
+      "labelKo": "PowerPoint로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.html",
+      "label": "Export to HTML…",
+      "labelKo": "HTML로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.rtf",
+      "label": "Export to RTF…",
+      "labelKo": "RTF로 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "app.preferences",
+      "label": "Preferences…",
+      "labelKo": "환경설정…",
+      "location": [
+        "Edit"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "tools.js_console",
+      "label": "JavaScript console…",
+      "labelKo": "JavaScript 콘솔…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "locked",
+        "viewer": "locked"
+      },
+      "id": "tools.document_js",
+      "label": "Document JavaScripts…",
+      "labelKo": "문서 JavaScript…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "ocr.recognize",
+      "label": "Recognize text…",
+      "labelKo": "텍스트 인식…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "ocr.enhance_camera",
+      "label": "Enhance camera image",
+      "labelKo": "카메라 이미지 개선",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "ocr.recognize_batch",
+      "label": "Recognize text in multiple files…",
+      "labelKo": "여러 파일의 텍스트 인식…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "a11y.check",
+      "label": "Check for accessibility…",
+      "labelKo": "접근성 검사…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "a11y.find_untagged",
+      "label": "Find untagged content",
+      "labelKo": "태그 없는 콘텐츠 찾기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "a11y.autotag",
+      "label": "Automatically tag PDF",
+      "labelKo": "PDF 자동 태그",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "a11y.report",
+      "label": "Open accessibility report",
+      "labelKo": "접근성 보고서 열기",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "a11y.reading_options",
+      "label": "Change reading options…",
+      "labelKo": "읽기 옵션 변경…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "a11y.alt_text",
+      "label": "Add alternate text…",
+      "labelKo": "대체 텍스트 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "a11y.autotag_fields",
+      "label": "Tag form fields",
+      "labelKo": "양식 필드 태그 지정",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "a11y.tags",
+      "label": "Tags panel",
+      "labelKo": "태그 패널",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "export.all_images",
+      "label": "Export all images…",
+      "labelKo": "이미지 모두 내보내기…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.header_footer",
+      "label": "Add header & footer…",
+      "labelKo": "머리글 및 바닥글 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.header_footer.update",
+      "label": "Update header & footer…",
+      "labelKo": "머리글 및 바닥글 업데이트…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.header_footer.remove",
+      "label": "Remove header & footer",
+      "labelKo": "머리글 및 바닥글 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.watermark",
+      "label": "Add watermark…",
+      "labelKo": "워터마크 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.watermark.update",
+      "label": "Update watermark…",
+      "labelKo": "워터마크 업데이트…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.watermark.remove",
+      "label": "Remove watermark",
+      "labelKo": "워터마크 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.background",
+      "label": "Add background…",
+      "labelKo": "배경 추가…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.background.update",
+      "label": "Update background…",
+      "labelKo": "배경 업데이트…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "edit.background.remove",
+      "label": "Remove background",
+      "labelKo": "배경 제거",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "protect.password",
+      "label": "Protect using password…",
+      "labelKo": "암호로 보호…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "protect.remove",
+      "label": "Remove security",
+      "labelKo": "보안 제거",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "protect.unlock",
+      "label": "Enter permissions password…",
+      "labelKo": "권한 암호 입력…",
+      "location": []
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "protect.properties",
+      "label": "Security properties…",
+      "labelKo": "보안 속성…",
+      "location": [
+        "File"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.organize",
+      "label": "Organize pages",
+      "labelKo": "페이지 구성",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "bookmark.add",
+      "label": "New bookmark",
+      "labelKo": "새 책갈피",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "locked"
+      },
+      "id": "bookmark.from_structure",
+      "label": "New bookmarks from structure",
+      "labelKo": "구조에서 새 책갈피 만들기",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.rotate",
+      "label": "Rotate pages clockwise",
+      "labelKo": "페이지를 시계 방향으로 회전",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.rotate_ccw",
+      "label": "Rotate pages counterclockwise",
+      "labelKo": "페이지를 시계 반대 방향으로 회전",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.delete",
+      "label": "Delete pages",
+      "labelKo": "페이지 삭제",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.insert_blank",
+      "label": "Insert blank page",
+      "labelKo": "빈 페이지 삽입",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.rotate_dialog",
+      "label": "Rotate pages…",
+      "labelKo": "페이지 회전…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.duplicate",
+      "label": "Duplicate pages",
+      "labelKo": "페이지 복제",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.reverse",
+      "label": "Reverse pages",
+      "labelKo": "페이지 순서 뒤집기",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.crop",
+      "label": "Crop pages",
+      "labelKo": "페이지 자르기",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.boxes",
+      "label": "Set page boxes…",
+      "labelKo": "페이지 상자 설정…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.insert",
+      "label": "Insert pages from file…",
+      "labelKo": "파일에서 페이지 삽입…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.replace",
+      "label": "Replace pages…",
+      "labelKo": "페이지 바꾸기…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.extract",
+      "label": "Extract pages…",
+      "labelKo": "페이지 추출…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "page.split",
+      "label": "Split document…",
+      "labelKo": "문서 분할…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "off"
+      },
+      "id": "page.number",
+      "label": "Number pages…",
+      "labelKo": "페이지 번호 매기기…",
+      "location": [
+        "Pages"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "help.shortcuts",
+      "label": "Keyboard shortcuts",
+      "labelKo": "키보드 단축키",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "help.discord",
+      "label": "Join the ArtCraft Discord",
+      "labelKo": "ArtCraft Discord 참여하기",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "help.app_page",
+      "label": "PdfCraft web page",
+      "labelKo": "PdfCraft 웹 페이지",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "help.github",
+      "label": "PdfCraft on GitHub",
+      "labelKo": "GitHub의 PdfCraft",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "help.website",
+      "label": "ArtCraft website",
+      "labelKo": "ArtCraft 웹사이트",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "help.check_updates",
+      "label": "Check for updates…",
+      "labelKo": "업데이트 확인…",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "on",
+        "viewer": "on"
+      },
+      "id": "help.about",
+      "label": "About PdfCraft",
+      "labelKo": "PdfCraft 정보",
+      "location": [
+        "Help"
+      ]
+    },
+    {
+      "grades": {
+        "builder": "off",
+        "viewer": "off"
+      },
+      "id": "link.document",
+      "label": "Open document links",
+      "labelKo": "문서 안 링크 열기",
+      "location": []
+    }
+  ],
+  "schema": 1
+}

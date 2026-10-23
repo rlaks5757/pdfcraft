@@ -156,6 +156,10 @@ impl PdfCraftApp {
     /// Show a native picker for `pick_for` without blocking the frame. The choice is used on a
     /// later frame by [`Self::process_picked`].
     pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: rfd::AsyncFileDialog, multiple: bool) {
+        // Host lock: a document comes from the host, never from the user's files.
+        if self.host_lock && pick_for == PickFor::Open {
+            return;
+        }
         // Insert and Replace edit the active document: remember which one.
         let target = match pick_for {
             PickFor::Files(purpose) if purpose.edits_active_document() => self.active_ids().map(|(_, id)| id),
@@ -180,6 +184,11 @@ impl PdfCraftApp {
     /// `pick_override` answers instead of a native panel (tests and automation); the answer
     /// still arrives on a later frame, like a real pick.
     pub(crate) fn ask(&mut self, ask: Ask, target: Option<DocId>, then: impl FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send + 'static) -> bool {
+        // Host lock: no picker that saves (a file or a folder) unless the host's policy turned
+        // exporting on. Choosing files to put into the document is an edit like any other.
+        if self.host_lock && matches!(ask, Ask::Save(_) | Ask::Folder(_)) && !self.host_any(crate::host_lock::EXPORT_CMDS) {
+            return false;
+        }
         if self.pickers.showing.swap(true, Ordering::SeqCst) {
             self.notify_tr("Another file dialog is still open. Finish with it first.");
             return false;

@@ -486,7 +486,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 }
             }
             #[cfg(target_arch = "wasm32")]
-            if let Err(e) = crate::editing::download("measurements.csv", csv.as_bytes()) {
+            if let Err(e) = crate::editing::download(&["measure.export"], "measurements.csv", csv.as_bytes()) {
                 app.notify(&e);
             }
         }

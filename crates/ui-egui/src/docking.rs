@@ -396,6 +396,10 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
         // Availability is a render projection: the saved group, selection and width survive Home.
         let _ = rendered.apply(Action::Close { panel: Panel::Inspector });
     }
+    // A viewer has no tool panel: its tools are the comment tools on the page.
+    if app.host_viewer() && rendered.contains(&Panel::Tools) {
+        let _ = rendered.apply(Action::Close { panel: Panel::Tools });
+    }
     let output = DockArea::new(egui::Id::new("pdfcraft-docking")).show_with_limits(
         ui,
         &rendered,

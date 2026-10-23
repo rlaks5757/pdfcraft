@@ -16,3 +16,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
+# Rasterizes a Korean text box to check its glyphs are drawn.
+pdfcraft-render = { workspace = true }

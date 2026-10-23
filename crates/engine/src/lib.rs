@@ -27,8 +27,8 @@ pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
-mod owner_guard;
 pub mod optimizer;
+mod owner_guard;
 pub mod print_raster;
 pub mod printcheck;
 mod scan_colours;
@@ -210,6 +210,57 @@ pub struct Ownership {
     pub actor: Option<String>,
     /// Every edit that changes the document is refused.
     pub read_only: bool,
+    /// Which edits the host lets through (see [`EditScope`]).
+    pub scope: EditScope,
+    /// The edit kinds the host's policy opened to a viewer (see [`EditClasses`]).
+    pub allow: EditClasses,
+    /// The host's per-command policy (`policy.overrides`), sorted by command id. The engine only
+    /// carries it; the interface decides what a command's setting means.
+    pub overrides: Vec<(String, bool)>,
+}
+
+/// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditScope {
+    /// Everything the document and its security allow: a stand-alone PdfCraft, or `builder`.
+    #[default]
+    All,
+    /// Comments only (`viewer`): annotations and form filling. Page operations, content editing,
+    /// form building, redaction, watermarks, protection, signing and the like are refused.
+    Viewer,
+}
+
+/// A kind of document edit a viewer is refused unless the host's policy turned the command for
+/// it on (`pdfcraft:open` `policy.overrides`). The policy works per command; the engine tells
+/// edits apart only by these kinds, so one command turned on opens its whole kind here and the
+/// interface keeps the other commands of the kind hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditClass {
+    /// Page operations: rotate, delete, move, insert, crop, number.
+    Page,
+    /// Direct editing of text, pictures and links.
+    Content,
+    /// Measurements.
+    Measure,
+}
+
+/// The edit kinds a host's policy opened to a viewer. Empty by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EditClasses(u8);
+
+impl EditClasses {
+    pub fn with(mut self, class: EditClass) -> Self {
+        self.0 |= 1 << class as u8;
+        self
+    }
+
+    pub fn has(self, class: EditClass) -> bool {
+        self.0 & (1 << class as u8) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 }
 
 /// Stable identifier of an open document within a session.
@@ -2369,6 +2420,7 @@ impl EditCtx {
 /// edit in it, so an edit sees the comments the ones before it made.
 fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     owner_guard::check(doc, edit, &cx.ownership)?;
+    owner_guard::check_scope(edit, cx.ownership.scope, cx.ownership.allow)?;
     let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| {
         let known = pdfcraft_annot::ownership::known(doc, &a);
         (a, known)
@@ -2807,6 +2859,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             modified: s.modified.map(|m| pdfcraft_render::pretty_date(&m)),
             name: s.name,
             in_reply_to: s.in_reply_to,
+            parent: s.parent,
             rect: s.rect,
             color: s.color,
             index: s.index,
@@ -2978,6 +3031,9 @@ pub enum EditError {
     /// The embedding page opened the document read-only (`pdfcraft:open` `readOnly`).
     #[error("the document is read-only")]
     HostReadOnly,
+    /// The embedding page opened the document as a viewer (`pdfcraft:open` `mode`): comments only.
+    #[error("this change isn't available here: only comments can be made in this view")]
+    HostViewerOnly,
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {
@@ -2997,6 +3053,10 @@ pub struct Session {
     /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
     /// local dates or the UTC ones wrong by the zone's offset.
     utc_offset: Option<fn() -> i64>,
+    /// A random number from the host, mixed into the ids new comments get. Without it a wasm32
+    /// build's ids depend only on the document and the time in seconds, so two sessions that
+    /// edit at the same point of the same file could make the same `/NM`.
+    entropy: Option<fn() -> u64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
@@ -3373,6 +3433,13 @@ impl Session {
         self
     }
 
+    /// Mix `random` (any 64 bits, new on every call) into the `/NM` of the comments this session
+    /// creates, for a host that has no random source of its own (a `wasm32-unknown-unknown` build).
+    pub fn with_entropy(mut self, random: fn() -> u64) -> Self {
+        self.entropy = Some(random);
+        self
+    }
+
     /// Seconds to add to UTC for the local time of this session: the injected zone, else 0 under
     /// the test clock (which is already local), else the system's.
     fn local_offset(&self) -> i64 {
@@ -3738,11 +3805,12 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let entropy = self.entropy;
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
-        let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
+        let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48) ^ entropy.map_or(0, |f| f().rotate_left(7)));
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
         }
@@ -3753,6 +3821,8 @@ impl Session {
         if cx.ownership.read_only {
             return Err(EditError::HostReadOnly);
         }
+        // Likewise a viewer's limit, also for an edit that would find nothing to do.
+        owner_guard::check_scope(&edit, cx.ownership.scope, cx.ownership.allow)?;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
@@ -4977,6 +5047,9 @@ impl Session {
         if d.ownership.read_only {
             return Err(EditError::HostReadOnly);
         }
+        if d.ownership.scope == EditScope::Viewer {
+            return Err(EditError::HostViewerOnly);
+        }
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -4997,6 +5070,9 @@ impl Session {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         if d.ownership.read_only {
             return Err(EditError::HostReadOnly);
+        }
+        if d.ownership.scope == EditScope::Viewer {
+            return Err(EditError::HostViewerOnly);
         }
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -5169,7 +5245,7 @@ pub fn comment_kind(a: &pdfcraft_render::Annotation) -> &str {
 /// pop-ups; the number is the comment's position on its page.
 pub fn comment_summary(name: &str, all: &[pdfcraft_render::Annotation], sort: SummarySort) -> String {
     use std::fmt::Write;
-    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| a.in_reply_to.is_none() && a.state.is_none()).collect();
+    let top: Vec<&pdfcraft_render::Annotation> = all.iter().filter(|a| !a.is_reply() && a.state.is_none()).collect();
     // Write a comment's replies, indenting each level. A reply to a reply keeps its `/IRT` on the
     // direct parent, so following one level would leave the deeper replies out of the summary.
     fn write_replies(out: &mut String, all: &[pdfcraft_render::Annotation], parent: &str, depth: usize) {

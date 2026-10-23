@@ -1272,6 +1272,19 @@ impl DocView {
         }
     }
 
+    /// Show `rect` (user space) on `page`: its centre goes to the middle of the window where the
+    /// page allows, at the zoom as it is (a note clicked in the Comments panel).
+    pub fn go_to_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
+        self.go_to_page(page);
+        let page = self.current;
+        self.goto_point = None;
+        let Some(p) = info.pages.get(page) else { return };
+        let [fx, fy] = p.dest_fraction(Some((rect[0] + rect[2]) / 2.0), Some((rect[1] + rect[3]) / 2.0), self.rotation);
+        if fx.is_some() || fy.is_some() {
+            self.goto_point = Some((page, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
+        }
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -2054,7 +2067,7 @@ impl DocView {
 /// The hover popup for an annotation. Replies and Fill & Sign marks (typed text, checks, signatures)
 /// show none: they are page content being edited, not comments.
 fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
-    if a.in_reply_to.is_some() || a.fill_sign {
+    if a.is_reply() || a.fill_sign {
         return None;
     }
     let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
@@ -2368,6 +2381,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.id).and_then(|id| app.views.iter().position(|v| v.id == id));
     if let Some(i) = pending {
         app.views[i].close_requested = false;
+        if !app.host_allows("file.close") {
+            return;
+        }
         if app.has_unsaved_work(i) {
             app.close_request = Some(crate::CloseRequest::Tab(app.views[i].id));
         } else {
@@ -2401,19 +2417,23 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Reload) => app.watch.reload_request = Some(view.id),
         #[cfg(target_arch = "wasm32")]
         Some(Notice::Reload) => {}
-        Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
-        Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
+        // Buttons in the notices open the same dialogs as the commands, so they follow them.
+        Some(Notice::Repairs) if app.host_allows("file.properties") => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
+        Some(Notice::Security) if app.host_allows("file.properties") => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
+        Some(Notice::Repairs | Notice::Security) => {}
         Some(Notice::Unlock) => app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None)),
         // Flags the view: the tab closes at the top of the next frame, where no document
         // borrow is held.
-        Some(Notice::Close) => {
+        Some(Notice::Close) if app.host_allows("file.close") => {
             if let Some(view) = app.views.get_mut(index) {
                 view.close_requested = true;
             }
         }
+        Some(Notice::Close) => {}
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
-        Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        Some(Notice::Console) if app.host_allows("tools.js_console") => app.dialog = Some(crate::Dialog::JsConsole),
+        Some(Notice::Console) => {}
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
@@ -2787,7 +2807,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_props: Option<(usize, usize)> = None;
     let mut field_props = false;
     let mut field_placed = false;
-    let can_modify = doc.allows_modification();
+    // A viewer's host scope edits content only when its policy says.
+    let can_modify = doc.allows_modification() && crate::host_lock::scope_allows(doc.ownership(), pdfcraft_engine::EditClass::Content);
     if preparing {
         crate::prepare::after_refresh(view, &form);
     } else {
@@ -3087,7 +3108,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     // Centred on the click, upright as the page is shown, at the host's size in points.
                     let (vx, vy) = xf.screen_to_view(p);
-                    let corners = [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
+                    let corners =
+                        [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
                     view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
@@ -4013,7 +4035,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, w)) = field_props {
         app.open_field_props(&name, w);
     }
-    if let Some(FieldMenu::Duplicate(name)) = field_menu {
+    if let Some(FieldMenu::Duplicate(name)) = field_menu.filter(|_| app.host_allows("form.field.properties")) {
         let pages = app.session.get(app.views[index].id).map_or(1, |d| d.info.pages.len());
         app.duplicate_draft = Some(crate::DuplicateDraft { name, all: true, from: 1, to: pages });
         app.dialog = Some(crate::Dialog::DuplicateField);
@@ -4059,11 +4081,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(why) = refused {
         app.notify_error(why);
     }
-    if open_signature || open_initials {
+    if (open_signature || open_initials) && app.host_allows("sign.fill.signature") {
         app.signature_draft = crate::fill_sign::SigDraft::new(open_initials, &app.comment_prefs.author);
         app.dialog = Some(crate::Dialog::Signature);
     }
-    if open_boxes {
+    if open_boxes && app.host_allows("page.boxes") {
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);
@@ -4635,7 +4657,8 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                ui.vertical(|ui| {
+                let host = app.host_locked();
+                let contents = |ui: &mut egui::Ui| {
                     if icons::button(ui, "mouse-pointer-2", 32.0, app.quick_tool == QuickTool::Select, tl!("Select (V)")).clicked() {
                         app.quick_tool = QuickTool::Select;
                     }
@@ -4644,8 +4667,14 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                     }
                     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
                     // group selects its last-used tool; clicking it again opens the flyout.
-                    for g in 0..comments::GROUPS.len() {
-                        let current = app.comment_prefs.group_tool[g];
+                    // A host build lays the markup and drawing tools out as plain buttons below, so
+                    // only the Comment group stays a flyout.
+                    let groups = if app.host_locked() { 1 } else { comments::GROUPS.len() };
+                    for g in 0..groups {
+                        // Tools the host's policy turned off are left out (all of them are on without the lock).
+                        let allowed: Vec<_> = comments::GROUPS[g].iter().copied().filter(|t| app.host_allows(t.command())).collect();
+                        let Some(&first) = allowed.first() else { continue };
+                        let current = Some(app.comment_prefs.group_tool[g]).filter(|c| allowed.contains(c)).unwrap_or(first);
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
                         let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
                         // A small corner triangle marks the flyout.
@@ -4661,7 +4690,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             .align(egui::RectAlign::RIGHT_START)
                             .gap(6.0)
                             .show(|ui| {
-                                for tool in comments::GROUPS[g] {
+                                for tool in &allowed {
                                     let on = app.quick_tool == QuickTool::Comment(*tool);
                                     let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
                                     let press = theme::Press::track(ui, &click);
@@ -4696,6 +4725,18 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                 }
                             });
                     }
+                    if app.host_locked() {
+                        // One click picks a tool; the PDFTron viewer shows them all, too.
+                        for tool in comments::GROUPS[1].iter().chain(comments::GROUPS[2]) {
+                            if !app.host_allows(tool.command()) {
+                                continue;
+                            }
+                            let on = app.quick_tool == QuickTool::Comment(*tool);
+                            if icons::button(ui, tool.icon(), 32.0, on, tl!(tool.label())).clicked() {
+                                app.execute(tool.command());
+                            }
+                        }
+                    }
                     // Edit text & images, while the Edit workspace is open (Acrobat's Edit toolbar)
                     // or the tool is in use.
                     if app.mode == crate::Mode::Edit || app.quick_tool == QuickTool::EditText {
@@ -4708,85 +4749,87 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             }
                         }
                     }
-                    // Fill & Sign ▸ (text, marks, date, signature).
-                    let current_fill = match app.quick_tool {
-                        QuickTool::Fill(f) => Some(f),
-                        _ => None,
-                    };
-                    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
-                    let resp = icons::button(
-                        ui,
-                        if current_fill.is_some() { shown.icon() } else { "pen-line" },
-                        32.0,
-                        current_fill.is_some(),
-                        tl!("Fill & Sign"),
-                    );
-                    let r = resp.rect;
-                    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        tri.to_vec(),
-                        if current_fill.is_some() { t.accent } else { t.text_faint },
-                        Stroke::NONE,
-                    ));
-                    if resp.clicked() && current_fill.is_none() {
-                        app.execute(shown.command());
-                    }
-                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
-                    egui::Popup::menu(&resp)
-                        .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
-                        .align(egui::RectAlign::RIGHT_START)
-                        .gap(6.0)
-                        .show(|ui| {
-                            for tool in crate::fill_sign::FILL_TOOLS {
-                                if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
-                                    continue;
-                                }
-                                let on = current_fill == Some(tool);
-                                let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
-                                let press = theme::Press::track(ui, &click);
-                                press.wash(ui, row, 4, on);
-                                let body = row.translate(press.offset());
-                                icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
-                                let reserve = if on { 28.0 } else { 8.0 };
-                                crate::widgets::paint_left(
-                                    ui,
-                                    body.left_center() + vec2(34.0, 0.0),
-                                    tl!(tool.label()),
-                                    theme::regular(13.0),
-                                    t.text,
-                                    (row.width() - 34.0 - reserve).max(0.0),
-                                );
-                                if on {
-                                    icons::paint(
+                    if app.host_allows("sign.fill.text") {
+                        // Fill & Sign ▸ (text, marks, date, signature).
+                        let current_fill = match app.quick_tool {
+                            QuickTool::Fill(f) => Some(f),
+                            _ => None,
+                        };
+                        let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
+                        let resp = icons::button(
+                            ui,
+                            if current_fill.is_some() { shown.icon() } else { "pen-line" },
+                            32.0,
+                            current_fill.is_some(),
+                            tl!("Fill & Sign"),
+                        );
+                        let r = resp.rect;
+                        let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            tri.to_vec(),
+                            if current_fill.is_some() { t.accent } else { t.text_faint },
+                            Stroke::NONE,
+                        ));
+                        if resp.clicked() && current_fill.is_none() {
+                            app.execute(shown.command());
+                        }
+                        let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
+                        egui::Popup::menu(&resp)
+                            .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
+                            .align(egui::RectAlign::RIGHT_START)
+                            .gap(6.0)
+                            .show(|ui| {
+                                for tool in crate::fill_sign::FILL_TOOLS {
+                                    if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
+                                        continue;
+                                    }
+                                    let on = current_fill == Some(tool);
+                                    let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+                                    let press = theme::Press::track(ui, &click);
+                                    press.wash(ui, row, 4, on);
+                                    let body = row.translate(press.offset());
+                                    icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
+                                    let reserve = if on { 28.0 } else { 8.0 };
+                                    crate::widgets::paint_left(
                                         ui,
-                                        Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)),
-                                        "check",
-                                        14.0,
-                                        t.accent,
+                                        body.left_center() + vec2(34.0, 0.0),
+                                        tl!(tool.label()),
+                                        theme::regular(13.0),
+                                        t.text,
+                                        (row.width() - 34.0 - reserve).max(0.0),
                                     );
+                                    if on {
+                                        icons::paint(
+                                            ui,
+                                            Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)),
+                                            "check",
+                                            14.0,
+                                            t.accent,
+                                        );
+                                    }
+                                    let click = theme::hand(click);
+                                    let info = tl!(tool.label()).to_string();
+                                    click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
+                                    if click.clicked() {
+                                        app.execute(tool.command());
+                                        ui.close();
+                                    }
                                 }
-                                let click = theme::hand(click);
-                                let info = tl!(tool.label()).to_string();
-                                click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
-                                if click.clicked() {
-                                    app.execute(tool.command());
+                                ui.separator();
+                                if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
+                                    app.execute(command);
                                     ui.close();
                                 }
-                            }
-                            ui.separator();
-                            if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
-                                app.execute(command);
-                                ui.close();
-                            }
-                        });
-                    if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
-                        ui.label(tl!("Font size:"));
-                        ui.add(
-                            egui::DragValue::new(&mut app.fill_text_size)
-                                .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
-                                .speed(0.25)
-                                .suffix(" pt"),
-                        );
+                            });
+                        if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
+                            ui.label(tl!("Font size:"));
+                            ui.add(
+                                egui::DragValue::new(&mut app.fill_text_size)
+                                    .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
+                                    .speed(0.25)
+                                    .suffix(" pt"),
+                            );
+                        }
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
@@ -4801,7 +4844,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                         .info
                                         .annotations
                                         .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.in_reply_to.is_none() && comments::made_by(a, tool))
+                                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
                             })
                         {
                             app.apply_edit(Edit::StyleAnnotation {
@@ -4814,7 +4857,16 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                             });
                         }
                     }
-                });
+                };
+                if host {
+                    // Nine more buttons than the upstream bar: scroll when the window is too low for them.
+                    // The area's frame is sized from the last frame, so grant the height first.
+                    let height = (area.height() - 28.0 - 12.0).max(64.0);
+                    ui.set_max_height(height);
+                    egui::ScrollArea::vertical().max_height(height).show(ui, contents);
+                } else {
+                    ui.vertical(contents);
+                }
             });
     });
 }
@@ -5370,6 +5422,7 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
             rect: [0.0; 4],
             color: None,
             index: 0,
@@ -6410,6 +6463,11 @@ trailer << /Root 1 0 R >>
         // A zoom beyond the view's range is clamped to it.
         v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(1e30) }, &info);
         assert_eq!((v.zoom, v.goto_point), (64.0, None));
+        // A rectangle: its centre (a quarter across, a quarter down page 2) goes to the window's middle.
+        v.viewport_w = 600.0;
+        v.viewport_h = 400.0;
+        v.go_to_rect(1, [50.0, 250.0, 100.0, 350.0], &info);
+        assert_eq!((v.current, v.goto_point), (1, Some((1, Some(0.25), Some(0.25), vec2(300.0, 200.0)))));
         v.go_to_dest(0, DestView::Fit, &info);
         assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
         v.go_to_dest(0, DestView::FitH { top: Some(100.0) }, &info);

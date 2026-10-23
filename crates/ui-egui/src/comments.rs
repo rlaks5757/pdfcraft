@@ -579,7 +579,7 @@ impl PageCx<'_> {
 
     /// Top-level comments on this page, in paint order.
     fn comments(&self) -> impl Iterator<Item = &Annotation> {
-        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.in_reply_to.is_none() && a.subtype != "Popup")
+        self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && !a.is_reply() && a.subtype != "Popup")
     }
 
     /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
@@ -1559,9 +1559,9 @@ pub(crate) fn caret_snap(text: &PageText, vx: f32, vy: f32) -> Option<([f32; 2],
 /// The box for `text` at `size` with its displayed top-left corner at `at`, on a page turned by
 /// `rotation` (its `/Rotate`): on a quarter-turned page it is taller than wide in user space.
 pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64; 4] {
-    use pdfcraft_engine::annot_text::{text_width, wrap};
+    use pdfcraft_engine::annot_text::{widest_line, wrap};
     let pad = 2.0;
-    let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
+    let longest = widest_line(text, size);
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
     let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
@@ -1626,7 +1626,7 @@ pub(crate) fn context_menu(
     allowed: bool,
 ) -> Option<CanvasAction> {
     let mut action = None;
-    let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
+    let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
@@ -1672,7 +1672,7 @@ pub(crate) fn context_menu(
                     }
                 });
             });
-            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| r.replies_to(a)).collect();
             let marked = crate::comments_panel::is_marked(&thread);
             if ui.add_enabled(mine, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));

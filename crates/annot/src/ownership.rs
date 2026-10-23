@@ -48,6 +48,13 @@ fn owned_by(doc: &Document, d: &Dict, actor: &str) -> bool {
     owner_of(doc, d).is_some_and(|o| o == actor)
 }
 
+/// Is the annotation at `(page, index)` a link or a form widget? Those belong to the document's
+/// own layout, not to any commenter. Positions that don't exist are not.
+pub fn is_layout_annotation(doc: &Document, page: usize, index: usize) -> bool {
+    let Ok(p) = page_ref(doc, page) else { return false };
+    annots(doc, p).get(index).and_then(|e| entry_dict(doc, e)).is_some_and(|d| matches!(d.name(b"Subtype"), Some(b"Link" | b"Widget")))
+}
+
 /// May `actor` change the comment at `(page, index)`? Not when someone else (or nobody) owns it.
 /// Positions that don't exist pass: the edit itself reports them.
 pub fn check_target(doc: &Document, page: usize, index: usize, actor: &str) -> Result<(), AnnotError> {
@@ -137,8 +144,8 @@ fn same(a: &Essence, b: &Essence) -> bool {
 }
 
 fn essence(doc: &Document, d: &Dict) -> Essence {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     struct Walk<'a> {
         doc: &'a Document,
@@ -346,7 +353,8 @@ pub fn claim_new(doc: &mut Document, before: &Known, actor: &str, fresh_name: &m
             // Best effort: an old inline entry that an edit turned into a reference, or left in
             // place, is matched by equal dictionary or by position and subtype.
             if is_new && !new_page {
-                let same = |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
+                let same =
+                    |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
                 if let Some(at) = old_inline.iter().position(same) {
                     old_inline.swap_remove(at);
                     is_new = false;

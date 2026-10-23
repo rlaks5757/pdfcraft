@@ -644,7 +644,7 @@ impl PdfCraftApp {
             // document must be unedited since (page numbers shift, and edits to those pages
             // aren't in the files) and still the active one (deleting edits the active document).
             let generation = self.session.get(id).map(|d| d.edit_generation());
-            self.write_files_then(named, tl!("Choose a folder for the extracted pages"), move |app| {
+            self.write_files_then(named, tl!("Choose a folder for the extracted pages"), &["file.save_as"], move |app| {
                 if !opts.delete {
                     return;
                 }
@@ -681,15 +681,26 @@ impl PdfCraftApp {
         }
     }
 
-    /// Write named files into a chosen folder (desktop) or as downloads (web).
-    pub(crate) fn write_files(&mut self, named: &[(String, Arc<Vec<u8>>)], title: &str) {
-        self.write_files_then(named.to_vec(), title, |_| {});
+    /// Write named files into a chosen folder (desktop) or as downloads (web). `cmds` are the
+    /// commands the files are for: a host build writes them only when one of them is on.
+    pub(crate) fn write_files(&mut self, named: &[(String, Arc<Vec<u8>>)], title: &str, cmds: &[&str]) {
+        self.write_files_then(named.to_vec(), title, cmds, |_| {});
     }
 
     /// [`Self::write_files`], then `after` once every file is written: now, or on a later frame
     /// when the user chooses the folder. `after` never runs when writing fails or is cancelled.
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
-    pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, after: impl FnOnce(&mut Self) + Send + 'static) {
+    pub(crate) fn write_files_then(
+        &mut self,
+        named: Vec<(String, Arc<Vec<u8>>)>,
+        title: &str,
+        cmds: &[&str],
+        after: impl FnOnce(&mut Self) + Send + 'static,
+    ) {
+        if !self.host_any(cmds) {
+            self.notify_host_off();
+            return;
+        }
         if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {
             self.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", tl!("the name is not a plain file name"))]);
             return;
@@ -721,7 +732,7 @@ impl PdfCraftApp {
         {
             let _ = title;
             for (name, bytes) in &named {
-                if let Err(e) = crate::editing::download(name, bytes) {
+                if let Err(e) = crate::editing::download(cmds, name, bytes) {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", name), ("e", &e.to_string())]);
                     return;
                 }
@@ -796,7 +807,7 @@ impl PdfCraftApp {
                 (unique, bytes)
             })
             .collect();
-        self.write_files(&named, "Choose a folder for the split files");
+        self.write_files(&named, "Choose a folder for the split files", &["page.split"]);
     }
 
     /// Summarize Comments: make the summary and open it as a new document.
@@ -890,7 +901,7 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        if let Err(e) = crate::editing::download(&format!("{stem}.{ext}"), &bytes) {
+        if let Err(e) = crate::editing::download(&["export.docx", "export.pptx", "export.html", "export.rtf"], &format!("{stem}.{ext}"), &bytes) {
             self.notify_error(e);
         }
     }
@@ -954,7 +965,9 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = crate::editing::download("report.csv", csv.as_bytes());
+        if let Err(e) = crate::editing::download(&["comment.export", "form.export_data"], "report.csv", csv.as_bytes()) {
+            self.notify(e);
+        }
     }
 
     pub fn export_data_dialog(&mut self, comments: bool, fields: bool) {
@@ -1013,7 +1026,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         match self.session.export_data(id, pdfcraft_engine::DataFormat::Xfdf, comments, fields) {
             Ok(bytes) => {
-                let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
+                if let Err(e) = crate::editing::download(&["comment.export", "form.export_data"], &format!("{stem}.xfdf"), &bytes) {
+                    self.notify(e);
+                }
             }
             Err(e) => self.notify_error(e),
         }
@@ -1089,12 +1104,16 @@ mod stem_tests {
         for bad in ["../x.pdf", "..", ".", "", "sub/x.pdf", "sub\\x.pdf", "C:x.pdf", absolute.as_str()] {
             assert!(!is_plain_file_name(bad), "{bad}");
             // A plain name first: nothing is written when any name in the batch is refused.
-            app.write_files(&[("ok.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec())), (bad.into(), std::sync::Arc::new(b"%PDF".to_vec()))], "t");
+            app.write_files(
+                &[("ok.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec())), (bad.into(), std::sync::Arc::new(b"%PDF".to_vec()))],
+                "t",
+                &[],
+            );
             assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("not a plain file name")), "{bad}");
         }
         let names: Vec<_> = walk(&dir);
         assert!(names.is_empty(), "{names:?}");
-        app.write_files(&[("x.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec()))], "t");
+        app.write_files(&[("x.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec()))], "t", &[]);
         assert_eq!(walk(&dir), vec![out.join("x.pdf")]);
         let _ = std::fs::remove_dir_all(&dir);
     }

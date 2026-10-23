@@ -9,10 +9,45 @@
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//! A text box whose text has characters outside WinAnsi (Korean, say) is drawn instead with a
+//! subset of the bundled Korean face (`pdfcraft_fonts::subset`), when the build has one.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+
+/// The bundled face that draws `text`, when it has characters WinAnsi can't encode and the face
+/// has a glyph for every one of them. Line breaking, box sizing and drawing all use this one
+/// decision, so what is measured is what is drawn.
+fn unicode_face(text: &str) -> Option<&'static pdfcraft_fonts::CraftFont> {
+    first_undrawable(text)?;
+    pdfcraft_fonts::subset::face_for(text)
+}
+
+/// A measuring function for lines of `text`: the bundled face's advances when it draws `text`,
+/// else Helvetica's.
+fn measurer(text: &str) -> impl Fn(&str, f64) -> f64 {
+    let face = unicode_face(text);
+    move |s, size| match face {
+        Some(f) => pdfcraft_fonts::subset::width(f, s, size),
+        None => pdfcraft_fonts::helvetica_width(s, size),
+    }
+}
+
+/// Advance of the single line `s` at `size` points, in the font it is drawn with.
+pub fn text_width(s: &str, size: f64) -> f64 {
+    measurer(s)(s, size)
+}
+
+/// The widest line of `text` at `size` points, in the font the whole text is drawn with.
+pub fn widest_line(text: &str, size: f64) -> f64 {
+    let measure = measurer(text);
+    text.lines().map(|l| measure(l, size)).fold(0.0, f64::max)
+}
+
+/// Greedy line breaking of `text` within `width` points, measured in the font it is drawn with.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    pdfcraft_fonts::wrap_with(text, size, width, measurer(text))
+}
 
 use crate::{NOTE_SIZE, Rgb, n};
 
@@ -281,22 +316,59 @@ fn text_turn(d: &Dict) -> i64 {
 /// "By …" line, and a redaction mark's overlay text (drawn when it is applied). `None` when all of
 /// it can be drawn.
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
+    let (what, text, c, eligible) = unencodable(d)?;
+    // A bundled face with a glyph for every character draws it (see `build`).
+    if eligible && unicode_face(&text).is_some() {
+        return None;
+    }
+    Some((what, c))
+}
+
+/// What `stream`, just built from `d`, actually drew as `?`: [`undrawable_text`], except that
+/// text the bundled face was meant to draw but did not (its subset could not be cut) counts too.
+pub fn drawn_as_question_mark(d: &Dict, stream: &Stream) -> Option<char> {
+    let (_, _, c, eligible) = unencodable(d)?;
+    let unicode = stream
+        .dict
+        .get(b"Resources")
+        .and_then(Object::as_dict)
+        .and_then(|r| r.get(b"Font"))
+        .and_then(Object::as_dict)
+        .and_then(|f| f.get(b"Helv"))
+        // Built, the font is a Type0 dictionary; stored, it is a reference (only ours are hoisted).
+        .is_some_and(|f| match f {
+            Object::Ref(_) => true,
+            f => f.as_dict().is_some_and(|f| f.name(b"Subtype") == Some(b"Type0")),
+        });
+    (!(eligible && unicode)).then_some(c)
+}
+
+/// [`undrawable_text`] before the bundled face is considered: what, the whole text, the first
+/// character, and whether the bundled face may draw this kind of text.
+fn unencodable(d: &Dict) -> Option<(&'static str, String, char, bool)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
-    let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
-        b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
-        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
+    let (what, text, eligible) = match d.name(b"Subtype")? {
+        b"FreeText" => ("the comment's text", text(b"Contents")?, true),
+        b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?, false),
+        b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?, true),
         // Drawn in Helvetica when the redaction is applied: refused when it is marked.
-        b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?),
+        b"Redact" => ("the redaction's overlay text", text(b"OverlayText")?, false),
         _ => return None,
     };
-    Some((what, first_undrawable(&text)?))
+    let c = first_undrawable(&text)?;
+    Some((what, text, c, eligible))
 }
 
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
 pub fn build(d: &Dict) -> Option<Stream> {
+    build_with(d, true)
+}
+
+/// [`build`]; `unicode: false` never uses the bundled face (text WinAnsi can't encode comes out
+/// as `?`), for a document that has used up its budget of embedded fonts.
+pub fn build_with(d: &Dict, unicode: bool) -> Option<Stream> {
     // Imported measurement appearances may include leaders, captions and formatting that
     // this builder cannot reproduce. Preserve them rather than silently losing detail.
     if d.contains(b"Measure") && !d.contains(b"PCMeasureValue") {
@@ -654,7 +726,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
                         }
                         [0.0, 0.0, dw, dh]
                     };
-                    let mut stream = stamp(kind, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res);
+                    let mut stream = stamp(kind, draw, stroke.unwrap_or(kind.color()), by.as_deref(), opacity, res, unicode);
                     if turn != 0 {
                         // Upright in the stamp's displayed box, then mapped into `/Rect` the way
                         // the page maps display space into user space. Viewers fit that box to
@@ -746,27 +818,44 @@ pub fn build(d: &Dict) -> Option<Stream> {
             ));
             let mut out = c.into_bytes();
             let mut y = rect[3] - pad - size * 0.9;
-            for line in wrap(&text, size, width) {
+            // Text WinAnsi can't encode goes in a subset of the bundled face; Latin-only text
+            // keeps Helvetica unchanged.
+            let unicode =
+                unicode.then(|| unicode_face(&text)).flatten().and_then(|face| pdfcraft_fonts::subset::build(face, &text).map(|f| (face, f)));
+            let measure = |s: &str, size: f64| match &unicode {
+                Some((face, _)) => pdfcraft_fonts::subset::width(face, s, size),
+                None => pdfcraft_fonts::helvetica_width(s, size),
+            };
+            for line in pdfcraft_fonts::wrap_with(&text, size, width, measure) {
                 if y < rect[1] - size {
                     break;
                 }
-                let lw = text_width(&line, size);
+                let lw = measure(&line, size);
                 let x = match q {
                     1 => rect[0] + pad + (width - lw) / 2.0,
                     2 => rect[2] - pad - lw,
                     _ => rect[0] + pad,
                 };
                 out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-                out.extend(literal(&win_ansi(&line)));
+                match &unicode {
+                    Some((_, f)) => out.extend(f.show(&line)),
+                    None => out.extend(literal(&win_ansi(&line))),
+                }
                 out.extend_from_slice(b" Tj\n");
                 y -= size * 1.2;
             }
             out.extend_from_slice(b"ET\n");
-            let mut font = Dict::new();
-            font.set(b"Type".to_vec(), Object::name("Font"));
-            font.set(b"Subtype".to_vec(), Object::name("Type1"));
-            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            let font = match &unicode {
+                Some((_, f)) => f.dict.clone(),
+                None => {
+                    let mut font = Dict::new();
+                    font.set(b"Type".to_vec(), Object::name("Font"));
+                    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+                    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+                    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                    font
+                }
+            };
             let mut fonts = Dict::new();
             fonts.set(b"Helv".to_vec(), Object::Dict(font));
             res.set(b"Font".to_vec(), Object::Dict(fonts));
@@ -785,7 +874,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
         let value = value.to_text();
         if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
             let size = 10.0;
-            let x = (rect[0] + rect[2] - text_width(&value, size)) * 0.5;
+            let x = (rect[0] + rect[2] - pdfcraft_fonts::helvetica_width(&value, size)) * 0.5;
             let y = rect[3] - 12.0;
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
             out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
@@ -807,7 +896,7 @@ pub fn build(d: &Dict) -> Option<Stream> {
 
 /// A rubber stamp: a rounded frame (a pointed tag for sign-here stamps) with the label in bold
 /// capitals, and the dynamic stamps' "By … at …" line.
-fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opacity: f64, mut res: Dict) -> Stream {
+fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opacity: f64, mut res: Dict, unicode: bool) -> Stream {
     let [x0, y0, x1, y1] = rect;
     let h = y1 - y0;
     let mut c = String::new();
@@ -886,11 +975,11 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     let (title_h, by_h) = if by.is_some() { (h * 0.5, h * 0.22) } else { (h * 0.52, 0.0) };
     let text_area = if kind.group() == crate::StampGroup::SignHere { (x0 + h * 0.45, x1 - lw * 2.0) } else { (x0 + lw * 2.0, x1 - lw * 2.0) };
     let mut size = title_h;
-    let tw = text_width(label, size) * 1.12;
+    let tw = pdfcraft_fonts::helvetica_width(label, size) * 1.12;
     if tw > text_area.1 - text_area.0 - 4.0 {
         size *= (text_area.1 - text_area.0 - 4.0) / tw;
     }
-    let tw = text_width(label, size) * 1.12;
+    let tw = pdfcraft_fonts::helvetica_width(label, size) * 1.12;
     let text_col = if kind.group() == crate::StampGroup::SignHere { [1.0, 1.0, 1.0] } else { col };
     let ty = if by.is_some() { y0 + h * 0.48 } else { y0 + (h - size * 0.72) / 2.0 };
     let mut out = c.into_bytes();
@@ -900,17 +989,26 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     );
     out.extend(literal(&win_ansi(label)));
     out.extend_from_slice(b" Tj\n");
+    // A "By" line WinAnsi can't encode (a Korean name) is drawn in a subset of the bundled face.
+    let by_font = by.filter(|_| unicode).and_then(|b| unicode_face(b).and_then(|face| pdfcraft_fonts::subset::build(face, b).map(|f| (face, f))));
+    let by_width = |b: &str, s: f64| match &by_font {
+        Some((face, _)) => pdfcraft_fonts::subset::width(face, b, s),
+        None => pdfcraft_fonts::helvetica_width(b, s),
+    };
     if let Some(b) = by {
         let mut s = by_h;
-        let bw = text_width(b, s);
+        let bw = by_width(b, s);
         if bw > text_area.1 - text_area.0 - 4.0 {
             s *= (text_area.1 - text_area.0 - 4.0) / bw;
         }
-        let bw = text_width(b, s);
+        let bw = by_width(b, s);
         out.extend(
             format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
         );
-        out.extend(literal(&win_ansi(b)));
+        match &by_font {
+            Some((_, f)) => out.extend(f.show(b)),
+            None => out.extend(literal(&win_ansi(b))),
+        }
         out.extend_from_slice(b" Tj\n");
     }
     out.extend_from_slice(b"ET\n");
@@ -924,7 +1022,7 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     };
     let mut fonts = Dict::new();
     fonts.set(b"HelvB".to_vec(), font("Helvetica-Bold"));
-    fonts.set(b"Helv".to_vec(), font("Helvetica"));
+    fonts.set(b"Helv".to_vec(), by_font.map_or_else(|| font("Helvetica"), |(_, f)| Object::Dict(f.dict)));
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     form(rect, &out, res)
 }

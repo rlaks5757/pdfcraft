@@ -38,15 +38,48 @@ pub enum SaveTarget {
     As,
 }
 
+/// The comment the annotation at `(page, index)` replies to (`None` for a comment of its own).
+fn reply_parent(annotations: &[pdfcraft_render::Annotation], page: usize, index: usize) -> Option<pdfcraft_render::Annotation> {
+    let a = annotations.iter().find(|a| a.page == page && a.index == index && a.is_reply())?;
+    annotations.iter().find(|p| a.replies_to(p)).cloned()
+}
+
+/// Where `parent` is after a delete shifted the indexes: the same comment (comments can share a
+/// `/NM`, so every field is compared), at or before its old place.
+fn find_after_delete(annotations: &[pdfcraft_render::Annotation], parent: &pdfcraft_render::Annotation) -> Option<(usize, usize)> {
+    annotations
+        .iter()
+        .filter(|x| {
+            x.page == parent.page
+                && x.index <= parent.index
+                && !x.is_reply()
+                && (x.name.as_ref(), &x.subtype, x.rect, x.contents.as_ref(), x.author.as_ref())
+                    == (parent.name.as_ref(), &parent.subtype, parent.rect, parent.contents.as_ref(), parent.author.as_ref())
+        })
+        .map(|x| (x.page, x.index))
+        .max_by_key(|(_, i)| *i)
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // Host lock: a page or content edit works only through a command that is on, wherever on
+        // screen it was started (the page grid's buttons, drags and keys included).
+        if self.host_lock && !self.host_edit_allowed(&edit) {
+            self.notify_host_off();
+            return false;
+        }
         let label = edit.label();
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
             (None, 0, false)
+        };
+        // Deleting a reply leaves its comment selected: remembered as a copy, as the delete shifts indexes.
+        let reply_parent = match &edit {
+            Edit::DeleteAnnotation { page, index } => self.session.get(id).and_then(|d| reply_parent(&d.info.annotations, *page, *index)),
+            _ => None,
         };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
@@ -150,7 +183,7 @@ impl PdfCraftApp {
                     }
                     Edit::AddAnnotation(a) => {
                         // Select the new comment (appended last among the page's comments).
-                        let newest = info.annotations.iter().filter(|x| x.page == a.page && x.in_reply_to.is_none()).map(|x| x.index).max();
+                        let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
                         view.comments.selected = newest.map(|n| (a.page, n));
                         view.comments.reveal = true;
                         // A new highlight opens its note for typing straight away, as in Acrobat,
@@ -162,7 +195,9 @@ impl PdfCraftApp {
                             view.comments.editing = Some((a.page, n, String::new()));
                         }
                     }
-                    Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+                    Edit::DeleteAnnotation { .. } => {
+                        view.comments.selected = reply_parent.as_ref().and_then(|p| find_after_delete(&info.annotations, p))
+                    }
                     _ => {}
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
@@ -502,7 +537,7 @@ impl PdfCraftApp {
                 let newest = self
                     .session
                     .get(view.id)
-                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && a.in_reply_to.is_none()).map(|a| a.index).max());
+                    .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
                 view.comments.selected = newest.map(|index| (page, index));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;
@@ -674,7 +709,7 @@ impl PdfCraftApp {
             let to_host = self.host_save.is_some();
             let delivered = match &self.host_save {
                 Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
-                None => download(&name, &bytes),
+                None => download(&["file.save_as"], &name, &bytes),
             };
             match delivered {
                 Ok(()) => {
@@ -798,6 +833,9 @@ impl PdfCraftApp {
 
     /// Close a tab, asking first if it has unsaved changes.
     pub fn request_close_tab(&mut self, index: usize) {
+        if !self.host_allows("file.close") {
+            return;
+        }
         // Text typed into a field counts as an unsaved change.
         if self.has_unsaved_work(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
@@ -810,6 +848,9 @@ impl PdfCraftApp {
 
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     pub fn close_all(&mut self) {
+        if !self.host_allows("file.close_all") {
+            return;
+        }
         for i in (0..self.views.len()).rev() {
             if !self.has_unsaved_work(i) {
                 self.close_tab(i);
@@ -822,6 +863,9 @@ impl PdfCraftApp {
 
     /// File ▸ Revert (after the confirmation).
     pub fn revert_active(&mut self) {
+        if !self.host_allows("file.revert") {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
         match self.session.revert(id) {
             Ok(()) => {
@@ -1058,7 +1102,12 @@ fn short_name(path: &str) -> String {
 
 /// Offer bytes as a browser download.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn download(cmds: &[&str], name: &str, bytes: &[u8]) -> Result<(), String> {
+    // Host lock: a save goes to the host as a message, never to the user's disk, unless the
+    // host's policy turned on a command this file is for (`cmds`: any of them).
+    if crate::HOST_LOCK && !crate::host_lock::downloads_allow(cmds) {
+        return Err(crate::host_lock::host_off_text().to_string());
+    }
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let array = js_sys::Uint8Array::from(bytes);
