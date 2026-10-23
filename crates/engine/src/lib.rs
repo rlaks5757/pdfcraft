@@ -222,6 +222,8 @@ pub struct Ownership {
     /// The page keeps the document's annotations in its own database (`annotSync`): see
     /// [`Session::take_annot_changes`]. Needs an `actor`.
     pub annot_sync: bool,
+    /// `commentsPanel: false`: the interface hides its own comments panel (the page has its own).
+    pub hide_comments_panel: bool,
 }
 
 /// How far the embedding page lets editing go (`pdfcraft:open` `mode`).

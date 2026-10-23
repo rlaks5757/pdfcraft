@@ -55,6 +55,7 @@ mod drag_pointer;
 mod export_ui;
 mod host_compare;
 mod host_lock;
+mod host_annots;
 mod host_stamp;
 mod js_ui;
 mod marks_ui;
@@ -66,6 +67,8 @@ mod sign_ui;
 mod stamps_ui;
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_lock::{HOST_LOCK, commands_manifest, open_scope, parse_mode, policy_overrides, with_policy};
+pub use host_annots::{AnnotCommand, AnnotEvent, AnnotInbox, HostAnnotFn};
+pub use pdfcraft_engine::{AnnotChanges, RejectedAnnot, RemoteAnnot};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 pub use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
 mod standards_ui;
@@ -646,6 +649,11 @@ pub struct PdfCraftApp {
     /// Stamp requests from the embedding page, and where to report them (web, see [`StampCommand`]).
     pub stamp_inbox: StampInbox,
     pub host_stamp: Option<HostStampFn>,
+    /// The embedding page's annotation messages, and where to report changes (web, see [`AnnotCommand`]).
+    pub annot_inbox: AnnotInbox,
+    pub host_annots: Option<HostAnnotFn>,
+    /// The selection last reported to the page (`None`: nothing reported yet).
+    annot_selected_sent: Option<Option<String>>,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
     pub compare_inbox: CompareInbox,
     pub host_compare: Option<HostCompareFn>,
@@ -1016,6 +1024,9 @@ impl PdfCraftApp {
             host_compare: None,
             compare_taken: false,
             host_stamp: None,
+            annot_inbox: Default::default(),
+            host_annots: None,
+            annot_selected_sent: None,
             armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -2312,6 +2323,9 @@ impl PdfCraftApp {
         if self.mode == Mode::Read {
             self.right_before_read = None;
         }
+        if panel == Some(RightPanel::Comments) && self.comments_panel_hidden() {
+            return;
+        }
         if panel == Some(RightPanel::Comments) {
             self.comments_panel_closed = false;
         } else if panel.is_none() && self.right == Some(RightPanel::Comments) {
@@ -3170,6 +3184,10 @@ impl eframe::App for PdfCraftApp {
             }
         }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        // A failed open drops the annotation messages that were waiting for it.
+        if !failed.is_empty() && let Ok(mut q) = self.annot_inbox.lock() {
+            q.clear();
+        }
         for (name, e) in failed {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
         }
@@ -3194,6 +3212,10 @@ impl eframe::App for PdfCraftApp {
         }
         self.host_stamp_tick(ctx);
         self.host_compare_tick();
+        // The host hid this interface's comments panel: nothing opens it again.
+        if self.right == Some(RightPanel::Comments) && self.comments_panel_hidden() {
+            self.right = None;
+        }
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         craft_quit::on_close_request(ctx);
@@ -3330,6 +3352,7 @@ impl eframe::App for PdfCraftApp {
             }
         });
         self.process_pending_edits();
+        self.host_annots_tick();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);

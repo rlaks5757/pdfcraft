@@ -6996,6 +6996,30 @@ mod annot_sync {
         e.undo.iter().map(|x| of(&x.1)).chain(e.redo.iter().map(|x| of(&x.1))).chain(std::iter::once(of(&e.cos))).collect()
     }
 
+    /// A host stamp is an ordinary annotation to the diff: it goes out once, owned by the actor,
+    /// with the host's metadata inside, and never marks the file dirty.
+    #[test]
+    fn a_placed_stamp_goes_out_through_the_diff() {
+        let (mut s, id) = sharing("alice");
+        let file = MarkFile { name: "stamp.png".into(), bytes: quadrant_png(), page: 0 };
+        s.apply(
+            id,
+            Edit::AddCustomStamp {
+                page: 0,
+                rect: [50.0, 50.0, 130.0, 90.0],
+                name: "Approved".into(),
+                file,
+                author: "alice".into(),
+                extra: Some(("PpmStamp".into(), "meta-1".into())),
+            },
+        )
+        .unwrap();
+        let up = only(s.take_annot_changes(id));
+        assert_eq!((up.page, up.xfdf.contains("meta-1")), (0, true), "{up:?}");
+        assert!(!s.get(id).unwrap().dirty);
+        assert!(s.take_annot_changes(id).is_none());
+    }
+
     #[test]
     fn edits_undo_and_redo_are_handed_out_once_and_never_dirty() {
         let (mut s, id) = sharing("u-a");
@@ -7259,7 +7283,7 @@ mod annot_sync {
         let d = a.get(id).unwrap();
         let cos = &d.editor.as_ref().unwrap().cos;
         let linked = pdfcraft_annot::summaries(cos).into_iter().find(|s| s.name.as_deref() == Some(reply.annot_id.as_str())).expect("the reply is still there");
-        assert_eq!(linked.in_reply_to.is_some() || linked.parent.is_some(), true, "{linked:?}");
+        assert!(linked.in_reply_to.is_some() || linked.parent.is_some(), "{linked:?}");
         // And the reply goes with a deleted parent only when the server says so.
         assert!(names(&a, id, 0).contains(&parent));
     }

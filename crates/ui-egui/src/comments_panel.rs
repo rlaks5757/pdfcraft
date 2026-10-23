@@ -401,7 +401,8 @@ fn card(
                 let x = resp.response.rect.left() + 12.0;
                 ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, t.border));
             }
-            if selected && allowed {
+            // A shared reply can't be replied to (the server keeps one level).
+            if selected && allowed && !(doc.annot_sync() && doc.annot_is_reply(a.page, a.index)) {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     // The field fills its line and Post sits right-aligned under it: a field sized

@@ -430,7 +430,8 @@ pub(crate) fn is_reply_at(cos: &Cos, page: usize, index: usize) -> bool {
 /// Replies to replies are refused (the server does): the edit says which annotation it replies
 /// to or sets the state of.
 pub(crate) fn check_reply_target(cos: &Cos, edit: &Edit) -> Result<(), EditError> {
-    if let Edit::ReplyToAnnotation { page, index, .. } | Edit::SetAnnotationStatus { page, index, .. } | Edit::MarkAnnotation { page, index, .. } = edit
+    if let Edit::ReplyToAnnotation { page, index, .. } | Edit::SetAnnotationStatus { page, index, .. } | Edit::MarkAnnotation { page, index, .. } =
+        edit
         && is_reply_at(cos, *page, *index)
     {
         return Err(EditError::Invalid("a reply can't be replied to".into()));
@@ -490,7 +491,10 @@ impl Session {
         if st.upserts.is_empty() && st.deletes.is_empty() {
             return None;
         }
-        let mut changes = AnnotChanges { upserts: std::mem::take(&mut st.upserts).into_values().collect(), deletes: std::mem::take(&mut st.deletes).into_iter().collect() };
+        let mut changes = AnnotChanges {
+            upserts: std::mem::take(&mut st.upserts).into_values().collect(),
+            deletes: std::mem::take(&mut st.deletes).into_iter().collect(),
+        };
         changes.upserts.sort_by(|a, b| (a.page, &a.annot_id).cmp(&(b.page, &b.annot_id)));
         // Everything handed out is now known to the server.
         for u in &changes.upserts {
@@ -553,9 +557,8 @@ impl Session {
         let mut report = RemoteReport::default();
         let actor = doc.ownership.actor.clone().unwrap_or_default();
         let hash_item = |a: &RemoteAnnot| hash_of(&(&a.author_id, &a.xfdf));
-        let (live, known): (Vec<RemoteAnnot>, Vec<RemoteAnnot>) = upserts
-            .into_iter()
-            .partition(|a| !(skip_known && doc.sync.as_ref().and_then(|s| s.remote.get(&a.annot_id)) == Some(&hash_item(a))));
+        let (live, known): (Vec<RemoteAnnot>, Vec<RemoteAnnot>) =
+            upserts.into_iter().partition(|a| !(skip_known && doc.sync.as_ref().and_then(|s| s.remote.get(&a.annot_id)) == Some(&hash_item(a))));
         report.skipped = known.len();
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
@@ -575,7 +578,8 @@ impl Session {
             return Ok(report);
         }
         let touched: HashSet<String> = done.applied.iter().chain(&deletes).cloned().collect();
-        let hashes: HashMap<&str, u64> = live.iter().filter(|a| placed.contains(a.annot_id.as_str())).map(|a| (a.annot_id.as_str(), hash_item(a))).collect();
+        let hashes: HashMap<&str, u64> =
+            live.iter().filter(|a| placed.contains(a.annot_id.as_str())).map(|a| (a.annot_id.as_str(), hash_item(a))).collect();
         // Same refresh as a comment edit, but no undo step, no dirty flag.
         let refreshed = Session::refresh_scoped(doc, Scope::Comments);
         doc.generation += 1;
@@ -591,7 +595,8 @@ impl Session {
         }
         let cos = &editor.cos;
         let mut seen: HashSet<String> = HashSet::new();
-        let mut entries: Vec<(String, Option<Arc<Object>>, usize, Option<(u64, u64)>, bool)> = Vec::new();
+        type Touched = (String, Option<Arc<Object>>, usize, Option<(u64, u64)>, bool);
+        let mut entries: Vec<Touched> = Vec::new();
         walk(cos, |page, _, _, arc, d| {
             let Some(nm) = nm_of(cos, d) else { return };
             if !touched.contains(&nm) || !seen.insert(nm.clone()) {
