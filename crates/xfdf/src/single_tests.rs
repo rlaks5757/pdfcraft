@@ -634,3 +634,45 @@ fn copying_an_object_that_points_back_to_itself_ends() {
     let new = crate::single::import_object(&from, &mut to, a, &mut HashMap::new());
     assert_eq!(to.get(new).as_dict().unwrap().reference(b"Self"), Some(new));
 }
+
+fn sof(w: u16, h: u16) -> Vec<u8> {
+    let mut v = vec![0xFF, 0xC0, 0, 11, 8];
+    v.extend_from_slice(&h.to_be_bytes());
+    v.extend_from_slice(&w.to_be_bytes());
+    v.extend_from_slice(&[1, 1, 0x11, 0]);
+    v
+}
+
+#[test]
+fn jpeg_size_check_reads_the_frame_the_embedder_reads() {
+    use crate::single::pixel_size;
+    let plain = [vec![0xFF, 0xD8], sof(30, 20), vec![0xFF, 0xD9]].concat();
+    assert_eq!(pixel_size(&plain), Some((30, 20)));
+    // A bare marker before the real frame must not make the walk land elsewhere: the frame
+    // header is read as a header, not as the length of a "segment" starting at FF C0.
+    let bare = [vec![0xFF, 0xD8, 0xFF, 0x01], sof(16000, 16000), vec![0xFF, 0xD9]].concat();
+    assert_eq!(pixel_size(&bare), Some((16000, 16000)));
+    // A fake frame inside a comment after the real one is just comment text to both readers;
+    // a second real frame is refused.
+    let fake = sof(1, 1);
+    let mut com = vec![0xFF, 0xFE, 0, (fake.len() + 2) as u8];
+    com.extend_from_slice(&fake);
+    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], sof(16000, 16000), com, vec![0xFF, 0xD9]].concat()), Some((16000, 16000)));
+    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], sof(10, 10), sof(1, 1), vec![0xFF, 0xD9]].concat()), None);
+    // A fake frame in front inside a segment is skipped as the segment it is.
+    let mut app = vec![0xFF, 0xE1, 0, (fake.len() + 2) as u8];
+    app.extend_from_slice(&fake);
+    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], app, sof(7, 9), vec![0xFF, 0xD9]].concat()), Some((7, 9)));
+    // Truncated or zero-length segments: no size, so the picture is refused.
+    assert_eq!(pixel_size(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 1]), None);
+    assert_eq!(pixel_size(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8]), None);
+}
+
+#[test]
+fn a_huge_jpeg_with_a_bare_marker_is_refused() {
+    let jpg = [vec![0xFF, 0xD8, 0xFF, 0x01], sof(16000, 16000), vec![0xFF, 0xD9]].concat();
+    let x = stamp_xml("j", &url_of("image/jpeg", &jpg));
+    let mut dst = blank();
+    let r = apply_remote(&mut dst, &[RemoteItem { annot_id: "j", author_id: "u", xfdf: &x }], &[]);
+    assert_eq!(r.failed.len(), 1, "{r:?}");
+}

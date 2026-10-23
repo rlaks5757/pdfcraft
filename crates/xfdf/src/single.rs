@@ -671,32 +671,52 @@ fn prepare_picture(url: &str) -> Result<Prepared, String> {
 }
 
 /// Width and height from a PNG header or a JPEG frame header, without decoding.
-fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
-    if b.starts_with(b"\x89PNG") {
+///
+/// The JPEG walk is the one `pdfcraft_create`'s JPEG reader does (fill bytes, bare markers,
+/// segment lengths), so both see the same frame; a second frame header is refused outright.
+pub(crate) fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        if b.get(12..16)? != b"IHDR" {
+            return None;
+        }
         let w = u32::from_be_bytes(b.get(16..20)?.try_into().ok()?);
         let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
         return Some((w, h));
     }
-    // JPEG: walk the marker segments to the first start-of-frame.
-    let mut at = 2;
-    while at + 4 <= b.len() {
-        if b[at] != 0xFF {
-            return None;
-        }
-        let marker = b[at + 1];
-        if marker == 0xFF {
-            at += 1;
+    let mut size = None;
+    let mut i = 2;
+    while let Some(&byte) = b.get(i) {
+        if byte != 0xFF {
+            i += 1;
             continue;
         }
-        let len = usize::from(u16::from_be_bytes([b[at + 2], b[at + 3]]));
-        if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
-            let h = u32::from(u16::from_be_bytes([*b.get(at + 5)?, *b.get(at + 6)?]));
-            let w = u32::from(u16::from_be_bytes([*b.get(at + 7)?, *b.get(at + 8)?]));
-            return Some((w, h));
+        i += 1;
+        while b.get(i) == Some(&0xFF) {
+            i += 1;
         }
-        at += 2 + len.max(2);
+        let marker = *b.get(i)?;
+        i += 1;
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        if marker == 0xD8 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]));
+        if len < 2 {
+            return None;
+        }
+        let end = i.checked_add(len)?;
+        let seg = b.get(i + 2..end)?;
+        if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            if size.is_some() || seg.len() < 6 {
+                return None;
+            }
+            size = Some((u32::from(u16::from_be_bytes([seg[3], seg[4]])), u32::from(u16::from_be_bytes([seg[1], seg[2]]))));
+        }
+        i = end;
     }
-    None
+    size
 }
 
 /// Copy object `r` of `from` into `to` with everything it points to; the byte buffers are shared.
