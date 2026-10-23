@@ -1672,7 +1672,7 @@ pub(crate) fn context_menu(
                     }
                 });
             });
-            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
+            let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| r.replies_to(a)).collect();
             let marked = crate::comments_panel::is_marked(&thread);
             if ui.add_enabled(mine, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));

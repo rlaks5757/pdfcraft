@@ -157,10 +157,7 @@ pub(crate) fn show(
     }
     let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
     let replies_of = |a: &Annotation| -> Vec<&Annotation> {
-        match &a.name {
-            Some(nm) => info.annotations.iter().filter(|r| r.in_reply_to.as_deref() == Some(nm.as_str())).collect(),
-            None => Vec::new(),
-        }
+        info.annotations.iter().filter(|r| r.replies_to(a)).collect()
     };
     let cv = &view.comments;
     let status_of =

@@ -2859,6 +2859,7 @@ fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render::Annotation
             modified: s.modified.map(|m| pdfcraft_render::pretty_date(&m)),
             name: s.name,
             in_reply_to: s.in_reply_to,
+            parent: s.parent,
             rect: s.rect,
             color: s.color,
             index: s.index,
@@ -3052,6 +3053,10 @@ pub struct Session {
     /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
     /// local dates or the UTC ones wrong by the zone's offset.
     utc_offset: Option<fn() -> i64>,
+    /// A random number from the host, mixed into the ids new comments get. Without it a wasm32
+    /// build's ids depend only on the document and the time in seconds, so two sessions that
+    /// edit at the same point of the same file could make the same `/NM`.
+    entropy: Option<fn() -> u64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
@@ -3428,6 +3433,13 @@ impl Session {
         self
     }
 
+    /// Mix `random` (any 64 bits, new on every call) into the `/NM` of the comments this session
+    /// creates, for a host that has no random source of its own (a `wasm32-unknown-unknown` build).
+    pub fn with_entropy(mut self, random: fn() -> u64) -> Self {
+        self.entropy = Some(random);
+        self
+    }
+
     /// Seconds to add to UTC for the local time of this session: the injected zone, else 0 under
     /// the test clock (which is already local), else the system's.
     fn local_offset(&self) -> i64 {
@@ -3793,11 +3805,12 @@ impl Session {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
+        let entropy = self.entropy;
         let doc = self.doc_mut(id)?;
         doc.edit_notices.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
-        let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
+        let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48) ^ entropy.map_or(0, |f| f().rotate_left(7)));
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
         }

@@ -5421,6 +5421,7 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
             rect: [0.0; 4],
             color: None,
             index: 0,

@@ -25,7 +25,10 @@ fn main() {
                     let mut app = PdfCraftApp::new();
                     // The browser has no system clock for wasm32-unknown-unknown: without one a comment gets
                     // no /M or /CreationDate and Fill & Sign dates read 1 Jan 1970. This is the only Session.
-                    app.session = std::mem::take(&mut app.session).with_wall_clock(
+                    app.session = std::mem::take(&mut app.session)
+                        // New comment ids (/NM) must differ between sessions: wasm32 has no random source of its own.
+                        .with_entropy(|| (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64)
+                        .with_wall_clock(
                         || (js_sys::Date::now() / 1000.0) as i64,
                         // getTimezoneOffset is minutes *west* of UTC, for today's date (daylight saving).
                         || -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60,

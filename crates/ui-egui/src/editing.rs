@@ -38,11 +38,26 @@ pub enum SaveTarget {
     As,
 }
 
-/// The page and name of the comment the annotation at `(page, index)` replies to (`None` for a
-/// comment of its own).
-fn reply_parent(annotations: &[pdfcraft_render::Annotation], page: usize, index: usize) -> Option<(usize, String)> {
-    let a = annotations.iter().find(|a| a.page == page && a.index == index)?;
-    Some((page, a.in_reply_to.clone()?))
+/// The comment the annotation at `(page, index)` replies to (`None` for a comment of its own).
+fn reply_parent(annotations: &[pdfcraft_render::Annotation], page: usize, index: usize) -> Option<pdfcraft_render::Annotation> {
+    let a = annotations.iter().find(|a| a.page == page && a.index == index && a.in_reply_to.is_some())?;
+    annotations.iter().find(|p| a.replies_to(p)).cloned()
+}
+
+/// Where `parent` is after a delete shifted the indexes: the same comment (comments can share a
+/// `/NM`, so every field is compared), at or before its old place.
+fn find_after_delete(annotations: &[pdfcraft_render::Annotation], parent: &pdfcraft_render::Annotation) -> Option<(usize, usize)> {
+    annotations
+        .iter()
+        .filter(|x| {
+            x.page == parent.page
+                && x.index <= parent.index
+                && x.in_reply_to.is_none()
+                && (x.name.as_ref(), &x.subtype, x.rect, x.contents.as_ref(), x.author.as_ref())
+                    == (parent.name.as_ref(), &parent.subtype, parent.rect, parent.contents.as_ref(), parent.author.as_ref())
+        })
+        .map(|x| (x.page, x.index))
+        .max_by_key(|(_, i)| *i)
 }
 
 impl PdfCraftApp {
@@ -61,7 +76,7 @@ impl PdfCraftApp {
         } else {
             (None, 0, false)
         };
-        // Deleting a reply leaves its comment selected: noted by name, as the delete shifts indexes.
+        // Deleting a reply leaves its comment selected: remembered as a copy, as the delete shifts indexes.
         let reply_parent = match &edit {
             Edit::DeleteAnnotation { page, index } => self.session.get(id).and_then(|d| reply_parent(&d.info.annotations, *page, *index)),
             _ => None,
@@ -181,9 +196,7 @@ impl PdfCraftApp {
                         }
                     }
                     Edit::DeleteAnnotation { .. } => {
-                        view.comments.selected = reply_parent.and_then(|(page, nm)| {
-                            info.annotations.iter().find(|x| x.page == page && x.in_reply_to.is_none() && x.name.as_deref() == Some(nm.as_str())).map(|x| (x.page, x.index))
-                        })
+                        view.comments.selected = reply_parent.as_ref().and_then(|p| find_after_delete(&info.annotations, p))
                     }
                     _ => {}
                 }

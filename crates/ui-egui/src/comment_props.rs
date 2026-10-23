@@ -170,11 +170,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         .zip(app.comment_props.as_ref())
         .map(|(doc, d)| {
             let me = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && a.in_reply_to.is_none());
-            let nm = me.and_then(|a| a.name.clone());
             doc.info
                 .annotations
                 .iter()
-                .filter(|r| r.state.is_some() && nm.is_some() && r.in_reply_to == nm)
+                .filter(|r| r.state.is_some() && me.is_some_and(|m| r.replies_to(m)))
                 .map(|r| (r.state.clone().unwrap_or_default(), r.author.clone().unwrap_or_default(), r.modified.clone().unwrap_or_default()))
                 .collect()
         })

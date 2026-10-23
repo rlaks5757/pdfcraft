@@ -2212,6 +2212,8 @@ pub struct Summary {
     pub modified: Option<String>,
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// Position in the page's `/Annots` of the annotation `/IRT` points at.
+    pub parent: Option<usize>,
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
     pub state: Option<String>,
@@ -2245,7 +2247,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
     let mut out = Vec::new();
     let Ok(pages) = page_refs(doc) else { return out };
     for (page, p) in pages.iter().enumerate() {
-        for (index, entry) in annots(doc, *p).iter().enumerate() {
+        let list = annots(doc, *p);
+        for (index, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
             let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
@@ -2275,6 +2278,10 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             }
             let quads = nums(b"QuadPoints").as_chunks::<8>().0.to_vec();
             let in_reply_to = d.get(b"IRT").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
+            let parent = match d.get(b"IRT") {
+                Some(Object::Ref(r)) => list.iter().position(|x| matches!(x, Object::Ref(y) if y == r)),
+                _ => None,
+            };
             out.push(Summary {
                 page,
                 index,
@@ -2286,6 +2293,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 modified: text_value(doc, d, b"M"),
                 name: text_value(doc, d, b"NM"),
                 in_reply_to,
+                parent,
                 rect,
                 color,
                 state: text_value(doc, d, b"State"),

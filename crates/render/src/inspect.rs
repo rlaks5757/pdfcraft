@@ -370,6 +370,10 @@ pub struct Annotation {
     /// `/NM` of this annotation, and of the one it replies to (`/IRT`), for threading.
     pub name: Option<String>,
     pub in_reply_to: Option<String>,
+    /// Position in the same page's `/Annots` of the annotation `/IRT` points at. `/NM` is only
+    /// meant to be unique: files exist whose comments share one, so replies find their comment
+    /// by this (see [`Annotation::replies_to`]).
+    pub parent: Option<usize>,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
     pub color: Option<[f32; 3]>,
@@ -389,6 +393,14 @@ pub struct Annotation {
 }
 
 impl Annotation {
+    /// Is this a reply to `to`? By the `/IRT` object when it is on the same page, else by `/NM`.
+    pub fn replies_to(&self, to: &Annotation) -> bool {
+        if self.parent.is_some() {
+            return self.page == to.page && self.parent == Some(to.index);
+        }
+        to.name.is_some() && self.in_reply_to == to.name
+    }
+
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))
@@ -1148,6 +1160,10 @@ impl<'a> Inspector<'a> {
                     _ => Vec::new(),
                 };
                 let in_reply_to = d.get(b"IRT").ok().and_then(|o| self.dict(o)).and_then(|p| self.text(p, b"NM"));
+                let parent = match d.get(b"IRT") {
+                    Ok(Object::Reference(r)) => annots.iter().position(|x| matches!(x, Object::Reference(y) if y == r)),
+                    _ => None,
+                };
                 let fill_sign = self.is_fill_sign(d, &subtype);
                 info.annotations.push(Annotation {
                     page,
@@ -1159,6 +1175,7 @@ impl<'a> Inspector<'a> {
                     modified: self.text(d, b"M").map(|m| pretty_date(&m)),
                     name: self.text(d, b"NM"),
                     in_reply_to,
+                    parent,
                     rect,
                     color,
                     index,
