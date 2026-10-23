@@ -675,27 +675,34 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.choose_right_panel(if selected { None } else { Some(panel) });
                 }
             };
-            if comments {
-                rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
-            }
-            rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
-            rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
-            if fields {
-                rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
-            }
-            rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
-            if !viewer {
-                rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
-            }
-            if signatures {
-                rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
-            }
-            if has_check && accessibility {
-                rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
-            }
-            if tags {
-                rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
-            }
+            // The panel buttons scroll when the window is too short to hold them above the page
+            // cluster. The cluster's height is the one drawn last frame (a guess on the first).
+            let bottom_id = egui::Id::new("rail-bottom-height");
+            let bottom_h = ui.data(|d| d.get_temp::<f32>(bottom_id)).unwrap_or(300.0);
+            let top_max = (ui.available_height() - bottom_h - ui.spacing().item_spacing.y).max(0.0);
+            egui::ScrollArea::vertical().id_salt("rail-buttons").max_height(top_max).auto_shrink([false, true]).show(ui, |ui| {
+                if comments {
+                    rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
+                }
+                rail_button(ui, RightPanel::Bookmarks, "bookmark", "Bookmarks", has_outline);
+                rail_button(ui, RightPanel::Pages, "files", "Page thumbnails", false);
+                if fields {
+                    rail_button(ui, RightPanel::Fields, "text-cursor-input", "Form fields", has_fields);
+                }
+                rail_button(ui, RightPanel::Layers, "layers", "Layers", has_layers);
+                if !viewer {
+                    rail_button(ui, RightPanel::Attachments, "paperclip", "Attachments", has_files);
+                }
+                if signatures {
+                    rail_button(ui, RightPanel::Signatures, "signature", "Signatures", has_signatures);
+                }
+                if has_check && accessibility {
+                    rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
+                }
+                if tags {
+                    rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
+                }
+            });
 
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
@@ -811,6 +818,8 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     view.page_input = view.current_page_label(labels.get(view.current).map(String::as_str));
                 }
+                let used = ui.min_rect().height();
+                ui.data_mut(|d| d.insert_temp(bottom_id, used));
             });
             if let Some(id) = page_display {
                 app.execute(id);
