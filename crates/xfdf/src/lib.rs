@@ -341,6 +341,23 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
     if let Some(w) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64))) {
         let _ = write!(attrs, " width=\"{}\"", n(w));
     }
+    // Border style (XFDF `style` / `dashes`, as PDFTron writes a dashed sign box).
+    if let Some(bs) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().cloned()) {
+        let style = match bs.name(b"S") {
+            Some(b"D") => Some("dash"),
+            Some(b"B") => Some("bevelled"),
+            Some(b"I") => Some("inset"),
+            Some(b"U") => Some("underline"),
+            _ => None,
+        };
+        if let Some(style) = style {
+            let _ = write!(attrs, " style=\"{style}\"");
+        }
+        let dashes = nums_of(doc, bs.get(b"D"));
+        if style == Some("dash") && !dashes.is_empty() {
+            let _ = write!(attrs, " dashes=\"{}\"", dashes.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+        }
+    }
     let quads = nums_of(doc, d.get(b"QuadPoints"));
     if !quads.is_empty() {
         let _ = write!(attrs, " coords=\"{}\"", quads.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
@@ -753,6 +770,26 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(w.max(0.0)));
         bs.set(b"S".to_vec(), Object::name("S"));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    let border_style = match node.attribute("style").map(str::to_ascii_lowercase).as_deref() {
+        Some("dash") => Some("D"),
+        Some("bevelled") => Some("B"),
+        Some("inset") => Some("I"),
+        Some("underline") => Some("U"),
+        _ => None,
+    };
+    if let Some(style) = border_style {
+        let mut bs = d.get(b"BS").and_then(|b| b.as_dict().cloned()).unwrap_or_else(|| {
+            let mut bs = Dict::new();
+            bs.set(b"W".to_vec(), Object::Real(1.0));
+            bs
+        });
+        bs.set(b"S".to_vec(), Object::name(style));
+        let dashes: Vec<f64> = node.attribute("dashes").map(csv).unwrap_or_default().into_iter().filter(|v| *v >= 0.0).collect();
+        if style == "D" && !dashes.is_empty() {
+            bs.set(b"D".to_vec(), arr(&dashes));
+        }
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
     if let Some(q) = node.attribute("coords") {

@@ -447,3 +447,69 @@ fn dump_samples_for_the_server_parser() {
         std::fs::write(std::path::Path::new(&dir).join(format!("{id}.json")), json.to_string()).unwrap();
     }
 }
+
+/// A noisy PNG of about `target` bytes (noise does not compress, so size ~ pixels).
+fn noisy_png(target: usize) -> Vec<u8> {
+    let side = ((target / 4) as f64).sqrt() as u32;
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, side, side);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut w = enc.write_header().unwrap();
+    let mut x: u32 = 12345;
+    let data: Vec<u8> = (0..side * side * 4)
+        .map(|_| {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            (x >> 24) as u8
+        })
+        .collect();
+    w.write_image_data(&data).unwrap();
+    drop(w);
+    out
+}
+
+#[test]
+fn a_viewer_sized_stamp_keeps_its_original_bytes_and_fits_the_limit() {
+    use base64::Engine as _;
+    let original = noisy_png(135_000);
+    let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&original));
+    // Received from the server: exported again as the very same bytes.
+    let x = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><stamp page="0" name="big" rect="10,10,110,60"><imagedata>{url}</imagedata></stamp></annots></xfdf>"#
+    );
+    assert!(utf16_len(&x) < MAX_XFDF_LEN);
+    let mut dst = blank();
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "big", author_id: "u", xfdf: &x }], &[]).failed, vec![]);
+    let back = export_annotation(&dst, "big").unwrap();
+    assert_server_rules(&back);
+    assert!(back.xfdf.contains(&url), "the image was re-encoded");
+    // Applying twice (undo snapshots, reconnects) keeps it.
+    apply_remote(&mut dst, &[RemoteItem { annot_id: "big", author_id: "u", xfdf: &x }], &[]);
+    assert!(export_annotation(&dst, "big").unwrap().xfdf.contains(&url));
+
+    // Made in the fork: the host's file is kept with the annotation.
+    let mut src = blank();
+    let (xobject, size) = pdfcraft_create::image_xobject(&mut src, "stamp.png", &original).unwrap();
+    let index =
+        add(&mut src, 0, Shape::CustomStamp { rect: [0.0, 0.0, 100.0, 50.0], name: "S".into(), picture: xobject, image: true, size }, "S", "mine");
+    pdfcraft_annot::set_picture_source(&mut src, 0, index, &original).unwrap();
+    let mine = export_annotation(&src, "mine").unwrap();
+    assert!(mine.xfdf.contains(&url));
+}
+
+#[test]
+fn a_dashed_border_stays_dashed() {
+    let x = r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><fields /><annots><freetext page="0" name="sb" rect="10,10,210,70" width="1" style="dash" dashes="4,3"><contents>Sign</contents></freetext></annots></xfdf>"#;
+    let mut dst = blank();
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "sb", author_id: "u", xfdf: x }], &[]).failed, vec![]);
+    let d = dst.get(find_by_name(&dst, "sb").unwrap()).as_dict().unwrap().clone();
+    let bs = d.get(b"BS").and_then(|b| b.as_dict()).unwrap();
+    assert_eq!(bs.name(b"S"), Some(b"D".as_slice()));
+    assert_eq!(nums_of(&dst, bs.get(b"D")), vec![4.0, 3.0]);
+    let ap = d.get(b"AP").and_then(|a| dst.resolve(a).as_dict().cloned()).unwrap();
+    let Object::Stream(s) = &*dst.get(ap.reference(b"N").unwrap()) else { panic!() };
+    let content = String::from_utf8_lossy(&s.decoded().unwrap_or_default()).into_owned();
+    assert!(content.contains("[4 3] 0 d"), "{content}");
+    let back = export_annotation(&dst, "sb").unwrap();
+    assert!(back.xfdf.contains(r#"style="dash""#) && back.xfdf.contains(r#"dashes="4,3""#), "{}", back.xfdf);
+}

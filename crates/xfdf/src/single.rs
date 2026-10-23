@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use base64::Engine as _;
+use pdfcraft_annot::PICTURE_SOURCE_KEY;
 use pdfcraft_annot::ownership::OWNER_KEY;
 use serde_json::{Map, Number, Value};
 
@@ -162,9 +163,30 @@ fn picture_url(doc: &Document, d: &Dict) -> Option<String> {
     if !matches!(d.get(b"PCPictureImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
         return None;
     }
-    let (ext, bytes) = pdfcraft_create::image_file(doc, d.reference(b"PCPicture")?).ok()?;
-    let mime = if ext == "jpg" { "image/jpeg" } else { "image/png" };
+    // The file the stamp came from goes out as it is; only a stamp without one is re-encoded.
+    let kept = d.reference(PICTURE_SOURCE_KEY.as_bytes()).and_then(|r| match &*doc.get(r) {
+        Object::Stream(s) => Some(s.raw.to_vec()),
+        _ => None,
+    });
+    let (mime, bytes) = match kept.as_deref().and_then(sniff) {
+        Some(mime) => (mime, kept.unwrap_or_default()),
+        None => {
+            let (ext, bytes) = pdfcraft_create::image_file(doc, d.reference(b"PCPicture")?).ok()?;
+            (if ext == "jpg" { "image/jpeg" } else { "image/png" }, bytes)
+        }
+    };
     Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// The MIME type of an image file by its signature.
+fn sniff(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if b.starts_with(&[0xFF, 0xD8]) {
+        Some("image/jpeg")
+    } else {
+        None
+    }
 }
 
 /// How a fork-only key is carried in the `ppmFork` JSON object.
@@ -475,7 +497,7 @@ fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<Obj
         && let Some(pic) = old.reference(b"PCPicture")
     {
         d.set(b"PCPicture".to_vec(), Object::Ref(pic));
-        for key in [&b"PCPictureSize"[..], b"PCPictureImage"] {
+        for key in [&b"PCPictureSize"[..], b"PCPictureImage", PICTURE_SOURCE_KEY.as_bytes()] {
             if let Some(v) = old.get(key) {
                 d.set(key.to_vec(), v.clone());
             }
@@ -493,6 +515,8 @@ fn attach_picture(doc: &mut Document, d: &mut Dict, url: &str, reuse: Option<Obj
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(clean).map_err(|e| format!("the stamp picture: {e}"))?;
     let (xobject, size) = pdfcraft_create::image_xobject(doc, "stamp.png", &bytes).map_err(|e| e.to_string())?;
+    let source = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), bytes)));
+    d.set(PICTURE_SOURCE_KEY.as_bytes().to_vec(), Object::Ref(source));
     d.set(b"PCPicture".to_vec(), Object::Ref(xobject));
     d.set(b"PCPictureImage".to_vec(), Object::Bool(true));
     d.set(b"PCPictureSize".to_vec(), arr(&[size.0, size.1]));

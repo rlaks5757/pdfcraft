@@ -1829,6 +1829,18 @@ pub fn set_extra(doc: &mut Document, page: usize, index: usize, key: &str, value
     Ok(())
 }
 
+/// The private key holding the file a picture stamp was made from (a stream of the original
+/// PNG/JPEG bytes), so the annotation database sends it as it came instead of re-encoding.
+pub const PICTURE_SOURCE_KEY: &str = "PpmImageSrc";
+
+/// Keep `bytes`, the image file behind the picture stamp at `(page, index)`, with the annotation.
+pub fn set_picture_source(doc: &mut Document, page: usize, index: usize, bytes: &[u8]) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    let src = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), bytes.to_vec())));
+    doc.update_dict(r, |d| d.set(PICTURE_SOURCE_KEY.as_bytes().to_vec(), Object::Ref(src)))?;
+    Ok(())
+}
+
 /// Mark or unmark a comment with a checkmark. Like Acrobat this adds a hidden state reply with
 /// `/StateModel /Marked` by `author`; the latest one wins. It's private bookkeeping, not a status.
 pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
