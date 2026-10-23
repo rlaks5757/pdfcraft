@@ -41,7 +41,7 @@ mod text_preview;
 pub mod word_count;
 pub mod xfa;
 
-pub use annot_sync::{AnnotChanges, AnnotUpsert, RejectedAnnot, RemoteAnnot, RemoteReport};
+pub use annot_sync::{AnnotChanges, AnnotOp, AnnotUpsert, RejectedAnnot, RemoteAnnot, RemoteReport};
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use text_preview::TextEditPreview;
@@ -2524,8 +2524,9 @@ fn run_edit_body(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx
             if let Some((key, value)) = extra {
                 pdfcraft_annot::set_extra(doc, *page, index, key, value)?;
             }
-            // The picture file as it came, so the annotation database gets it without re-encoding.
-            if src.image {
+            // The picture file as it came, so the annotation database gets it without re-encoding;
+            // a document that is not shared keeps no second copy of it.
+            if src.image && cx.ownership.annot_sync {
                 pdfcraft_annot::set_picture_source(doc, *page, index, &file.bytes)?;
             }
         }

@@ -7395,4 +7395,85 @@ mod annot_sync {
         assert_eq!(d.annot_position("nobody"), None);
         assert_eq!(a.annot_sync_doc(), Some(id));
     }
+
+    /// A reset that lists what the actor already made (a reconnect) puts nothing back, so an undo
+    /// of that edit still finds it undone.
+    #[test]
+    fn a_reset_does_not_put_the_actors_own_annotation_back() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let up = only(s.take_annot_changes(id));
+        let report = s.annots_reset(id, vec![remote(&up, "alice")]).unwrap();
+        assert_eq!((report.applied, report.skipped), (0, 1), "{report:?}");
+        s.undo(id).unwrap();
+        assert!(names(&s, id, 0).is_empty(), "the undo state did not get it back");
+        assert_eq!(s.take_annot_changes(id).unwrap().deletes, vec![up.annot_id]);
+    }
+
+    /// An edit not yet handed out is neither removed nor replaced by a reset that arrives first.
+    #[test]
+    fn an_edit_waiting_to_go_out_survives_a_reset() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let first = only(s.take_annot_changes(id));
+        s.apply(id, rect(0, 80.0)).unwrap();
+        s.annots_reset(id, vec![remote(&first, "alice")]).unwrap();
+        assert_eq!(names(&s, id, 0).len(), 2);
+        let second = only(s.take_annot_changes(id));
+        assert_ne!(second.annot_id, first.annot_id);
+    }
+
+    /// The host panel changes an annotation of the actor's: that one is applied, since it differs.
+    #[test]
+    fn a_panel_edit_of_the_actors_own_annotation_is_applied() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let up = only(s.take_annot_changes(id));
+        let mut changed = remote(&up, "alice");
+        changed.xfdf = changed.xfdf.replace("<square ", "<square opacity=\"0.5\" ").replace(" opacity=\"1\"", "");
+        assert_ne!(changed.xfdf, up.xfdf);
+        let report = s.annots_apply(id, vec![changed], vec![]).unwrap();
+        assert_eq!((report.applied, report.skipped), (1, 0), "{report:?}");
+        assert!(s.take_annot_changes(id).is_none(), "not handed back");
+    }
+
+    #[test]
+    fn a_check_mark_stays_private() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        only(s.take_annot_changes(id));
+        s.apply(id, Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: "alice".into() }).unwrap();
+        assert_eq!(s.take_annot_changes(id), None);
+        assert!(!s.get(id).unwrap().dirty);
+    }
+
+    #[test]
+    fn a_picture_is_kept_only_in_a_shared_document() {
+        let (mut s, id) = session_with(1);
+        let file = MarkFile { name: "stamp.png".into(), bytes: quadrant_png(), page: 0 };
+        s.apply(
+            id,
+            Edit::AddCustomStamp { page: 0, rect: [50.0, 50.0, 130.0, 90.0], name: "A".into(), file, author: "a".into(), extra: None },
+        )
+        .unwrap();
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let page = &pdfcraft_model::pages(cos)[0];
+        let list = page.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let dict = list.iter().filter_map(|e| cos.resolve(e).as_dict().cloned()).next().unwrap();
+        assert!(dict.get(b"PpmImageSrc").is_none());
+    }
+
+    /// A reply goes out after the annotation it replies to, whatever their names sort like.
+    #[test]
+    fn replies_go_out_after_their_parent() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        only(s.take_annot_changes(id));
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "alice".into() }).unwrap();
+        s.apply(id, rect(0, 90.0)).unwrap();
+        let c = s.take_annot_changes(id).unwrap();
+        assert_eq!(c.upserts.len(), 2);
+        assert!(!c.upserts[0].xfdf.contains("inreplyto"), "{:?}", c.upserts[0].xfdf);
+        assert!(c.upserts[1].xfdf.contains("inreplyto"), "{:?}", c.upserts[1].xfdf);
+    }
 }
