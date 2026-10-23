@@ -84,7 +84,7 @@ impl std::fmt::Display for BlockedLink {
 fn hides_text(c: char) -> bool {
     (c.is_whitespace() && c != ' ')
         || c.is_control()
-        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+        || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
 }
 
 /// Check an address that came from a document (a link, a button's URI action or a script's
@@ -612,6 +612,8 @@ mod tests {
         for hidden in [
             "https://exa\u{202E}gro.elpmaxe",
             "https://example.org\u{200B}.evil",
+            "https://exa\u{00AD}mple.org/",
+            "https://example.org/\u{061C}x",
             "https://a.org/\u{0007}",
             "https://a.org/x\ty",
             "https://a.org/x\ny",
