@@ -384,4 +384,28 @@ mod tests {
         assert!(at(&h, "first").is_some(), "and the document is as it was");
         assert!(inbox.lock().unwrap().is_empty());
     }
+
+    /// The page posts its list in the same frame as the open: the messages wait for the document
+    /// and then apply in the order they came (the delete of the second message hits the first's item).
+    #[test]
+    fn messages_sent_with_the_open_wait_for_the_document_and_keep_their_order() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        {
+            let mut q = app.annot_inbox.lock().unwrap();
+            q.push(AnnotCommand::Reset { items: vec![square("one"), square("two")] });
+            q.push(AnnotCommand::Apply { upserts: vec![square("three")], deletes: vec!["one".into()] });
+            q.push(AnnotCommand::Select { annot_id: "three".into() });
+        }
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        let (_, a) = h.state().active_ids().unwrap();
+        let doc = h.state().session.get(a).unwrap();
+        assert!(doc.annot_position("one").is_none(), "deleted by the second message");
+        assert!(doc.annot_position("two").is_some() && doc.annot_position("three").is_some());
+        let view = h.state().views.iter().find(|v| v.id == a).unwrap();
+        assert_eq!(view.comments.selected, doc.annot_position("three"), "and the third selected it");
+        assert!(h.state().annot_inbox.lock().unwrap().is_empty());
+    }
 }

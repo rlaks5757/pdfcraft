@@ -2524,6 +2524,10 @@ fn run_edit_body(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx
             if let Some((key, value)) = extra {
                 pdfcraft_annot::set_extra(doc, *page, index, key, value)?;
             }
+            // The picture file as it came, so the annotation database gets it without re-encoding.
+            if src.image {
+                pdfcraft_annot::set_picture_source(doc, *page, index, &file.bytes)?;
+            }
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
