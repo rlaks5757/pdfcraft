@@ -6998,6 +6998,22 @@ mod annot_sync {
 
     /// A host stamp is an ordinary annotation to the diff: it goes out once, owned by the actor,
     /// with the host's metadata inside, and never marks the file dirty.
+    /// A review state is a reply of the actor: it goes out as one `text` element that carries the
+    /// state and its model, which the server accepts as a text reply.
+    #[test]
+    fn a_status_reply_goes_out_as_a_text_with_state() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let parent = only(s.take_annot_changes(id));
+        let nm = parent.annot_id.clone();
+        let (page, index) = s.get(id).unwrap().annot_position(&nm).unwrap();
+        s.apply(id, Edit::SetAnnotationStatus { page, index, state: ReviewState::Accepted, author: "alice".into() }).unwrap();
+        let reply = only(s.take_annot_changes(id));
+        assert_ne!(reply.annot_id, nm);
+        assert!(reply.xfdf.contains("<text ") && reply.xfdf.contains("state=") && reply.xfdf.contains("statemodel="), "{}", reply.xfdf);
+        assert!(!s.get(id).unwrap().dirty);
+    }
+
     #[test]
     fn a_placed_stamp_goes_out_through_the_diff() {
         let (mut s, id) = sharing("alice");
@@ -7016,6 +7032,12 @@ mod annot_sync {
         .unwrap();
         let up = only(s.take_annot_changes(id));
         assert_eq!((up.page, up.xfdf.contains("meta-1")), (0, true), "{up:?}");
+        // The picture file as it came is kept with the stamp, so it isn't re-encoded to be sent.
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let page = &pdfcraft_model::pages(cos)[0];
+        let list = page.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let dict = list.iter().filter_map(|e| cos.resolve(e).as_dict().cloned()).next().unwrap();
+        assert!(dict.get(b"PpmImageSrc").is_some());
         assert!(!s.get(id).unwrap().dirty);
         assert!(s.take_annot_changes(id).is_none());
     }

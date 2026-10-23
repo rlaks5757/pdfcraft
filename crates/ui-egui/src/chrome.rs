@@ -539,9 +539,11 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 app.run_command("print.dialog");
                             }
                         }
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
-                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
-                            app.run_command("file.save");
+                        if app.host_allows("file.save") {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
+                            if icons::button(ui, "save", 32.0, false, &tip).clicked() {
+                                app.run_command("file.save");
+                            }
                         }
                         if app.host_allows("file.properties") {
                             let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");

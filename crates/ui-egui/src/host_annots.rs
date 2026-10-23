@@ -120,6 +120,11 @@ impl PdfCraftApp {
         self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.ownership().hide_comments_panel)
     }
 
+    /// The active document is kept in the page's database (`annotSync`).
+    pub(crate) fn active_shares_annotations(&self) -> bool {
+        self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.annot_sync())
+    }
+
     /// A file the host opened is still on its way in: its `annots-*` messages belong to it.
     fn host_open_pending(&self) -> bool {
         self.startup_inbox.lock().map(|q| !q.is_empty()).unwrap_or(false)
@@ -407,5 +412,19 @@ mod tests {
         let view = h.state().views.iter().find(|v| v.id == a).unwrap();
         assert_eq!(view.comments.selected, doc.annot_position("three"), "and the third selected it");
         assert!(h.state().annot_inbox.lock().unwrap().is_empty());
+    }
+
+    /// A shared document is not saved from here: no command, button or shortcut writes it. Another
+    /// document (not shared) saves as before.
+    #[test]
+    fn a_shared_document_has_no_manual_save() {
+        let mut app = PdfCraftApp::new();
+        app.session.set_open_ownership(share());
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        assert!(!app.host_allows("file.save") && !app.host_allows("file.save_as"));
+        assert!(!app.save_active(crate::SaveTarget::InPlace) && !app.save_active(crate::SaveTarget::As));
+        app.session.set_open_ownership(Default::default());
+        app.open_bytes("b.pdf", None, pdf()).unwrap();
+        assert!(app.host_allows("file.save") && app.host_allows("file.save_as"), "a document that isn't shared saves as before");
     }
 }

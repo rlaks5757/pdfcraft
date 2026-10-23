@@ -647,6 +647,9 @@ impl PdfCraftApp {
 
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
+        if self.active_shares_annotations() {
+            return false;
+        }
         match self.active {
             Some(i) => self.save_view(i, target),
             None => false,

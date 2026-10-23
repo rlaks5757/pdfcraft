@@ -668,6 +668,10 @@ impl PdfCraftApp {
     /// Whether the host lock and the host's policy let command `id` run now, and show where it
     /// has a button. Always true without the lock.
     pub(crate) fn host_allows(&self, id: &str) -> bool {
+        // The page keeps the annotations itself (`annotSync`): the file isn't saved from here.
+        if matches!(id, "file.save" | "file.save_as") && self.active_shares_annotations() {
+            return false;
+        }
         if !self.host_lock {
             return true;
         }
