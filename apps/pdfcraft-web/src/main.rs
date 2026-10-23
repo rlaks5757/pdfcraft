@@ -23,6 +23,13 @@ fn main() {
                 options,
                 Box::new(|cc| {
                     let mut app = PdfCraftApp::new();
+                    // The browser has no system clock for wasm32-unknown-unknown: without one a comment gets
+                    // no /M or /CreationDate and Fill & Sign dates read 1 Jan 1970. This is the only Session.
+                    app.session = std::mem::take(&mut app.session).with_wall_clock(
+                        || (js_sys::Date::now() / 1000.0) as i64,
+                        // getTimezoneOffset is minutes *west* of UTC, for today's date (daylight saving).
+                        || -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60,
+                    );
                     // "printcraft": settings saved under the app's former name, PrintCraft.
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);

@@ -290,14 +290,22 @@ fn card(
     let fill = if selected { t.hover.gamma_multiply(0.7) } else { Color32::TRANSPARENT };
     let mut open_menu = false;
     let mut more_rect = None;
+    // A click on a selectable text label (it senses clicks itself, so the card's own area never sees it).
+    let mut text_click = false;
+    let card_id = ui.id().with(("card", key));
+    // The selected card takes clicks anywhere on it, below its buttons and editors: laid out before
+    // them from last frame's rect, so those keep their own clicks.
+    let under = selected
+        .then(|| ui.data(|d| d.get_temp::<egui::Rect>(card_id)))
+        .flatten()
+        .map(|r| ui.interact(r, card_id, Sense::click()));
     let frame = egui::Frame::NONE
         .fill(fill)
         .corner_radius(CornerRadius::same(6))
         .inner_margin(egui::Margin { left: 10, right: 8, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let mut buttons_left = f32::INFINITY;
-            let head = ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
                 avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
                 let author = a.author.as_deref().map_or_else(|| tl!("Unknown author").into(), crate::bidi::visual_auto);
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
@@ -322,30 +330,12 @@ fn card(
                     if a.locked {
                         ui.add(icons::image("lock", 13.0, t.text_faint)).on_hover_text(tl!("Locked"));
                     }
-                    buttons_left = ui.min_rect().left();
                 });
             });
             egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
-                    let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
-                    if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
-                        r.request_focus();
-                    }
-                    let submit = crate::comments::submit_key(ui, &r, false);
-                    ui.horizontal(|ui| {
-                        if (ui
-                            .add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12))
-                            .clicked()
-                            || submit)
-                            && let Some((page, index, text)) = view.comments.editing.take()
-                        {
-                            edit = Some(Edit::SetAnnotationContents { page, index, text });
-                        }
-                        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            view.comments.editing = None;
-                        }
-                    });
+                if editing {
+                    edit_box(ui, t, view, key, &mut edit);
                 } else {
                     let body = a.contents.as_deref().unwrap_or("");
                     if body.is_empty() {
@@ -356,7 +346,7 @@ fn card(
                         }
                         ui.add(label);
                     } else {
-                        widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, !selected);
+                        text_click |= widgets::wrapped_text(ui, body, theme::regular(13.0), t.text, !selected).clicked();
                     }
                 }
                 if let Some((icon, label, c)) = status.and_then(status_badge) {
@@ -370,18 +360,45 @@ fn card(
             // Replies, joined to the parent by a thread line.
             for r in &replies {
                 ui.add_space(8.0);
+                let rkey = (r.page, r.index);
+                let (can_edit, can_delete) = reply_rights(doc, r, allowed);
                 let resp = ui.horizontal(|ui| {
                     avatar(ui, t, None, Some(&initials(r.author.as_deref().unwrap_or("?"))), t.text_faint);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
+                        // The "…" menu is only for a reply the user may change; others' replies have none.
+                        let mut menu = None;
                         ui.horizontal(|ui| {
                             let author = r.author.as_deref().map_or_else(|| tl!("Reply").into(), crate::bidi::visual_auto);
                             ui.label(egui::RichText::new(author).font(theme::semibold(12.0)));
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                             }
+                            if can_edit || can_delete {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    menu = Some(icons::button(ui, "ellipsis", 22.0, false, tl!("More")));
+                                });
+                            }
                         });
-                        widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false);
+                        if let Some(more) = menu {
+                            egui::Popup::menu(&more).show(|ui| {
+                                ui.set_min_width(120.0);
+                                if ui.add_enabled(can_edit, egui::Button::new(tl_ctx!("comment menu", "Edit"))).clicked() {
+                                    view.comments.editing = Some((r.page, r.index, r.contents.clone().unwrap_or_default()));
+                                    ui.close();
+                                }
+                                if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete"))).clicked() {
+                                    view.comments.selected = None;
+                                    edit = Some(Edit::DeleteAnnotation { page: r.page, index: r.index });
+                                    ui.close();
+                                }
+                            });
+                        }
+                        if view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == rkey) {
+                            edit_box(ui, t, view, rkey, &mut edit);
+                        } else {
+                            text_click |= widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false).clicked();
+                        }
                     });
                 });
                 let x = resp.response.rect.left() + 12.0;
@@ -411,10 +428,6 @@ fn card(
                     }
                 });
             }
-            // The header selects the card, except where its buttons are.
-            let mut r = head.response.rect;
-            r.max.x = r.max.x.min(buttons_left - 2.0);
-            r
         });
     let rect = frame.response.rect;
     if selected {
@@ -426,16 +439,20 @@ fn card(
     }
     ui.painter().hline(rect.x_range().shrink(10.0), rect.bottom() + 2.0, Stroke::new(1.0, t.divider));
     ui.add_space(5.0);
-    // The header row selects the card (and shows the comment on the page); unselected cards are
-    // clickable everywhere.
-    let hit = if selected { frame.inner } else { rect };
-    let click = ui
-        .interact(hit, ui.id().with(("card", key)), Sense::click())
+    if selected {
+        ui.data_mut(|d| d.insert_temp(card_id, rect));
+    }
+    // Anywhere on the card selects it and shows the comment on the page.
+    let click = under
+        .unwrap_or_else(|| ui.interact(rect, card_id, Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
-    if click.clicked() {
+    if click.clicked() || text_click {
+        // A draft reply survives another click on the card it is under.
+        if !selected {
+            view.comments.reply.clear();
+        }
         view.comments.selected = Some(key);
-        view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.rect));
     }
     if click.double_clicked() && mine {
@@ -492,6 +509,32 @@ fn card(
             }
         });
     edit
+}
+
+/// The inline editor for a comment's or reply's text: Save (or the submit key) hands the new text
+/// to `edit`, Cancel (or Escape) drops it.
+fn edit_box(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, key: (usize, usize), edit: &mut Option<Edit>) {
+    let Some((_, _, text)) = view.comments.editing.as_mut() else { return };
+    let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+    if !r.has_focus() && !ui.memory(|m| m.focused().is_some()) {
+        r.request_focus();
+    }
+    let submit = crate::comments::submit_key(ui, &r, false);
+    ui.horizontal(|ui| {
+        if (ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12)).clicked() || submit)
+            && let Some((page, index, text)) = view.comments.editing.take()
+        {
+            *edit = Some(Edit::SetAnnotationContents { page, index, text });
+        }
+        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            view.comments.editing = None;
+        }
+    });
+}
+
+/// May the user edit or delete this reply (its own ownership, and the host lets comments change)?
+fn reply_rights(doc: &pdfcraft_engine::Document, r: &Annotation, allowed: bool) -> (bool, bool) {
+    (allowed && doc.can_edit_comment(r.page, r.index), allowed && !r.locked && doc.can_delete_comment(r.page, r.index))
 }
 
 /// A 26 pt round badge: a type glyph (comments) or initials (replies).
@@ -657,5 +700,37 @@ mod filter {
         assert!(any_contains(["IRMAK"], "ırmak"));
         assert!(any_contains(["Note"], "NOTE"));
         assert!(!any_contains(["Ayşe Yılmaz"], "mehmet"));
+    }
+}
+
+#[cfg(test)]
+mod replies {
+    use super::reply_rights;
+    use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Ownership, Session, Shape, Style};
+    use std::sync::Arc;
+
+    fn act(s: &mut Session, actor: &str) {
+        s.set_ownership(Ownership { actor: Some(actor.into()), ..Default::default() });
+    }
+
+    /// Only the author of a reply gets its "…" menu; the host's say (`allowed`) comes first.
+    #[test]
+    fn a_reply_menu_is_for_its_own_author_only() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let bytes = Session::new().create_blank(200.0, 300.0, 1).expect("blank").to_vec();
+        let id = s.open("t.pdf", None, Arc::new(bytes), None).expect("opens");
+        act(&mut s, "u-a");
+        let style = Style { color: [1.0, 0.8, 0.0], opacity: 1.0, width: 1.0, fill: None };
+        let note = NewAnnotation { page: 0, shape: Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment }, style, contents: "n".into(), author: "A".into() };
+        s.apply(id, Edit::AddAnnotation(note)).expect("note");
+        act(&mut s, "u-b");
+        s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "B".into() }).expect("reply");
+        let reply = s.get(id).expect("doc").info.annotations.iter().find(|a| a.in_reply_to.is_some()).expect("reply exists").clone();
+        let doc = s.get(id).expect("doc");
+        assert_eq!(reply_rights(doc, &reply, true), (true, true), "u-b wrote it");
+        assert_eq!(reply_rights(doc, &reply, false), (false, false), "the host does not let comments change");
+        act(&mut s, "u-a");
+        let doc = s.get(id).expect("doc");
+        assert_eq!(reply_rights(doc, &reply, true), (false, false), "u-a does not own u-b's reply");
     }
 }

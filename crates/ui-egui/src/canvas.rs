@@ -1272,6 +1272,19 @@ impl DocView {
         }
     }
 
+    /// Show `rect` (user space) on `page`: its centre goes to the middle of the window where the
+    /// page allows, at the zoom as it is (a note clicked in the Comments panel).
+    pub fn go_to_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
+        self.go_to_page(page);
+        let page = self.current;
+        self.goto_point = None;
+        let Some(p) = info.pages.get(page) else { return };
+        let [fx, fy] = p.dest_fraction(Some((rect[0] + rect[2]) / 2.0), Some((rect[1] + rect[3]) / 2.0), self.rotation);
+        if fx.is_some() || fy.is_some() {
+            self.goto_point = Some((page, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
+        }
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -6448,6 +6461,11 @@ trailer << /Root 1 0 R >>
         // A zoom beyond the view's range is clamped to it.
         v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(1e30) }, &info);
         assert_eq!((v.zoom, v.goto_point), (64.0, None));
+        // A rectangle: its centre (a quarter across, a quarter down page 2) goes to the window's middle.
+        v.viewport_w = 600.0;
+        v.viewport_h = 400.0;
+        v.go_to_rect(1, [50.0, 250.0, 100.0, 350.0], &info);
+        assert_eq!((v.current, v.goto_point), (1, Some((1, Some(0.25), Some(0.25), vec2(300.0, 200.0)))));
         v.go_to_dest(0, DestView::Fit, &info);
         assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
         v.go_to_dest(0, DestView::FitH { top: Some(100.0) }, &info);

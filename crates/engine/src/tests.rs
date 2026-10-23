@@ -1475,6 +1475,18 @@ fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
 }
 
 #[test]
+fn an_injected_wall_clock_dates_new_comments_and_replies() {
+    // A wasm32 host has no system clock of its own; the web app injects the browser's.
+    let mut s = Session::new().with_wall_clock(|| 1_792_024_200, || 9 * 3600);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(2)), None).expect("opens");
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Done".into(), author: "Ada".into() }).unwrap();
+    let a = &s.get(id).unwrap().info.annotations;
+    assert_eq!(a.len(), 2);
+    assert!(a.iter().all(|c| c.modified.as_deref().is_some_and(|m| m.contains("2026") && !m.contains("1970"))), "{a:?}");
+}
+
+#[test]
 fn comments_are_added_drawn_threaded_and_undone() {
     let (mut s, id) = session_with(2);
     assert_eq!(pixel(&s, id, 1, 100, 100), [255, 255, 255, 255]);
