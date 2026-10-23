@@ -166,6 +166,13 @@ pub fn export_annotation(doc: &Document, nm: &str) -> Result<AnnotXfdf, DataErro
     export_annotation_in(doc, &AnnotIndex::new(doc), nm)
 }
 
+/// Several annotations at once: one scan of the document for all of `names`. The result keeps
+/// the order of `names`; an annotation that can't be exported is `None`.
+pub fn export_annotations(doc: &Document, names: &[String]) -> Vec<(String, Option<AnnotXfdf>)> {
+    let idx = AnnotIndex::new(doc);
+    names.iter().map(|nm| (nm.clone(), export_annotation_in(doc, &idx, nm).ok())).collect()
+}
+
 /// [`export_annotation`] with an index built once for many exports of the same document.
 pub fn export_annotation_in(doc: &Document, idx: &AnnotIndex, nm: &str) -> Result<AnnotXfdf, DataError> {
     if utf16_len(nm) > MAX_ID_LEN {

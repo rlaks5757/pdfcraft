@@ -618,5 +618,7 @@ fn an_index_serves_many_exports_and_the_kind_is_cut_in_utf16() {
         let nm = format!("n{i}");
         assert_eq!(export_annotation_in(&doc, &idx, &nm).unwrap(), export_annotation(&doc, &nm).unwrap());
     }
+    let many = export_annotations(&doc, &["n1".into(), "nope".into(), "n3".into()]);
+    assert_eq!((many[0].1.is_some(), many[1].1.is_some(), many[2].1.is_some()), (true, false, true));
     assert!(matches!(export_annotation_in(&doc, &idx, "nope"), Err(DataError::NotFound(_))));
 }
