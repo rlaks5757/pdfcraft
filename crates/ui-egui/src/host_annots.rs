@@ -162,7 +162,7 @@ impl PdfCraftApp {
     }
 
     /// A file the host opened is still on its way in: its `annots-*` messages belong to it.
-    fn host_open_pending(&self) -> bool {
+    pub(crate) fn host_open_pending(&self) -> bool {
         self.startup_inbox.lock().map(|q| !q.is_empty()).unwrap_or(false)
     }
 
@@ -703,5 +703,217 @@ mod tests {
         let (_, id) = h.state().active_ids().expect("the file opened");
         let d = h.state().session.get(id).unwrap();
         assert_eq!((d.ownership().actor.as_deref(), d.ownership().read_only, d.annot_sync()), (Some("alice"), true, true));
+    }
+
+    /// `pdf()` behind the user password "pw".
+    fn locked_pdf() -> Vec<u8> {
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf())).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [4; 32],
+        })
+        .unwrap();
+        pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+    }
+
+    fn rules_of(h: &egui_kittest::Harness<'_, PdfCraftApp>, name: &str) -> (Option<String>, bool, bool) {
+        let state = h.state();
+        let d = state.views.iter().filter_map(|v| state.session.get(v.id)).find(|d| d.name == name).unwrap_or_else(|| {
+            panic!("{name} is not open: {:?}", state.views.iter().filter_map(|v| state.session.get(v.id)).map(|d| d.name.clone()).collect::<Vec<_>>())
+        });
+        (d.ownership().actor.clone(), d.ownership().read_only, d.annot_sync())
+    }
+
+    /// The rules the answer to a password prompt makes the document with are the ones the file came
+    /// with, not whatever the session holds by the time the password is in.
+    #[test]
+    fn a_password_prompt_carries_the_rules_of_its_file_whatever_the_session_holds_then() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(pdfcraft_engine::Ownership { read_only: true, ..share() });
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), locked_pdf()));
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..50 {
+            h.run_steps(2);
+            if h.state().password_prompt.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(h.state().password_prompt.is_some());
+        h.state_mut().session.set_open_ownership(Default::default());
+        h.state_mut().submit_password(Some("pw".into()));
+        h.state_mut().session.set_open_ownership(pdfcraft_engine::Ownership { actor: Some("mallory".into()), ..Default::default() });
+        for _ in 0..100 {
+            h.run_steps(2);
+            if h.state().active_ids().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(rules_of(&h, "a.pdf"), (Some("alice".into()), true, true));
+        assert_eq!(h.state().session.open_ownership().actor.as_deref(), Some("mallory"), "the rules in force are put back");
+    }
+
+    /// Files opened in one frame each get the rules sent with them, and one sent without gets the
+    /// build's own, not the one before it's.
+    #[test]
+    fn files_opened_in_one_frame_each_get_their_own_rules() {
+        for host_lock in [false, true] {
+            let mut app = PdfCraftApp::new();
+            app.host_lock = host_lock;
+            app.host_save = Some(Box::new(|_, _, _| Ok(())));
+            {
+                let mut o = app.ownership_inbox.lock().unwrap();
+                o.push(pdfcraft_engine::Ownership { read_only: true, ..share() });
+                o.push(pdfcraft_engine::Ownership { actor: Some("bob".into()), ..Default::default() });
+                let mut q = app.startup_inbox.lock().unwrap();
+                for name in ["a.pdf", "b.pdf", "c.pdf"] {
+                    q.push((name.into(), pdf()));
+                }
+            }
+            let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+            h.run_steps(4);
+            assert_eq!(rules_of(&h, "a.pdf"), (Some("alice".into()), true, true));
+            assert_eq!(rules_of(&h, "b.pdf"), (Some("bob".into()), false, false));
+            assert_eq!(rules_of(&h, "c.pdf"), (None, false, false), "host lock {host_lock}: no rules came with it");
+            let c = h.state().views.iter().filter_map(|v| h.state().session.get(v.id)).find(|d| d.name == "c.pdf").unwrap();
+            let want = if host_lock { crate::host_lock::viewer_ownership().scope } else { Default::default() };
+            assert_eq!(c.ownership().scope, want);
+        }
+    }
+
+    /// A file that asks for a password holds the ones after it back, rules and all, and its prompt
+    /// is not dropped by the next file's open.
+    #[test]
+    fn a_file_behind_a_prompt_keeps_the_prompt_and_the_files_after_it_wait_with_their_rules() {
+        let app = PdfCraftApp::new();
+        {
+            let mut o = app.ownership_inbox.lock().unwrap();
+            o.push(pdfcraft_engine::Ownership { read_only: true, ..share() });
+            o.push(pdfcraft_engine::Ownership { actor: Some("bob".into()), annot_sync: true, ..Default::default() });
+            let mut q = app.startup_inbox.lock().unwrap();
+            q.push(("locked.pdf".into(), locked_pdf()));
+            q.push(("plain.pdf".into(), pdf()));
+        }
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..50 {
+            h.run_steps(2);
+            if h.state().password_prompt.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().password_prompt.as_ref().map(|p| p.name.as_str()), Some("locked.pdf"));
+        assert_eq!((h.state().startup_inbox.lock().unwrap().len(), h.state().ownership_inbox.lock().unwrap().len()), (1, 1), "the second file waits");
+        assert!(h.state().views.is_empty());
+        h.state_mut().submit_password(Some("pw".into()));
+        for _ in 0..100 {
+            h.run_steps(2);
+            if h.state().views.len() == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(rules_of(&h, "locked.pdf"), (Some("alice".into()), true, true));
+        assert_eq!(rules_of(&h, "plain.pdf"), (Some("bob".into()), false, true));
+        assert!(h.state().password_prompt.is_none());
+    }
+
+    type Heard = std::rc::Rc<std::cell::RefCell<Vec<(u64, Vec<String>)>>>;
+
+    /// What the page hears: the messages with their numbers, in the order they went out.
+    fn listen(app: &mut PdfCraftApp) -> Heard {
+        let heard = Heard::default();
+        let sink = heard.clone();
+        app.host_annots = Some(Box::new(move |e| {
+            if let AnnotEvent::Changed { seq, changes } = e {
+                sink.borrow_mut().push((*seq, changes.upserts.iter().map(|u| u.annot_id.clone()).collect()));
+            }
+        }));
+        heard
+    }
+
+    /// An annotation by the user on the document the page's messages belong to.
+    fn add_square(app: &mut PdfCraftApp, x: f64) {
+        let id = app.annot_target.unwrap();
+        let shape = pdfcraft_engine::Shape::Rectangle { rect: [x, 20.0, x + 4.0, 24.0] };
+        let style = pdfcraft_engine::Style::default_for(&shape);
+        let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: "c".into(), author: "alice".into() };
+        app.session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
+    }
+
+    /// Seq rule 1: the first message of each document opened starts at 1 (never 0, never missing).
+    #[test]
+    fn the_first_message_of_each_opened_document_is_number_one() {
+        let mut app = PdfCraftApp::new();
+        let heard = listen(&mut app);
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        add_square(h.state_mut(), 10.0);
+        h.run_steps(2);
+        add_square(h.state_mut(), 30.0);
+        h.run_steps(2);
+        assert_eq!(heard.borrow().iter().map(|m| m.0).collect::<Vec<_>>(), [1, 2], "and one more for each message after it");
+        // The next document starts over.
+        heard.borrow_mut().clear();
+        h.state().ownership_inbox.lock().unwrap().push(share());
+        h.state().startup_inbox.lock().unwrap().push(("b.pdf".into(), pdf()));
+        h.run_steps(4);
+        add_square(h.state_mut(), 10.0);
+        h.run_steps(2);
+        assert_eq!(heard.borrow().iter().map(|m| m.0).collect::<Vec<_>>(), [1]);
+    }
+
+    /// Seq rule 2: every message has the next number, the pieces of a split change included.
+    #[test]
+    fn a_change_split_in_pieces_numbers_each_piece() {
+        let mut app = PdfCraftApp::new();
+        let heard = listen(&mut app);
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        for i in 0..(MAX_PER_MESSAGE + 5) {
+            add_square(h.state_mut(), (i % 150) as f64);
+        }
+        h.run_steps(2);
+        add_square(h.state_mut(), 5.0);
+        h.run_steps(2);
+        let heard = heard.borrow();
+        assert_eq!(heard.iter().map(|m| m.0).collect::<Vec<_>>(), [1, 2, 3], "{:?}", heard.iter().map(|m| (m.0, m.1.len())).collect::<Vec<_>>());
+        assert_eq!((heard[0].1.len(), heard[1].1.len(), heard[2].1.len()), (MAX_PER_MESSAGE, 5, 1));
+    }
+
+    /// Seq rule 3: a reset numbered N leaves alone what the messages after N carry, and treats what
+    /// the earlier messages carried as the server has it (here: gone from the list).
+    #[test]
+    fn a_reset_leaves_the_annotations_of_messages_after_its_number_alone() {
+        let mut app = PdfCraftApp::new();
+        let heard = listen(&mut app);
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        add_square(h.state_mut(), 10.0);
+        h.run_steps(2);
+        add_square(h.state_mut(), 40.0);
+        h.run_steps(2);
+        let names: Vec<String> = heard.borrow().iter().map(|m| m.1[0].clone()).collect();
+        assert_eq!(heard.borrow().iter().map(|m| m.0).collect::<Vec<_>>(), [1, 2]);
+        // The page fetched an empty list after message 1: the second annotation is not in it yet.
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 1, items: vec![] });
+        h.run_steps(2);
+        let (_, id) = h.state().active_ids().unwrap();
+        let d = h.state().session.get(id).unwrap();
+        assert!(d.annot_position(&names[0]).is_none(), "the list is the truth for what it had seen");
+        assert!(d.annot_position(&names[1]).is_some(), "message 2 came after the list was fetched");
     }
 }

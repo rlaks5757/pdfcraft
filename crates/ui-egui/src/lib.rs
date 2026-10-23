@@ -53,9 +53,9 @@ mod credits;
 mod crop;
 mod drag_pointer;
 mod export_ui;
+mod host_annots;
 mod host_compare;
 mod host_lock;
-mod host_annots;
 mod host_stamp;
 mod js_ui;
 mod marks_ui;
@@ -65,11 +65,11 @@ mod optimize_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
+pub use host_annots::{AnnotCommand, AnnotEvent, AnnotInbox, HostAnnotFn};
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_lock::{HOST_LOCK, commands_manifest, open_scope, parse_mode, policy_overrides, with_policy};
-pub use host_annots::{AnnotCommand, AnnotEvent, AnnotInbox, HostAnnotFn};
-pub use pdfcraft_engine::{AnnotChanges, RejectedAnnot, RemoteAnnot};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
+pub use pdfcraft_engine::{AnnotChanges, RejectedAnnot, RemoteAnnot};
 pub use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
 mod standards_ui;
 mod zoom_snap;
@@ -436,6 +436,9 @@ pub struct PasswordPrompt {
     stamp: Option<file_watch::Stamp>,
     pub input: String,
     pub error: Option<String>,
+    /// The rules the file was asked for under: the document is made with them once it is
+    /// unlocked, whatever the session's open rules are by then.
+    ownership: pdfcraft_engine::Ownership,
     /// A late startup file must stay in the background even after it is unlocked.
     activate: bool,
     /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
@@ -455,6 +458,8 @@ struct PendingOpen {
     name: String,
     path: Option<String>,
     stamp: Option<file_watch::Stamp>,
+    /// The session's open rules when the file was asked for (see [`PasswordPrompt::ownership`]).
+    ownership: pdfcraft_engine::Ownership,
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
@@ -660,8 +665,6 @@ pub struct PdfCraftApp {
     annot_open_waiting: bool,
     /// The number of the last `annots-changed` message sent for the shared document.
     annot_seq: u64,
-    /// The open ownership was set for a file the host opened and is to be cleared once it is in.
-    open_ownership_spent: bool,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
     pub compare_inbox: CompareInbox,
     pub host_compare: Option<HostCompareFn>,
@@ -1038,7 +1041,6 @@ impl PdfCraftApp {
             annot_target: None,
             annot_open_waiting: false,
             annot_seq: 0,
-            open_ownership_spent: false,
             armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1248,6 +1250,7 @@ impl PdfCraftApp {
             name: request.name,
             path: request.path,
             stamp: request.stamp,
+            ownership: self.session.open_ownership().clone(),
             activate: request.activate,
             after_open: request.after_open,
             recovered: request.recovered,
@@ -1286,6 +1289,14 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_pending_open(&mut self, pending: PendingOpen, kind: open_worker::ResultKind) {
+        // The document is made under the rules the file was asked for, not the ones of today.
+        let current = self.swap_open_rules(pending.ownership.clone());
+        self.finish_pending_open_under_rules(pending, kind);
+        self.session.set_open_ownership(current);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_pending_open_under_rules(&mut self, pending: PendingOpen, kind: open_worker::ResultKind) {
         match kind {
             open_worker::ResultKind::ReadFailed(reason) => {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &pending.name), ("e", &reason)]);
@@ -1336,6 +1347,7 @@ impl PdfCraftApp {
                         stamp: pending.stamp,
                         input: String::new(),
                         error: password_error,
+                        ownership: pending.ownership,
                         activate: pending.activate,
                         recovered: pending.recovered,
                         then: pending.then,
@@ -1345,6 +1357,13 @@ impl PdfCraftApp {
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
             },
         }
+    }
+
+    /// Make `rules` the ones new documents get; the rules that were are returned to put back.
+    fn swap_open_rules(&mut self, rules: pdfcraft_engine::Ownership) -> pdfcraft_engine::Ownership {
+        let prior = self.session.open_ownership().clone();
+        self.session.set_open_ownership(rules);
+        prior
     }
 
     fn try_open(
@@ -1370,6 +1389,7 @@ impl PdfCraftApp {
                     stamp,
                     input: String::new(),
                     error,
+                    ownership: self.session.open_ownership().clone(),
                     activate,
                     recovered: None,
                     then: None,
@@ -1692,6 +1712,14 @@ impl PdfCraftApp {
 
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
+        // The document is made under the rules the file was asked for, not the ones of today.
+        let Some(rules) = self.password_prompt.as_ref().map(|p| p.ownership.clone()) else { return };
+        let current = self.swap_open_rules(rules);
+        self.submit_password_under_rules(password);
+        self.session.set_open_ownership(current);
+    }
+
+    fn submit_password_under_rules(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
         let Some(pw) = password else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
@@ -3189,7 +3217,8 @@ impl eframe::App for PdfCraftApp {
                     o.drain(..take).collect()
                 })
                 .unwrap_or_default();
-            for (name, bytes) in startup {
+            let mut queue = startup.into_iter();
+            while let Some((name, bytes)) = queue.next() {
                 let mut shares = false;
                 if let Some(ownership) = rules.pop_front() {
                     shares = ownership.annot_sync;
@@ -3205,17 +3234,24 @@ impl eframe::App for PdfCraftApp {
                 if shares {
                     self.annot_open_finished(opened.is_ok());
                 }
-                self.open_ownership_spent = true;
+                // The rules are for that file only (a prompt or the worker carries them on): a later
+                // open (a drop, an attachment) gets none.
+                self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
                 if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
                 }
+                // One prompt at a time: the files after it wait, with their rules, for the answer.
+                if self.password_prompt.is_some() {
+                    let rest: Vec<_> = queue.by_ref().collect();
+                    if let Ok(mut q) = self.startup_inbox.lock() {
+                        q.splice(0..0, rest);
+                    }
+                    if let Ok(mut o) = self.ownership_inbox.lock() {
+                        o.splice(0..0, rules.drain(..));
+                    }
+                    break;
+                }
             }
-        }
-        // The rules a host file came with are for that file: a later open (a drop, an attachment) gets
-        // none. Not before the file is in, which a password prompt or a worker can still be holding up.
-        if self.open_ownership_spent && self.password_prompt.is_none() && !self.open_in_flight() {
-            self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
-            self.open_ownership_spent = false;
         }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, e) in failed {

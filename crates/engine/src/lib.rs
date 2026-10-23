@@ -3431,6 +3431,11 @@ impl Session {
         self.ownership = ownership;
     }
 
+    /// The rules documents opened from now on get ([`Self::set_open_ownership`]).
+    pub fn open_ownership(&self) -> &Ownership {
+        &self.ownership
+    }
+
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
