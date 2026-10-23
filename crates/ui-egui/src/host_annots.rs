@@ -151,7 +151,7 @@ impl PdfCraftApp {
     }
 
     /// A file opened on a worker thread has not come in yet.
-    fn open_in_flight(&self) -> bool {
+    pub(crate) fn open_in_flight(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
             !self.pending_opens.is_empty()
@@ -634,5 +634,46 @@ mod tests {
         h.run_steps(2);
         let view = h.state().views.iter().find(|v| v.id == id).unwrap();
         assert!(view.comments.gesture.is_none() && view.comments.composer.is_none());
+    }
+
+    /// A host file behind a password keeps its rules: the prompt holds up the open, and the rules
+    /// of the host must still be there when the password lets it in.
+    #[test]
+    fn a_password_protected_host_file_keeps_its_rules() {
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf())).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [4; 32],
+        })
+        .unwrap();
+        let locked = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(pdfcraft_engine::Ownership { read_only: true, ..share() });
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), locked));
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..50 {
+            h.run_steps(2);
+            if h.state().password_prompt.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(h.state().password_prompt.is_some());
+        h.run_steps(3);
+        h.state_mut().submit_password(Some("pw".into()));
+        for _ in 0..100 {
+            h.run_steps(2);
+            if h.state().active_ids().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, id) = h.state().active_ids().expect("the file opened");
+        let d = h.state().session.get(id).unwrap();
+        assert_eq!((d.ownership().actor.as_deref(), d.ownership().read_only, d.annot_sync()), (Some("alice"), true, true));
     }
 }

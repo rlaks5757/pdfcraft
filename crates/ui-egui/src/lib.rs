@@ -658,6 +658,8 @@ pub struct PdfCraftApp {
     annot_target: Option<pdfcraft_engine::DocId>,
     /// An `annotSync` file was taken but its document isn't here yet (a password is asked for).
     annot_open_waiting: bool,
+    /// The open ownership was set for a file the host opened and is to be cleared once it is in.
+    open_ownership_spent: bool,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
     pub compare_inbox: CompareInbox,
     pub host_compare: Option<HostCompareFn>,
@@ -1033,6 +1035,7 @@ impl PdfCraftApp {
             annot_selected_sent: None,
             annot_target: None,
             annot_open_waiting: false,
+            open_ownership_spent: false,
             armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -3196,12 +3199,17 @@ impl eframe::App for PdfCraftApp {
                 if shares {
                     self.annot_open_finished(opened.is_ok());
                 }
-                // The sharing belongs to this file: a later open (a drop, an attachment) is not shared.
-                self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
+                self.open_ownership_spent = true;
                 if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
                 }
             }
+        }
+        // The rules a host file came with are for that file: a later open (a drop, an attachment) gets
+        // none. Not before the file is in, which a password prompt or a worker can still be holding up.
+        if self.open_ownership_spent && self.password_prompt.is_none() && !self.open_in_flight() {
+            self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
+            self.open_ownership_spent = false;
         }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for (name, e) in failed {

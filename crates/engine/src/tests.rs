@@ -7476,4 +7476,41 @@ mod annot_sync {
         assert!(!c.upserts[0].xfdf.contains("inreplyto"), "{:?}", c.upserts[0].xfdf);
         assert!(c.upserts[1].xfdf.contains("inreplyto"), "{:?}", c.upserts[1].xfdf);
     }
+
+    /// The server writes an annotation out differently from the way it came in. A reset that lists
+    /// the actor's own annotation in that form still leaves the actor's copy, and its history, alone.
+    #[test]
+    fn a_reset_with_the_servers_own_wording_leaves_the_actors_history_alone() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let first = only(s.take_annot_changes(id));
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 30.0, dy: 0.0 }).unwrap();
+        let moved = only(s.take_annot_changes(id));
+        let mut theirs = remote(&first, "alice");
+        theirs.xfdf = theirs.xfdf.replace("<square ", "<square opacity=\"0.5\" ");
+        let report = s.annots_reset(id, vec![theirs]).unwrap();
+        assert_eq!((report.applied, report.skipped), (0, 1), "{report:?}");
+        assert_eq!(s.take_annot_changes(id), None, "nothing is handed back");
+        s.undo(id).unwrap();
+        assert_eq!(only(s.take_annot_changes(id)).xfdf, first.xfdf, "the move is undone, not overwritten");
+        assert_ne!(first.xfdf, moved.xfdf);
+    }
+
+    /// A list that lacks an annotation of the actor's does not take it away, whether the server
+    /// has it or not; only an apply delete does.
+    #[test]
+    fn a_reset_never_removes_the_actors_annotations() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let up = only(s.take_annot_changes(id));
+        s.apply(id, rect(0, 90.0)).unwrap();
+        let report = s.annots_reset(id, vec![]).unwrap();
+        assert_eq!((report.applied, names(&s, id, 0).len()), (0, 2), "{report:?}");
+        assert_eq!(only(s.take_annot_changes(id)).page, 0, "the new one still goes out");
+        // The server's own delete (an administrator) is the way one goes.
+        let report = s.annots_apply(id, vec![], vec![up.annot_id.clone()]).unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(names(&s, id, 0).len(), 1);
+        assert!(all_states(&s, id).iter().all(|st| !st.contains(&up.annot_id)));
+    }
 }

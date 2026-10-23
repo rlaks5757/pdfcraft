@@ -73,8 +73,18 @@ pub struct RejectedAnnot {
     pub server: Option<RemoteAnnot>,
 }
 
-/// What a remote application did: how many items were applied or skipped as already current, and
-/// the ones that could not be applied (annot id, reason).
+/// How a server message treats the actor's own annotations.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// The server's whole list: the actor's own are never put in or taken out by it.
+    Reset,
+    /// A push from the socket: another user's edit of the actor's own annotation is put in, unless
+    /// the actor has a change of it not yet handed out.
+    Apply,
+    /// The server refused a change: the local copy is put back as the server has it.
+    Reject,
+}
+
 /// One message from the server, for [`Session::annots_run`].
 pub enum AnnotOp {
     Reset(Vec<RemoteAnnot>),
@@ -82,6 +92,8 @@ pub enum AnnotOp {
     Reject(Vec<RejectedAnnot>),
 }
 
+/// What a remote application did: how many items were applied or skipped as already current, and
+/// the ones that could not be applied (annot id, reason).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteReport {
     pub applied: usize,
@@ -99,19 +111,14 @@ mod xf {
         pub xfdf: String,
     }
 
-    pub fn export(doc: &Cos, nm: &str) -> Option<Exported> {
-        pdfcraft_xfdf::export_annotation(doc, nm).ok().map(|e| Exported { page: e.page, subtype: clamp_utf16(&e.kind, 100), xfdf: e.xfdf })
+    /// One scan of the document, for exporting many of its annotations.
+    pub fn index(doc: &Cos) -> pdfcraft_xfdf::AnnotIndex {
+        pdfcraft_xfdf::AnnotIndex::new(doc)
     }
 
-    /// `s` cut to at most `max` UTF-16 units (the host counts that way), on a character boundary.
-    pub fn clamp_utf16(s: &str, max: usize) -> String {
-        let mut units = 0;
-        s.chars()
-            .take_while(|c| {
-                units += c.len_utf16();
-                units <= max
-            })
-            .collect()
+    /// The annotation named `nm` as XFDF (the xfdf crate cuts `subtype` to the host's 100 units).
+    pub fn export(doc: &Cos, idx: &pdfcraft_xfdf::AnnotIndex, nm: &str) -> Option<Exported> {
+        pdfcraft_xfdf::export_annotation_in(doc, idx, nm).ok().map(|e| Exported { page: e.page, subtype: e.kind, xfdf: e.xfdf })
     }
 
     /// Put the annotations in (replacing the ones with the same `/NM`, `/PpmOwner` the item's
@@ -119,7 +126,7 @@ mod xf {
     /// calls for one batch so a stamp's picture is decoded once.
     pub fn apply(
         doc: &mut Cos,
-        upserts: &[RemoteAnnot],
+        upserts: &[&RemoteAnnot],
         deletes: &[String],
         pictures: &mut pdfcraft_xfdf::PictureCache,
     ) -> pdfcraft_xfdf::RemoteReport {
@@ -367,6 +374,8 @@ fn diff(cos: &Cos, actor: &str, st: &mut SyncState) {
             found.push((nm, page, arc.cloned(), d.clone()));
         });
     }
+    // One scan of the document serves every export below; built only if something changed.
+    let mut index = None;
     for (nm, page, arc, d) in found {
         let prev = st.mine.get(&nm);
         let fp = fingerprint(cos, &d);
@@ -386,7 +395,7 @@ fn diff(cos: &Cos, actor: &str, st: &mut SyncState) {
         }
         // An annotation that cannot be written out stays as it was on the server, and the user
         // hears of it once; it is tried again when it changes.
-        let Some(x) = xf::export(cos, &nm) else {
+        let Some(x) = xf::export(cos, index.get_or_insert_with(|| xf::index(cos)), &nm) else {
             if !st.failed.contains_key(&nm) {
                 st.problems.push(nm.clone());
             }
@@ -599,8 +608,8 @@ impl Session {
         let mut changed = false;
         let mut failure = None;
         for op in ops {
-            let (upserts, deletes, skip_known) = Self::op_items(doc, op);
-            match Self::patch_remote(doc, upserts, deletes, skip_known) {
+            let (upserts, deletes, mode) = Self::op_items(doc, op);
+            match Self::patch_remote(doc, upserts, deletes, mode) {
                 Ok((report, did)) => {
                     changed |= did;
                     reports.push(report);
@@ -623,9 +632,9 @@ impl Session {
 
     /// What one server message comes to: items to put in, `/NM`s to remove, and whether an item
     /// that is here as given is left alone.
-    fn op_items(doc: &mut Document, op: AnnotOp) -> (Vec<RemoteAnnot>, Vec<String>, bool) {
+    fn op_items(doc: &mut Document, op: AnnotOp) -> (Vec<RemoteAnnot>, Vec<String>, Mode) {
         match op {
-            AnnotOp::Apply { upserts, deletes } => (upserts, deletes, true),
+            AnnotOp::Apply { upserts, deletes } => (upserts, deletes, Mode::Apply),
             AnnotOp::Reject(items) => {
                 let mut upserts = Vec::new();
                 let mut deletes = Vec::new();
@@ -639,21 +648,15 @@ impl Session {
                     }
                 }
                 // Always applied: the local copy is what differs from the server.
-                (upserts, deletes, false)
+                (upserts, deletes, Mode::Reject)
             }
             AnnotOp::Reset(items) => {
-                sync_now(doc);
-                let Some(st) = doc.sync.as_ref() else { return (items, Vec::new(), true) };
+                let Some(st) = doc.sync.as_ref() else { return (items, Vec::new(), Mode::Reset) };
                 let listed: HashSet<&str> = items.iter().map(|i| i.annot_id.as_str()).collect();
-                // Not the ones made since the last hand-out: they are not on the server yet.
-                let deletes: Vec<String> = st
-                    .remote
-                    .keys()
-                    .chain(st.mine.iter().filter(|(nm, e)| e.synced && !st.upserts.contains_key(*nm)).map(|(nm, _)| nm))
-                    .filter(|nm| !listed.contains(nm.as_str()))
-                    .cloned()
-                    .collect();
-                (items, deletes, true)
+                // Only what was received from others and is no longer listed. The actor's own
+                // annotations are the actor's to keep; one the server lost arrives as an apply delete.
+                let deletes: Vec<String> = st.remote.keys().filter(|nm| !listed.contains(nm.as_str())).cloned().collect();
+                (items, deletes, Mode::Reset)
             }
         }
     }
@@ -664,12 +667,7 @@ impl Session {
     ///
     /// The actor's own annotations are never put back by news of what the server already has: a
     /// reset after a reconnect would otherwise bring them into states where an undo took them away.
-    fn patch_remote(
-        doc: &mut Document,
-        upserts: Vec<RemoteAnnot>,
-        deletes: Vec<String>,
-        skip_known: bool,
-    ) -> Result<(RemoteReport, bool), EditError> {
+    fn patch_remote(doc: &mut Document, upserts: Vec<RemoteAnnot>, deletes: Vec<String>, mode: Mode) -> Result<(RemoteReport, bool), EditError> {
         // Changes the user made but the interface hasn't taken yet stay pending.
         sync_now(doc);
         let mut report = RemoteReport::default();
@@ -681,7 +679,7 @@ impl Session {
         if let Some(st) = doc.sync.as_mut() {
             for a in upserts {
                 let h = hash_item(&a);
-                if skip_known {
+                if mode != Mode::Reject {
                     if st.remote.get(&a.annot_id) == Some(&h) {
                         report.skipped += 1;
                         continue;
@@ -693,17 +691,17 @@ impl Session {
                     }
                 }
                 if let Some(e) = st.mine.get_mut(&a.annot_id) {
-                    if skip_known {
-                        if st.upserts.contains_key(&a.annot_id) {
-                            report.skipped += 1;
-                            continue;
-                        }
-                        if e.server == h || e.xfdf == hash_of(&a.xfdf) {
-                            e.server = h;
-                            e.synced = true;
-                            report.skipped += 1;
-                            continue;
-                        }
+                    if mode == Mode::Reset {
+                        // Whose it is decides, not what the text looks like (the server writes it
+                        // out differently): the server has it, the actor's copy stays.
+                        e.server = h;
+                        e.synced = true;
+                        report.skipped += 1;
+                        continue;
+                    }
+                    if mode == Mode::Apply && (st.upserts.contains_key(&a.annot_id) || e.server == h) {
+                        report.skipped += 1;
+                        continue;
                     }
                     cached_mine.insert(a.annot_id.clone());
                 }
@@ -715,7 +713,8 @@ impl Session {
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         let mut pictures = pdfcraft_xfdf::PictureCache::default();
-        let done = xf::apply(&mut editor.cos, &live, &deletes, &mut pictures);
+        let live_refs: Vec<&RemoteAnnot> = live.iter().collect();
+        let done = xf::apply(&mut editor.cos, &live_refs, &deletes, &mut pictures);
         report.failed = done.failed.clone();
         report.applied = done.applied.len() + done.removed.len();
         // The stored states get what the working document got; one that can't take an item is a
@@ -732,8 +731,8 @@ impl Session {
                 } else {
                     HashSet::new()
                 };
-                let items: Vec<RemoteAnnot> =
-                    on_states.iter().filter(|a| !cached_mine.contains(&a.annot_id) || here.contains(&a.annot_id)).map(|a| (*a).clone()).collect();
+                let items: Vec<&RemoteAnnot> =
+                    on_states.iter().copied().filter(|a| !cached_mine.contains(&a.annot_id) || here.contains(&a.annot_id)).collect();
                 xf::apply(state, &items, &deletes, &mut pictures);
             }
         }
@@ -765,10 +764,12 @@ impl Session {
             }
             entries.push((nm, arc.cloned(), page, fingerprint(cos, d), is_mine(cos, d, &actor)));
         });
+        // One scan of the document for all the exports below, built when the first is needed.
+        let mut index = None;
         for (nm, arc, page, fp, mine) in entries {
             let server = hashes.get(nm.as_str()).copied().unwrap_or(0);
             if mine {
-                let xfdf = xf::export(cos, &nm).map_or(0, |x| hash_of(&x.xfdf));
+                let xfdf = xf::export(cos, index.get_or_insert_with(|| xf::index(cos)), &nm).map_or(0, |x| hash_of(&x.xfdf));
                 st.mine.insert(nm, Entry { page, fp, xfdf, server, arc, synced: true });
             } else if server != 0 {
                 st.remote.insert(nm, server);

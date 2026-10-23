@@ -2681,3 +2681,4 @@ key	Space	Space
 @id	file.word_count	단어 수…
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	“{from}”의 서명된 버전(수정본 {rev})을 보고 있습니다. 스냅샷이므로 여기서 변경해도 원본에는 영향이 없습니다.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	“{from}”의 수정본 {rev}을(를) 보고 있습니다. 스냅샷이므로 여기서 변경해도 원본에는 영향이 없습니다.
+	{n} annotations can't be saved to the server (too large or not supported)	주석 {n}개를 서버에 저장할 수 없습니다(너무 크거나 지원하지 않는 형식입니다)
