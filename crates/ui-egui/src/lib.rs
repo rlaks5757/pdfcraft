@@ -1605,7 +1605,13 @@ impl PdfCraftApp {
                 // its tab never reaches the host as if it were the host's document.
                 let parent = self.host_lock.then(|| self.session.get(doc).map(|d| d.ownership().clone())).flatten();
                 if let Some(own) = parent {
-                    self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, ..own });
+                    // The attachment is a file of its own: not in the host's annotation database, and with its own panel.
+                    self.session.set_open_ownership(pdfcraft_engine::Ownership {
+                        read_only: true,
+                        annot_sync: false,
+                        hide_comments_panel: false,
+                        ..own
+                    });
                 }
                 // The tab name later names files written from the tab (Split, Extract pages).
                 let opened = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes);
@@ -3190,6 +3196,8 @@ impl eframe::App for PdfCraftApp {
                 if shares {
                     self.annot_open_finished(opened.is_ok());
                 }
+                // The sharing belongs to this file: a later open (a drop, an attachment) is not shared.
+                self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
                 if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
                 }

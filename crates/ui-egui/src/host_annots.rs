@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use pdfcraft_engine::{AnnotChanges, DocId, RejectedAnnot, RemoteAnnot};
+use pdfcraft_engine::{AnnotChanges, AnnotOp, DocId, RejectedAnnot, RemoteAnnot};
 
 use crate::PdfCraftApp;
 
@@ -49,13 +49,13 @@ fn item(v: &serde_json::Value) -> Result<RemoteAnnot, String> {
     Ok(RemoteAnnot { annot_id: annot_id.into(), author_id: author_id.into(), xfdf: xfdf.into() })
 }
 
-fn items(v: &serde_json::Value, key: &str) -> Result<Vec<serde_json::Value>, String> {
-    v.get(key).and_then(|x| x.as_array()).cloned().ok_or_else(|| format!("{key} must be an array"))
+fn items<'a>(v: &'a serde_json::Value, key: &str) -> Result<&'a [serde_json::Value], String> {
+    v.get(key).and_then(|x| x.as_array()).map(Vec::as_slice).ok_or_else(|| format!("{key} must be an array"))
 }
 
 /// The items that read well; one that doesn't is left out and logged, so a single bad annotation
 /// doesn't keep the rest of the server's list from showing.
-fn good<T>(list: Vec<serde_json::Value>, read: impl Fn(&serde_json::Value) -> Result<T, String>) -> Vec<T> {
+fn good<T>(list: &[serde_json::Value], read: impl Fn(&serde_json::Value) -> Result<T, String>) -> Vec<T> {
     list.iter()
         .filter_map(|v| match read(v) {
             Ok(x) => Some(x),
@@ -97,19 +97,39 @@ impl AnnotCommand {
     }
 }
 
+/// The page takes at most this many upserts and this many deletes in one `annots-changed`.
+const MAX_PER_MESSAGE: usize = 2000;
+
+/// The longest id the page accepts, counted in UTF-16 units like its `.length`.
+const MAX_ID_UNITS: usize = 200;
+
 impl AnnotEvent {
-    /// The message body the page gets (`type` is added by the bridge): `annots-changed` or `annots-selected`.
-    pub fn to_json(&self) -> (&'static str, serde_json::Value) {
+    /// The message bodies the page gets (`type` is added by the bridge): `annots-changed`
+    /// (several when a change is bigger than the page takes in one; the engine lists a reply after
+    /// the annotation it replies to) or `annots-selected`. `page` counts from 1, as the server's.
+    pub fn to_messages(&self) -> Vec<(&'static str, serde_json::Value)> {
         use serde_json::json;
         match self {
-            Self::Changed(c) => (
-                "pdfcraft:annots-changed",
-                json!({
-                    "upserts": c.upserts.iter().map(|u| json!({"annotId": u.annot_id, "page": u.page, "type": u.subtype, "xfdf": u.xfdf})).collect::<Vec<_>>(),
-                    "deletes": c.deletes,
-                }),
-            ),
-            Self::Selected(id) => ("pdfcraft:annots-selected", json!({ "annotId": id })),
+            Self::Changed(c) => {
+                // The page drops a whole message that has an id it can't take; leave such a delete out.
+                let deletes: Vec<&String> = c.deletes.iter().filter(|d| (1..=MAX_ID_UNITS).contains(&d.encode_utf16().count())).collect();
+                let parts = c.upserts.len().div_ceil(MAX_PER_MESSAGE).max(deletes.len().div_ceil(MAX_PER_MESSAGE)).max(1);
+                (0..parts)
+                    .map(|i| {
+                        let from = i * MAX_PER_MESSAGE;
+                        let upserts: Vec<_> = c
+                            .upserts
+                            .iter()
+                            .skip(from)
+                            .take(MAX_PER_MESSAGE)
+                            .map(|u| json!({"annotId": u.annot_id, "page": u.page + 1, "type": u.subtype, "xfdf": u.xfdf}))
+                            .collect();
+                        let deletes: Vec<_> = deletes.iter().skip(from).take(MAX_PER_MESSAGE).collect();
+                        ("pdfcraft:annots-changed", json!({ "upserts": upserts, "deletes": deletes }))
+                    })
+                    .collect()
+            }
+            Self::Selected(id) => vec![("pdfcraft:annots-selected", json!({ "annotId": id }))],
         }
     }
 }
@@ -130,16 +150,34 @@ impl PdfCraftApp {
         self.startup_inbox.lock().map(|q| !q.is_empty()).unwrap_or(false)
     }
 
-    /// Once a frame, after the frame's edits: apply the host's annotation messages, then report
-    /// what the user changed and which annotation is selected.
+    /// A file opened on a worker thread has not come in yet.
+    fn open_in_flight(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            !self.pending_opens.is_empty()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+    }
+
+    /// Once a frame, after the frame's edits: report what the user changed, then apply the host's
+    /// annotation messages, and report which annotation is selected. The user's changes go first so
+    /// the page sees them before it sees its own news acted on.
     pub(crate) fn host_annots_tick(&mut self) {
         // The messages wait for the document they belong to (the page sends them right behind
         // `pdfcraft:open`): not for an earlier one, nor while a password is still asked for.
         if self.annot_open_waiting {
-            if self.password_prompt.is_some() {
+            if self.password_prompt.is_some() || self.open_in_flight() {
                 return;
             }
             self.adopt_annot_target();
+            // Nothing left to wait for and no shared document came: the open did not produce one.
+            if self.annot_open_waiting {
+                self.annot_open_finished(false);
+                return;
+            }
         }
         let Some(doc) = self.annot_target.filter(|d| self.session.get(*d).is_some_and(|d| d.annot_sync())) else {
             self.annot_target = None;
@@ -148,20 +186,27 @@ impl PdfCraftApp {
         if self.host_open_pending() {
             return;
         }
+        self.post_annot_changes(doc);
         let commands: Vec<AnnotCommand> = self.annot_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        for command in commands {
-            self.run_annot_command(doc, command);
+        self.run_annot_commands(doc, commands);
+        if self.host_annots.is_some() {
+            self.report_annot_selection(doc);
         }
-        if self.host_annots.is_none() {
-            return;
-        }
-        if let Some(changes) = self.session.take_annot_changes(doc)
+    }
+
+    /// Hand the user's changes to the page, and tell the user of annotations that can't be kept there.
+    fn post_annot_changes(&mut self, doc: DocId) {
+        if self.host_annots.is_some()
+            && let Some(changes) = self.session.take_annot_changes(doc)
             && !changes.is_empty()
             && let Some(report) = self.host_annots.as_ref()
         {
             report(&AnnotEvent::Changed(changes));
         }
-        self.report_annot_selection(doc);
+        let problems = self.session.take_annot_problems(doc);
+        if !problems.is_empty() {
+            self.notify_fmt("{n} annotations can't be saved to the server (too large or not supported)", &[("n", &problems.len().to_string())]);
+        }
     }
 
     /// The newest shared document becomes the one the messages go to, if it is a new one.
@@ -188,31 +233,74 @@ impl PdfCraftApp {
         }
     }
 
-    fn run_annot_command(&mut self, doc: DocId, command: AnnotCommand) {
-        // Remote patches shift (page, index): the selection and the open inline edit follow their
-        // annotation by `/NM`, or go when it is gone.
-        let selected = self.view_of(doc).and_then(|v| v.comments.selected).and_then(|(p, i)| self.annot_name(doc, p, i));
-        let editing = self.view_of(doc).and_then(|v| v.comments.editing.as_ref().map(|(p, i, t)| (*p, *i, t.clone())));
-        let editing_name = editing.as_ref().and_then(|(p, i, _)| self.annot_name(doc, *p, *i));
-        let patched = match command {
-            AnnotCommand::Reset { items } => self.session.annots_reset(doc, items),
-            AnnotCommand::Apply { upserts, deletes } => self.session.annots_apply(doc, upserts, deletes),
-            AnnotCommand::Reject { items } => self.session.annots_reject(doc, items),
-            AnnotCommand::Select { annot_id } => {
-                self.select_annot(doc, &annot_id);
-                return;
-            }
-        };
-        match patched {
-            Ok(report) => {
-                for (annot_id, why) in &report.failed {
-                    log::warn!("annotation {annot_id} from the host was not applied: {why}");
+    /// Apply the messages in order; a run of them between two selections is one patch with one refresh.
+    fn run_annot_commands(&mut self, doc: DocId, commands: Vec<AnnotCommand>) {
+        let mut ops: Vec<AnnotOp> = Vec::new();
+        for command in commands {
+            match command {
+                AnnotCommand::Reset { items } => ops.push(AnnotOp::Reset(items)),
+                AnnotCommand::Apply { upserts, deletes } => ops.push(AnnotOp::Apply { upserts, deletes }),
+                AnnotCommand::Reject { items } => ops.push(AnnotOp::Reject(items)),
+                AnnotCommand::Select { annot_id } => {
+                    self.run_annot_ops(doc, std::mem::take(&mut ops));
+                    self.select_annot(doc, &annot_id);
                 }
             }
-            Err(e) => log::warn!("annotation message refused: {e}"),
+        }
+        self.run_annot_ops(doc, ops);
+    }
+
+    fn run_annot_ops(&mut self, doc: DocId, ops: Vec<AnnotOp>) {
+        if ops.is_empty() {
+            return;
+        }
+        // Remote patches shift (page, index): the selection, the open inline edit, a drag and an
+        // open composer follow their annotation by `/NM`, or go when it is gone.
+        let name_of = |app: &Self, at: Option<(usize, usize)>| at.and_then(|(p, i)| app.annot_name(doc, p, i));
+        let view = self.view_of(doc);
+        let selected = name_of(self, view.and_then(|v| v.comments.selected));
+        let editing = view.and_then(|v| v.comments.editing.as_ref().map(|(p, i, t)| (*p, *i, t.clone())));
+        let editing_name = name_of(self, editing.as_ref().map(|(p, i, _)| (*p, *i)));
+        let dragged = name_of(
+            self,
+            match view.and_then(|v| v.comments.gesture.as_ref()) {
+                Some(crate::comments::Gesture::Move { page, index, .. } | crate::comments::Gesture::Resize { page, index, .. }) => {
+                    Some((*page, *index))
+                }
+                _ => None,
+            },
+        );
+        let composing = name_of(
+            self,
+            match view.and_then(|v| v.comments.composer.as_ref()) {
+                Some(c) => match c.kind {
+                    crate::comments::ComposerKind::Edit(i) => Some((c.page, i)),
+                    _ => None,
+                },
+                None => None,
+            },
+        );
+        let changed = match self.session.annots_run(doc, ops) {
+            Ok(reports) => {
+                for report in &reports {
+                    for (annot_id, why) in &report.failed {
+                        log::warn!("annotation {annot_id} from the host was not applied: {why}");
+                    }
+                }
+                reports.iter().any(|r| r.applied > 0)
+            }
+            Err(e) => {
+                log::warn!("annotation message refused: {e}");
+                true
+            }
+        };
+        // A message that put in or took away nothing moved nothing.
+        if !changed {
+            return;
         }
         let position = |app: &Self, name: &Option<String>| name.as_deref().and_then(|n| app.session.get(doc)?.annot_position(n));
         let (selected_at, editing_at) = (position(self, &selected), position(self, &editing_name));
+        let (dragged_at, composing_at) = (position(self, &dragged), position(self, &composing));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
             view.comments.selected = selected_at;
             view.comments.editing = match (editing, editing_at) {
@@ -222,12 +310,20 @@ impl PdfCraftApp {
             if selected_at.is_none() {
                 view.comments.reply.clear();
             }
-            // These hold an index, which the patch may have moved to another annotation.
-            if matches!(view.comments.gesture, Some(crate::comments::Gesture::Move { .. } | crate::comments::Gesture::Resize { .. })) {
-                view.comments.gesture = None;
+            match (view.comments.gesture.as_mut(), dragged_at) {
+                (Some(crate::comments::Gesture::Move { page, index, .. } | crate::comments::Gesture::Resize { page, index, .. }), Some((p, i))) => {
+                    (*page, *index) = (p, i);
+                }
+                (Some(crate::comments::Gesture::Move { .. } | crate::comments::Gesture::Resize { .. }), None) => view.comments.gesture = None,
+                _ => {}
             }
-            if matches!(view.comments.composer.as_ref().map(|c| c.kind), Some(crate::comments::ComposerKind::Edit(_))) {
-                view.comments.composer = None;
+            if let Some(c) = view.comments.composer.as_mut()
+                && matches!(c.kind, crate::comments::ComposerKind::Edit(_))
+            {
+                match composing_at {
+                    Some((p, i)) => (c.page, c.kind) = (p, crate::comments::ComposerKind::Edit(i)),
+                    None => view.comments.composer = None,
+                }
             }
         }
     }
@@ -320,15 +416,16 @@ mod tests {
 
     #[test]
     fn events_become_messages() {
-        let (kind, body) = AnnotEvent::Selected(None).to_json();
-        assert_eq!((kind, body), ("pdfcraft:annots-selected", json!({"annotId": null})));
+        assert_eq!(AnnotEvent::Selected(None).to_messages(), vec![("pdfcraft:annots-selected", json!({"annotId": null}))]);
         let changes = AnnotChanges {
             upserts: vec![pdfcraft_engine::AnnotUpsert { annot_id: "a".into(), page: 2, subtype: "Text".into(), xfdf: "<x/>".into() }],
             deletes: vec!["d".into()],
         };
-        let (kind, body) = AnnotEvent::Changed(changes).to_json();
-        assert_eq!(kind, "pdfcraft:annots-changed");
-        assert_eq!(body, json!({"upserts": [{"annotId": "a", "page": 2, "type": "Text", "xfdf": "<x/>"}], "deletes": ["d"]}));
+        let messages = AnnotEvent::Changed(changes).to_messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].0, "pdfcraft:annots-changed");
+        // The page counts from 1, the engine from 0.
+        assert_eq!(messages[0].1, json!({"upserts": [{"annotId": "a", "page": 3, "type": "Text", "xfdf": "<x/>"}], "deletes": ["d"]}));
     }
 
     /// One blank page.
@@ -426,5 +523,116 @@ mod tests {
         app.session.set_open_ownership(Default::default());
         app.open_bytes("b.pdf", None, pdf()).unwrap();
         assert!(app.host_allows("file.save") && app.host_allows("file.save_as"), "a document that isn't shared saves as before");
+    }
+
+    /// The page's limits: a big change is split, a delete id it can't take is left out, replies
+    /// stay behind their parent, and a page-0 annotation of the engine goes out as page 1.
+    #[test]
+    fn a_big_change_is_split_for_the_page() {
+        let up = |i: usize| pdfcraft_engine::AnnotUpsert { annot_id: format!("a{i}"), page: 0, subtype: "Text".into(), xfdf: "<x/>".into() };
+        let changes =
+            AnnotChanges { upserts: (0..4500).map(up).collect(), deletes: vec!["ok".into(), String::new(), "x".repeat(201), "é".repeat(200)] };
+        let messages = AnnotEvent::Changed(changes).to_messages();
+        let sizes: Vec<usize> = messages.iter().map(|m| m.1["upserts"].as_array().unwrap().len()).collect();
+        assert_eq!(sizes, [2000, 2000, 500]);
+        assert_eq!(messages[0].1["deletes"].as_array().unwrap().len(), 2, "the empty and the 201-unit ids are left out");
+        assert_eq!(messages[0].1["upserts"][0]["page"], 1);
+        assert_eq!(messages[0].1["upserts"][0]["annotId"], "a0", "order is kept");
+    }
+
+    /// The reply order and the page number hold from the engine to the message.
+    #[test]
+    fn what_the_engine_hands_out_reaches_the_page_one_based_and_replies_last() {
+        let mut app = PdfCraftApp::new();
+        app.session.set_open_ownership(share());
+        app.open_bytes("a.pdf", None, pdf()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        let add = |app: &mut PdfCraftApp, x: f64| {
+            let shape = pdfcraft_engine::Shape::Rectangle { rect: [x, 20.0, x + 40.0, 60.0] };
+            let style = pdfcraft_engine::Style::default_for(&shape);
+            let new = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: "c".into(), author: "alice".into() };
+            app.session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
+        };
+        add(&mut app, 10.0);
+        app.session.apply(id, pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "alice".into() }).unwrap();
+        let changes = app.session.take_annot_changes(id).unwrap();
+        let messages = AnnotEvent::Changed(changes).to_messages();
+        let ups = messages[0].1["upserts"].as_array().unwrap();
+        assert!(ups.iter().all(|u| u["page"] == 1), "{ups:?}");
+        assert!(!ups[0]["xfdf"].as_str().unwrap().contains("inreplyto") && ups[1]["xfdf"].as_str().unwrap().contains("inreplyto"));
+    }
+
+    /// Opening a shared file leaves nothing of the sharing behind: a file opened afterwards is a
+    /// plain one, with its comments panel.
+    #[test]
+    fn the_sharing_does_not_carry_over_to_later_opens() {
+        let app = PdfCraftApp::new();
+        let own = pdfcraft_engine::Ownership { hide_comments_panel: true, ..share() };
+        app.ownership_inbox.lock().unwrap().push(own);
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        let app = h.state_mut();
+        let (_, shared) = app.active_ids().unwrap();
+        assert!(app.session.get(shared).unwrap().annot_sync());
+        app.open_bytes("b.pdf", None, pdf()).unwrap();
+        let (_, plain) = app.active_ids().unwrap();
+        assert_ne!(plain, shared);
+        let d = app.session.get(plain).unwrap();
+        assert!(!d.annot_sync() && !d.ownership().hide_comments_panel);
+    }
+
+    /// Waiting for a shared open that produced no shared document ends: its messages are dropped
+    /// and the document that was open before is not touched.
+    #[test]
+    fn waiting_for_an_open_that_never_comes_ends() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        let target = h.state().annot_target;
+        assert!(target.is_some());
+        h.state_mut().annot_open_waiting = true;
+        // An open that adopts nothing new: the same document is still the newest shared one.
+        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("late")] });
+        h.run_steps(2);
+        assert!(inbox.lock().unwrap().is_empty());
+        assert!(!h.state().annot_open_waiting);
+        let (_, id) = h.state().active_ids().unwrap();
+        assert!(h.state().session.get(id).unwrap().annot_position("late").is_none(), "dropped, not applied");
+    }
+
+    /// A message that changes nothing leaves a drag and an open edit alone; one that moves things
+    /// makes them follow their annotation.
+    #[test]
+    fn a_patch_that_changes_nothing_keeps_the_drag_and_the_composer() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        let (_, id) = h.state().active_ids().unwrap();
+        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("one")] });
+        h.run_steps(2);
+        let gesture = crate::comments::Gesture::Move { page: 0, index: 0, from: egui::Pos2::ZERO };
+        let composer =
+            crate::comments::Composer { page: 0, at: [0.0; 2], kind: crate::comments::ComposerKind::Edit(0), text: "typing".into(), focus: false };
+        let view = h.state_mut().views.iter_mut().find(|v| v.id == id).unwrap();
+        view.comments.gesture = Some(gesture.clone());
+        view.comments.composer = Some(composer.clone());
+        // The same list again: nothing to put in.
+        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("one")] });
+        h.run_steps(2);
+        let view = h.state().views.iter().find(|v| v.id == id).unwrap();
+        assert_eq!(view.comments.gesture, Some(gesture));
+        assert_eq!(view.comments.composer, Some(composer));
+        // The annotation goes away: so do they.
+        inbox.lock().unwrap().push(AnnotCommand::Apply { upserts: vec![], deletes: vec!["one".into()] });
+        h.run_steps(2);
+        let view = h.state().views.iter().find(|v| v.id == id).unwrap();
+        assert!(view.comments.gesture.is_none() && view.comments.composer.is_none());
     }
 }

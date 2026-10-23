@@ -174,7 +174,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   selects it (nothing is selected when the id is unknown).
 /// - `pdfcraft:annots-changed` (to the parent): `{ upserts: [{ annotId, page, type, xfdf }], deletes: [annotId] }`
 ///   after the user applies, undoes or redoes an edit: the difference, by `/NM`, of the annotations
-///   the `actor` owns (`page` counts from 0, `type` is the annotation subtype). Stamps count too.
+///   the `actor` owns (`page` counts from 1 like the server's, `type` is the annotation's subject or XFDF tag, at most 100 characters). Stamps count too.
 ///   `pdfcraft:annots-selected` `{ annotId | null }` when the selection on the canvas changes.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
@@ -397,15 +397,17 @@ mod host {
 
         /// Tell the parent what the user changed or selected (`annotSync`).
         pub fn post_annots(&self, event: &pdfcraft_ui_egui::AnnotEvent) {
-            let (kind, body) = event.to_json();
-            let Ok(json) = serde_json::to_string(&body) else { return };
-            let Ok(value) = js_sys::JSON::parse(&json) else { return };
-            if let Some(m) = message(&[("type", kind.into())]) {
-                // The fields of the body sit beside `type`, like every other message.
-                if let Some(fields) = value.dyn_ref::<js_sys::Object>() {
-                    let _ = js_sys::Object::assign(&m, fields);
+            // A big change goes out in several messages, which the page's size limits ask for.
+            for (kind, body) in event.to_messages() {
+                let Ok(json) = serde_json::to_string(&body) else { continue };
+                let Ok(value) = js_sys::JSON::parse(&json) else { continue };
+                if let Some(m) = message(&[("type", kind.into())]) {
+                    // The fields of the body sit beside `type`, like every other message.
+                    if let Some(fields) = value.dyn_ref::<js_sys::Object>() {
+                        let _ = js_sys::Object::assign(&m, fields);
+                    }
+                    let _ = self.post(&m, None);
                 }
-                let _ = self.post(&m, None);
             }
         }
 
