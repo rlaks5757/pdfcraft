@@ -10,7 +10,11 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use skrifa::{FontRef, MetadataProvider, instance::{LocationRef, Size}, raw::TableProvider};
+use skrifa::{
+    FontRef, MetadataProvider,
+    instance::{LocationRef, Size},
+    raw::TableProvider,
+};
 
 use crate::CraftFont;
 

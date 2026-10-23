@@ -6062,7 +6062,8 @@ fn a_phone_photo_used_as_a_custom_stamp_is_embedded_upright() {
     // A click places the stamp at its natural size: 30 x 20 pt as stored, 20 x 30 pt upright.
     // Named "Signature" so `signature_image` finds its picture.
     let file = MarkFile { name: "photo.jpg".into(), bytes: Arc::new(phone_jpeg()), page: 0 };
-    let stamp = Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), extra: None };
+    let stamp =
+        Edit::AddCustomStamp { page: 0, rect: [100.0, 100.0, 100.0, 100.0], name: "Signature".into(), file, author: "Ada".into(), extra: None };
     session.apply(id, stamp).unwrap();
     let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
     let picture = pdfcraft_annot::signature_image(cos, 0, 0).unwrap().unwrap();
@@ -6381,7 +6382,10 @@ mod ownership {
         refused(
             &mut s,
             id,
-            Edit::Batch { label: "b".into(), edits: vec![Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }, Edit::DeleteAnnotation { page: 0, index: 0 }] },
+            Edit::Batch {
+                label: "b".into(),
+                edits: vec![Edit::MoveAnnotation { page: 0, index: 0, dx: 1.0, dy: 1.0 }, Edit::DeleteAnnotation { page: 0, index: 0 }],
+            },
             REPLIES,
         );
         // Moving it is fine, and u-b withdraws their reply, then it can go.
@@ -6405,7 +6409,11 @@ mod ownership {
     fn a_batch_sees_the_comments_made_earlier_in_it() {
         let (mut s, id) = session_with(1);
         act(&mut s, Some("u-a"), false);
-        let edits = vec![rect_at(0, 10.0), Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }, Edit::SetAnnotationContents { page: 0, index: 0, text: "x".into() }];
+        let edits = vec![
+            rect_at(0, 10.0),
+            Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 },
+            Edit::SetAnnotationContents { page: 0, index: 0, text: "x".into() },
+        ];
         s.apply(id, Edit::Batch { label: "add and edit".into(), edits }).unwrap();
         assert_eq!(owner_text(&page_annots(&s, id, 0)[0]).as_deref(), Some("u-a"));
         // One foreign edit anywhere in a batch refuses the whole batch.
@@ -6432,8 +6440,13 @@ mod ownership {
         s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
         // Redaction marks of others are not applied or cleared by you.
         act(&mut s, Some("u-b"), false);
-        let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
-        s.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "B".into() })).unwrap();
+        let shape =
+            Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([80.0, 140.0, 100.0, 180.0])], overlay: String::new(), look: Default::default() };
+        s.apply(
+            id,
+            Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "B".into() }),
+        )
+        .unwrap();
         act(&mut s, Some("u-a"), false);
         refused(&mut s, id, Edit::ApplyRedactions { pages: None }, PAGE);
         refused(&mut s, id, Edit::ClearRedactions, PAGE);
@@ -6499,7 +6512,16 @@ mod ownership {
     #[test]
     fn a_viewer_cannot_delete_or_change_a_link_annotation() {
         let (mut s, id) = session_with(1);
-        s.apply(id, Edit::AddLink { page: 0, rect: [10.0, 10.0, 80.0, 30.0], action: LinkAction::Uri("https://example.org".into()), style: LinkStyle::default() }).unwrap();
+        s.apply(
+            id,
+            Edit::AddLink {
+                page: 0,
+                rect: [10.0, 10.0, 80.0, 30.0],
+                action: LinkAction::Uri("https://example.org".into()),
+                style: LinkStyle::default(),
+            },
+        )
+        .unwrap();
         viewer(&mut s);
         refused(&mut s, id, Edit::DeleteAnnotation { page: 0, index: 0 }, VIEWER_ONLY);
         refused(&mut s, id, Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 5.0 }, VIEWER_ONLY);
@@ -6544,7 +6566,11 @@ mod ownership {
     fn a_policy_group_opens_a_viewer_to_its_own_kind_of_edit_only() {
         let rotate = || Edit::RotatePages { pages: vec![0], degrees: 90 };
         let (mut s, id) = session_with(2);
-        let on = |c: &[EditClass]| Ownership { scope: EditScope::Viewer, allow: c.iter().fold(EditClasses::default(), |a, c| a.with(*c)), ..Default::default() };
+        let on = |c: &[EditClass]| Ownership {
+            scope: EditScope::Viewer,
+            allow: c.iter().fold(EditClasses::default(), |a, c| a.with(*c)),
+            ..Default::default()
+        };
         s.set_ownership(on(&[EditClass::Page]));
         s.apply(id, rotate()).unwrap();
         refused(&mut s, id, Edit::SetInfo { key: "Title".into(), value: "x".into() }, VIEWER_ONLY);
@@ -6677,7 +6703,9 @@ mod ownership {
     fn any_change_to_a_foreign_comments_object_graph_is_refused() {
         let (mut s, id) = two_owners();
         let snap = |s: &Session| pdfcraft_annot::ownership::foreign_snapshot(&s.get(id).unwrap().editor.as_ref().unwrap().cos, "u-a");
-        let kept = |s: &Session, before: &pdfcraft_annot::ownership::Foreign| pdfcraft_annot::ownership::check_foreign_kept(&s.get(id).unwrap().editor.as_ref().unwrap().cos, before).is_ok();
+        let kept = |s: &Session, before: &pdfcraft_annot::ownership::Foreign| {
+            pdfcraft_annot::ownership::check_foreign_kept(&s.get(id).unwrap().editor.as_ref().unwrap().cos, before).is_ok()
+        };
         let before = snap(&s);
         assert!(kept(&s, &before));
         // Even what the save check's field list doesn't name: flags (what a PDF/A conversion writes), dates, colour.
@@ -6846,9 +6874,11 @@ Must pass for actor u-a (reference: `13_outside_base.pdf`):\n\
         bypass("06_ownerless_comment_moved.pdf", &|s, id| s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 9.0, dy: 9.0 }).unwrap());
         bypass("07_ownerless_without_nm_moved.pdf", &|s, id| s.apply(id, Edit::MoveAnnotation { page: 0, index: 1, dx: 9.0, dy: 9.0 }).unwrap());
         bypass("08_ua_comment_deleted_with_ub_reply.pdf", &|s, id| s.apply(id, Edit::DeleteAnnotation { page: 0, index: 2 }).unwrap());
-        bypass("09_ub_comment_taken_over.pdf", &|s, id| raw(s, id, 0, 3, |d| {
-            d.set(b"PpmOwner".to_vec(), pdfcraft_cos::PdfString::text("u-a"));
-        }));
+        bypass("09_ub_comment_taken_over.pdf", &|s, id| {
+            raw(s, id, 0, 3, |d| {
+                d.set(b"PpmOwner".to_vec(), pdfcraft_cos::PdfString::text("u-a"));
+            })
+        });
         bypass("10_page_inserted_before.pdf", &|s, id| s.apply(id, Edit::InsertBlankPage { at: 0, width: 200.0, height: 300.0 }).unwrap());
         bypass("11_new_comment_in_ub_name.pdf", &|s, id| {
             s.apply(id, rect_at(0, 20.0)).unwrap();

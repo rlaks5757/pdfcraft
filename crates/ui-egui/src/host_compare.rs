@@ -76,7 +76,12 @@ impl PdfCraftApp {
 
     /// Open both files (old in the background, new active) and compare them: the counts of
     /// replaced, inserted, deleted and visual differences.
-    fn start_host_compare(&mut self, old: (String, Vec<u8>), new: (String, Vec<u8>), ownership: pdfcraft_engine::Ownership) -> Result<(usize, usize, usize, usize), String> {
+    fn start_host_compare(
+        &mut self,
+        old: (String, Vec<u8>),
+        new: (String, Vec<u8>),
+        ownership: pdfcraft_engine::Ownership,
+    ) -> Result<(usize, usize, usize, usize), String> {
         // A request supersedes whatever the host armed or queued.
         self.disarm_stamp();
         // The rules come from this request alone, never from an open that came before it.

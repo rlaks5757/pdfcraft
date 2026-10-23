@@ -144,8 +144,8 @@ fn same(a: &Essence, b: &Essence) -> bool {
 }
 
 fn essence(doc: &Document, d: &Dict) -> Essence {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     struct Walk<'a> {
         doc: &'a Document,
@@ -353,7 +353,8 @@ pub fn claim_new(doc: &mut Document, before: &Known, actor: &str, fresh_name: &m
             // Best effort: an old inline entry that an edit turned into a reference, or left in
             // place, is matched by equal dictionary or by position and subtype.
             if is_new && !new_page {
-                let same = |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
+                let same =
+                    |(pg, i, old): &(ObjRef, usize, Dict)| *pg == p && (*old == d || (*i == index && old.name(b"Subtype") == d.name(b"Subtype")));
                 if let Some(at) = old_inline.iter().position(same) {
                     old_inline.swap_remove(at);
                     is_new = false;

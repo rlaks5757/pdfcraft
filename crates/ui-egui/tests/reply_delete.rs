@@ -5,7 +5,13 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 fn note(page: usize) -> Edit {
     let style = Style { color: [1.0, 0.8, 0.0], opacity: 1.0, width: 1.0, fill: None };
-    Edit::AddAnnotation(NewAnnotation { page, shape: Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment }, style, contents: "n".into(), author: "A".into() })
+    Edit::AddAnnotation(NewAnnotation {
+        page,
+        shape: Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment },
+        style,
+        contents: "n".into(),
+        author: "A".into(),
+    })
 }
 
 fn app_with_thread() -> PdfCraftApp {

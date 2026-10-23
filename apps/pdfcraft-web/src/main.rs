@@ -29,10 +29,10 @@ fn main() {
                         // New comment ids (/NM) must differ between sessions: wasm32 has no random source of its own.
                         .with_entropy(|| (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64)
                         .with_wall_clock(
-                        || (js_sys::Date::now() / 1000.0) as i64,
-                        // getTimezoneOffset is minutes *west* of UTC, for today's date (daylight saving).
-                        || -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60,
-                    );
+                            || (js_sys::Date::now() / 1000.0) as i64,
+                            // getTimezoneOffset is minutes *west* of UTC, for today's date (daylight saving).
+                            || -(js_sys::Date::new_0().get_timezone_offset() as i64) * 60,
+                        );
                     // "printcraft": settings saved under the app's former name, PrintCraft.
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
@@ -75,7 +75,13 @@ fn main() {
                         if let Some(author) = query_param("author") {
                             app.set_host_author(&author);
                         }
-                        bridge.listen(app.startup_inbox.clone(), app.stamp_inbox.clone(), app.compare_inbox.clone(), app.ownership_inbox.clone(), cc.egui_ctx.clone());
+                        bridge.listen(
+                            app.startup_inbox.clone(),
+                            app.stamp_inbox.clone(),
+                            app.compare_inbox.clone(),
+                            app.ownership_inbox.clone(),
+                            cc.egui_ctx.clone(),
+                        );
                         app.host_stamp = Some(bridge.stamp_fn());
                         app.host_compare = Some(bridge.compare_fn());
                         app.host_save = Some(bridge.save_fn());

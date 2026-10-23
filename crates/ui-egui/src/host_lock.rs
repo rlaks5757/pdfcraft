@@ -298,54 +298,36 @@ pub(crate) const EXPORT_CMDS: &[&str] = &[
 
 /// The Help menu's commands that open a web page (a document's links are [`DOCUMENT_LINKS`]).
 #[cfg(test)]
-pub(crate) const LINK_CMDS: &[&str] = &[
-    "help.discord",
-    "help.app_page",
-    "help.github",
-    "help.website",
-    "help.check_updates",
-];
+pub(crate) const LINK_CMDS: &[&str] = &["help.discord", "help.app_page", "help.github", "help.website", "help.check_updates"];
 
 /// The viewer-off commands each kind of edit comes from. A viewer's policy turning one of them on
 /// opens its kind in the engine (see [`EditClass`]).
 pub(crate) const EDIT_CMDS: &[(EditClass, &[&str])] = &[
-    (EditClass::Page, &[
-    "page.copy",
-    "page.cut",
-    "page.paste",
-    "page.organize",
-    "page.rotate",
-    "page.rotate_ccw",
-    "page.delete",
-    "page.insert_blank",
-    "page.rotate_dialog",
-    "page.duplicate",
-    "page.reverse",
-    "page.crop",
-    "page.boxes",
-    "page.extract",
-    "page.number",
-    "page.combine",
-    "page.insert",
-    "page.replace",
-]),
-    (EditClass::Content, &[
-    "edit.text",
-    "edit.edit_text",
-    "edit.link",
-    "edit.links_from_urls",
-    "edit.remove_links",
-    "edit.image",
-    "form.add.image",
-]),
-    (EditClass::Measure, &[
-    "measure.distance",
-    "measure.perimeter",
-    "measure.area",
-    "measure.scale",
-    "measure.info",
-    "measure.snap",
-]),
+    (
+        EditClass::Page,
+        &[
+            "page.copy",
+            "page.cut",
+            "page.paste",
+            "page.organize",
+            "page.rotate",
+            "page.rotate_ccw",
+            "page.delete",
+            "page.insert_blank",
+            "page.rotate_dialog",
+            "page.duplicate",
+            "page.reverse",
+            "page.crop",
+            "page.boxes",
+            "page.extract",
+            "page.number",
+            "page.combine",
+            "page.insert",
+            "page.replace",
+        ],
+    ),
+    (EditClass::Content, &["edit.text", "edit.edit_text", "edit.link", "edit.links_from_urls", "edit.remove_links", "edit.image", "form.add.image"]),
+    (EditClass::Measure, &["measure.distance", "measure.perimeter", "measure.area", "measure.scale", "measure.info", "measure.snap"]),
 ];
 
 /// The commands an interface edit comes from. A locked build applies a page or content edit only
@@ -711,8 +693,8 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use crate::{LinkOrigin, pickers::PickFor};
-    use pdfcraft_engine::commands::COMMANDS;
     use pdfcraft_engine::Ownership;
+    use pdfcraft_engine::commands::COMMANDS;
 
     /// One blank page.
     fn pdf() -> Vec<u8> {
@@ -771,7 +753,10 @@ mod tests {
             }
         }
         let missing: Vec<&str> = COMMANDS.iter().map(|c| c.id).filter(|id| !seen.contains_key(id)).collect();
-        assert!(missing.is_empty(), "commands with no host classification (add them to VIEWER, BUILDER, BUILDER_ONLY, OFF or LOCKED in host_lock.rs): {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "commands with no host classification (add them to VIEWER, BUILDER, BUILDER_ONLY, OFF or LOCKED in host_lock.rs): {missing:?}"
+        );
     }
 
     /// What the contract names as shut in every host build is not on, in either mode.
@@ -780,13 +765,18 @@ mod tests {
         for id in ["file.open", "file.open_recent", "create.blank", "create.file", "file.close", "file.revert", "tools.js_console"] {
             assert_eq!(grade(id, EditScope::All), Grade::Locked, "{id}");
         }
-        for id in ["file.save_as", "print.dialog", "export.image", "export.docx", "comment.export", "help.discord", "help.github", "help.check_updates"] {
+        for id in
+            ["file.save_as", "print.dialog", "export.image", "export.docx", "comment.export", "help.discord", "help.github", "help.check_updates"]
+        {
             assert_eq!((grade(id, EditScope::All), grade(id, EditScope::Viewer)), (Grade::Off, Grade::Off), "{id}");
         }
         assert_eq!(grade("help.about", EditScope::Viewer), Grade::On);
         // Saving to the host page and the look of the app are on for both; only saving elsewhere is off.
         for scope in [EditScope::Viewer, EditScope::All] {
-            assert_eq!((grade("file.save", scope), grade("app.preferences", scope), grade("file.save_as", scope)), (Grade::On, Grade::On, Grade::Off));
+            assert_eq!(
+                (grade("file.save", scope), grade("app.preferences", scope), grade("file.save_as", scope)),
+                (Grade::On, Grade::On, Grade::Off)
+            );
         }
         assert_eq!((grade("page.rotate", EditScope::Viewer), grade("page.rotate", EditScope::All)), (Grade::Off, Grade::On));
         assert_eq!(grade("not.a.command", EditScope::All), Grade::Locked, "what is unknown is locked");
@@ -816,24 +806,38 @@ mod tests {
     fn a_viewer_off_edit_command_is_one_the_engine_can_open() {
         // Annotation-based or read-only: runs for a viewer without any edit kind opened.
         const NEEDS_NO_KIND: &[&str] = &[
-            "comment.attach", "comment.stamp", "comment.summarize", "doc.compare", "file.properties", "edit.column_select", "edit.snapshot",
-            "redact.mark", "redact.pages", "redact.search", "redact.properties", "a11y.check", "a11y.find_untagged", "a11y.report",
-            "a11y.reading_options", "a11y.tags",
+            "comment.attach",
+            "comment.stamp",
+            "comment.summarize",
+            "doc.compare",
+            "file.properties",
+            "edit.column_select",
+            "edit.snapshot",
+            "redact.mark",
+            "redact.pages",
+            "redact.search",
+            "redact.properties",
+            "a11y.check",
+            "a11y.find_untagged",
+            "a11y.report",
+            "a11y.reading_options",
+            "a11y.tags",
         ];
         for id in BUILDER {
             let kind = EDIT_CMDS.iter().any(|(_, ids)| ids.contains(id));
             let fill = id.starts_with("sign.fill.");
-            assert!(kind || fill || NEEDS_NO_KIND.contains(id), "{id} is viewer-off but no edit kind of EDIT_CMDS opens it: lock it for a viewer in BUILDER_ONLY, or list it as needing none");
+            assert!(
+                kind || fill || NEEDS_NO_KIND.contains(id),
+                "{id} is viewer-off but no edit kind of EDIT_CMDS opens it: lock it for a viewer in BUILDER_ONLY, or list it as needing none"
+            );
             assert!(!BUILDER_ONLY.contains(id), "{id}");
         }
         for id in ["edit.image", "form.add.image"] {
             assert!(EDIT_CMDS.iter().any(|(c, ids)| *c == EditClass::Content && ids.contains(&id)), "{id}");
         }
         // The locked-for-a-viewer ones stay shut whatever the policy says, and are on for a builder.
-        let own = with_policy(
-            Ownership { scope: EditScope::Viewer, ..Default::default() },
-            BUILDER_ONLY.iter().map(|id| (id.to_string(), true)).collect(),
-        );
+        let own =
+            with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, BUILDER_ONLY.iter().map(|id| (id.to_string(), true)).collect());
         assert!(own.allow.is_empty(), "no edit kind opens for a command the engine refuses");
         for id in BUILDER_ONLY {
             assert!(!enabled(id, EditScope::Viewer, &own.overrides) && grade(id, EditScope::All) == Grade::On, "{id}");
@@ -843,7 +847,9 @@ mod tests {
     /// `policy.overrides`: true turns an off command on, never a locked one; false turns an on one off.
     #[test]
     fn overrides_turn_commands_on_and_off_but_never_a_locked_one() {
-        let viewer = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        let viewer = |o: &[(&str, bool)]| {
+            with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+        };
         let own = viewer(&[("print.dialog", true), ("file.open", true), ("comment.note", false), ("no.such", true), ("page.rotate", true)]);
         let ok = |id: &str| enabled(id, EditScope::Viewer, &own.overrides);
         assert!(ok("print.dialog") && ok("page.rotate") && !ok("comment.note") && ok("comment.ink"));
@@ -869,9 +875,25 @@ mod tests {
             o
         };
         let on = |id: &str, v: bool| (id.to_string(), v);
-        assert_eq!(get(json!({ "overrides": { "print.dialog": true, "page.rotate": false } })), vec![on("page.rotate", false), on("print.dialog", true)]);
-        assert_eq!(get(json!({ "overrides": { "print.dialog": "true", "a": 1, "b": null, "c": [true], "page.rotate": true } })), vec![on("page.rotate", true)]);
-        for bad in [json!(null), json!("x"), json!(3), json!([]), json!({}), json!({ "overrides": null }), json!({ "overrides": [true] }), json!({ "overrides": "print.dialog" }), json!({ "override": { "print.dialog": true } })] {
+        assert_eq!(
+            get(json!({ "overrides": { "print.dialog": true, "page.rotate": false } })),
+            vec![on("page.rotate", false), on("print.dialog", true)]
+        );
+        assert_eq!(
+            get(json!({ "overrides": { "print.dialog": "true", "a": 1, "b": null, "c": [true], "page.rotate": true } })),
+            vec![on("page.rotate", true)]
+        );
+        for bad in [
+            json!(null),
+            json!("x"),
+            json!(3),
+            json!([]),
+            json!({}),
+            json!({ "overrides": null }),
+            json!({ "overrides": [true] }),
+            json!({ "overrides": "print.dialog" }),
+            json!({ "override": { "print.dialog": true } }),
+        ] {
             assert!(get(bad.clone()).is_empty(), "{bad}");
         }
     }
@@ -880,7 +902,9 @@ mod tests {
     #[test]
     fn a_policy_widens_and_narrows_a_document_by_command() {
         let mut app = locked();
-        let viewer = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        let viewer = |o: &[(&str, bool)]| {
+            with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+        };
         app.session.set_open_ownership(viewer(&[("print.dialog", true), ("page.rotate", true), ("sign.fill.text", true), ("comment.ink", false)]));
         app.open_bytes("p.pdf", None, pdf()).unwrap();
         assert!(app.host_allows("print.dialog") && app.host_allows("page.rotate") && app.host_allows("sign.fill.text"));
@@ -951,7 +975,8 @@ mod tests {
                 if !(line.contains("download(&[") || line.contains("write_files(") || line.contains("write_files_then(")) || line.contains("fn ") {
                     continue;
                 }
-                for part in line.split('"').skip(1).step_by(2).filter(|p| p.contains('.') && !p.contains(' ') && !p.contains('/') && !p.contains('{')) {
+                for part in line.split('"').skip(1).step_by(2).filter(|p| p.contains('.') && !p.contains(' ') && !p.contains('/') && !p.contains('{'))
+                {
                     if part.ends_with(".csv") || part.ends_with(".pdf") || part.ends_with(".xfdf") {
                         continue;
                     }
@@ -972,7 +997,9 @@ mod tests {
             assert_eq!(grade(DOCUMENT_LINKS, scope), Grade::Off);
         }
         let mut app = locked();
-        let own = |o: &[(&str, bool)]| with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+        let own = |o: &[(&str, bool)]| {
+            with_policy(Ownership { scope: EditScope::Viewer, ..Default::default() }, o.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+        };
         app.session.set_open_ownership(own(&[("help.github", true), ("help.website", true)]));
         app.open_bytes("a.pdf", None, pdf()).unwrap();
         app.request_document_url("https://example.com", crate::LinkOrigin::Link);
@@ -1038,7 +1065,9 @@ mod tests {
             app
         };
         let app = with("edit.text");
-        assert!(app.host_edit_allowed(&text) && !app.host_edit_allowed(&picture) && !app.host_edit_allowed(&add_link) && !app.host_edit_allowed(&remove));
+        assert!(
+            app.host_edit_allowed(&text) && !app.host_edit_allowed(&picture) && !app.host_edit_allowed(&add_link) && !app.host_edit_allowed(&remove)
+        );
         let app = with("edit.image");
         assert!(app.host_edit_allowed(&picture) && !app.host_edit_allowed(&text) && !app.host_edit_allowed(&add_link));
         let app = with("edit.remove_links");
@@ -1086,7 +1115,8 @@ mod tests {
         let change_text = Edit::UpdateContent { page: 0, index: text_at, content: AddedContent::Text(text.clone()) };
         let delete_text = Edit::DeleteContent { page: 0, index: text_at };
         let delete_picture = Edit::DeleteContent { page: 0, index: image_at };
-        let change_picture = Edit::UpdateContent { page: 0, index: image_at, content: app.session.get(id).unwrap().added()[image_at].content.clone() };
+        let change_picture =
+            Edit::UpdateContent { page: 0, index: image_at, content: app.session.get(id).unwrap().added()[image_at].content.clone() };
         assert!(all(&app, &[&text_move, &added_text_move, &change_text, &delete_text]));
         assert!(none(&app, &[&picture_move, &added_picture_move, &mixed, &missing, &change_picture, &delete_picture]));
 
@@ -1128,7 +1158,7 @@ mod tests {
     /// A refused action says so in Korean in a Korean UI and in English in any other.
     #[test]
     fn the_refusal_text_follows_the_language() {
-        use crate::i18n::{set_current, Lang};
+        use crate::i18n::{Lang, set_current};
         set_current(Lang::from_code("ko").unwrap());
         assert_eq!(host_off_text(), HOST_OFF_KO);
         set_current(Lang::EN);

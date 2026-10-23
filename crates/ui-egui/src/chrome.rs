@@ -161,7 +161,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         action = Some(crate::tab_context::Action::Close(id));
                                         ui.close();
                                     }
-                                    if can_reopen && ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                    if can_reopen
+                                        && ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked()
+                                    {
                                         action = Some(crate::tab_context::Action::Reopen);
                                         ui.close();
                                     }
@@ -515,9 +517,13 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // A viewer has no workspaces to switch between: the tools of Edit, Convert and E-Sign
                 // are not its to use.
                 {
-                    for (mode, label) in
-                        [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
-                    {
+                    for (mode, label) in [
+                        (Mode::AllTools, "All tools"),
+                        (Mode::Read, "Read"),
+                        (Mode::Edit, "Edit"),
+                        (Mode::Convert, "Convert"),
+                        (Mode::Sign, "E-Sign"),
+                    ] {
                         if app.host_mode_shown(mode) && widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
                             app.switch_mode(mode, true);
                         }

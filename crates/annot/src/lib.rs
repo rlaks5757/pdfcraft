@@ -1415,7 +1415,8 @@ impl FontPool {
             .and_then(|r| r.as_dict().and_then(|r| r.get(b"Font").map(|f| doc.resolve(f))))
             .and_then(|f| f.as_dict().and_then(|f| f.get(b"Helv").cloned()));
         if let Some(font @ Object::Ref(_)) = font
-            && let Some(name) = doc.resolve(&font).as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type0")).and_then(|f| f.name(b"BaseFont")).map(<[u8]>::to_vec)
+            && let Some(name) =
+                doc.resolve(&font).as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type0")).and_then(|f| f.name(b"BaseFont")).map(<[u8]>::to_vec)
         {
             self.by_name.insert(name, font);
         }

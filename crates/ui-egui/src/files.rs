@@ -690,7 +690,13 @@ impl PdfCraftApp {
     /// [`Self::write_files`], then `after` once every file is written: now, or on a later frame
     /// when the user chooses the folder. `after` never runs when writing fails or is cancelled.
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written.
-    pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, cmds: &[&str], after: impl FnOnce(&mut Self) + Send + 'static) {
+    pub(crate) fn write_files_then(
+        &mut self,
+        named: Vec<(String, Arc<Vec<u8>>)>,
+        title: &str,
+        cmds: &[&str],
+        after: impl FnOnce(&mut Self) + Send + 'static,
+    ) {
         if !self.host_any(cmds) {
             self.notify_host_off();
             return;
@@ -1098,7 +1104,11 @@ mod stem_tests {
         for bad in ["../x.pdf", "..", ".", "", "sub/x.pdf", "sub\\x.pdf", "C:x.pdf", absolute.as_str()] {
             assert!(!is_plain_file_name(bad), "{bad}");
             // A plain name first: nothing is written when any name in the batch is refused.
-            app.write_files(&[("ok.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec())), (bad.into(), std::sync::Arc::new(b"%PDF".to_vec()))], "t", &[]);
+            app.write_files(
+                &[("ok.pdf".into(), std::sync::Arc::new(b"%PDF".to_vec())), (bad.into(), std::sync::Arc::new(b"%PDF".to_vec()))],
+                "t",
+                &[],
+            );
             assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("not a plain file name")), "{bad}");
         }
         let names: Vec<_> = walk(&dir);

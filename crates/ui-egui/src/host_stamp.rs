@@ -328,7 +328,10 @@ mod flow_tests {
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(3);
         let events = ev.borrow();
-        assert_eq!(events[..3], [StampEvent::Armed { id: "ok".into() }, StampEvent::Placed { id: "ok".into(), page: 0 }, StampEvent::Armed { id: "broken".into() }]);
+        assert_eq!(
+            events[..3],
+            [StampEvent::Armed { id: "ok".into() }, StampEvent::Placed { id: "ok".into(), page: 0 }, StampEvent::Armed { id: "broken".into() }]
+        );
         assert!(matches!(&events[3], StampEvent::Failed { id, .. } if id == "broken"), "{events:?}");
         assert_eq!(events.len(), 4, "no placed after a failure: {events:?}");
     }
@@ -353,11 +356,8 @@ mod flow_tests {
     fn a_document_that_forbids_comments_is_refused() {
         let mut session = pdfcraft_engine::Session::new();
         let id = session.open("p.pdf", None, Arc::new(pdf()), None).unwrap();
-        let protection = pdfcraft_engine::Protection {
-            permissions_password: Some("owner".into()),
-            changes: pdfcraft_engine::Changes::None,
-            ..Default::default()
-        };
+        let protection =
+            pdfcraft_engine::Protection { permissions_password: Some("owner".into()), changes: pdfcraft_engine::Changes::None, ..Default::default() };
         session.apply(id, pdfcraft_engine::Edit::Protect(protection)).unwrap();
         let locked = session.save_bytes(id).unwrap().as_ref().clone();
         let events: Rc<RefCell<Vec<StampEvent>>> = Rc::default();
@@ -371,7 +371,11 @@ mod flow_tests {
         h.run_steps(3);
         send(&mut h, add("z", png()));
         assert!(h.state().armed_stamp.is_none());
-        assert!(matches!(events.borrow().as_slice(), [StampEvent::Failed { id, error }] if id == "z" && error.contains("comments")), "{:?}", events.borrow());
+        assert!(
+            matches!(events.borrow().as_slice(), [StampEvent::Failed { id, error }] if id == "z" && error.contains("comments")),
+            "{:?}",
+            events.borrow()
+        );
     }
 
     #[test]

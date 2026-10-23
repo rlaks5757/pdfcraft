@@ -156,9 +156,7 @@ pub(crate) fn show(
         return edit;
     }
     let query = view.comments.search.clone().filter(|q| !q.trim().is_empty());
-    let replies_of = |a: &Annotation| -> Vec<&Annotation> {
-        info.annotations.iter().filter(|r| r.replies_to(a)).collect()
-    };
+    let replies_of = |a: &Annotation| -> Vec<&Annotation> { info.annotations.iter().filter(|r| r.replies_to(a)).collect() };
     let cv = &view.comments;
     let status_of =
         |a: &Annotation| replies_of(a).iter().rev().filter(|r| !r.is_mark()).find_map(|r| r.state.clone()).unwrap_or_else(|| "None".into());
@@ -294,10 +292,7 @@ fn card(
     let card_id = ui.id().with(("card", key));
     // The selected card takes clicks anywhere on it, below its buttons and editors: laid out before
     // them from last frame's rect, so those keep their own clicks.
-    let under = selected
-        .then(|| ui.data(|d| d.get_temp::<egui::Rect>(card_id)))
-        .flatten()
-        .map(|r| ui.interact(r, card_id, Sense::click()));
+    let under = selected.then(|| ui.data(|d| d.get_temp::<egui::Rect>(card_id))).flatten().map(|r| ui.interact(r, card_id, Sense::click()));
     let frame = egui::Frame::NONE
         .fill(fill)
         .corner_radius(CornerRadius::same(6))
@@ -397,7 +392,8 @@ fn card(
                         if view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == rkey) {
                             edit_box(ui, t, view, rkey, &mut edit);
                         } else {
-                            text_click |= widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false).clicked();
+                            text_click |=
+                                widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false).clicked();
                         }
                     });
                 });
@@ -573,12 +569,10 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
     let mut types: Vec<String> = info.annotations.iter().filter(|a| !a.is_reply()).map(|a| kind_label(a).to_string()).collect();
     types.sort();
     types.dedup();
-    let mut authors: Vec<String> =
-        info.annotations.iter().filter(|a| !a.is_reply()).map(|a| a.author.clone().unwrap_or_default()).collect();
+    let mut authors: Vec<String> = info.annotations.iter().filter(|a| !a.is_reply()).map(|a| a.author.clone().unwrap_or_default()).collect();
     authors.sort();
     authors.dedup();
-    let mut colors: Vec<(String, Option<[f32; 3]>)> =
-        info.annotations.iter().filter(|a| !a.is_reply()).map(|a| (color_key(a), a.color)).collect();
+    let mut colors: Vec<(String, Option<[f32; 3]>)> = info.annotations.iter().filter(|a| !a.is_reply()).map(|a| (color_key(a), a.color)).collect();
     colors.sort_by(|a, b| a.0.cmp(&b.0));
     colors.dedup_by(|a, b| a.0 == b.0);
     let active = !(cv.hidden_types.is_empty()
@@ -725,7 +719,13 @@ mod replies {
         let id = s.open("t.pdf", None, Arc::new(bytes), None).expect("opens");
         act(&mut s, "u-a");
         let style = Style { color: [1.0, 0.8, 0.0], opacity: 1.0, width: 1.0, fill: None };
-        let note = NewAnnotation { page: 0, shape: Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment }, style, contents: "n".into(), author: "A".into() };
+        let note = NewAnnotation {
+            page: 0,
+            shape: Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment },
+            style,
+            contents: "n".into(),
+            author: "A".into(),
+        };
         s.apply(id, Edit::AddAnnotation(note)).expect("note");
         act(&mut s, "u-b");
         s.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "B".into() }).expect("reply");

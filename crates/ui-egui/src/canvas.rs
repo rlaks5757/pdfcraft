@@ -3108,7 +3108,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     // Centred on the click, upright as the page is shown, at the host's size in points.
                     let (vx, vy) = xf.screen_to_view(p);
-                    let corners = [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
+                    let corners =
+                        [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
                     view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
@@ -4749,86 +4750,86 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         }
                     }
                     if app.host_allows("sign.fill.text") {
-                    // Fill & Sign ▸ (text, marks, date, signature).
-                    let current_fill = match app.quick_tool {
-                        QuickTool::Fill(f) => Some(f),
-                        _ => None,
-                    };
-                    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
-                    let resp = icons::button(
-                        ui,
-                        if current_fill.is_some() { shown.icon() } else { "pen-line" },
-                        32.0,
-                        current_fill.is_some(),
-                        tl!("Fill & Sign"),
-                    );
-                    let r = resp.rect;
-                    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        tri.to_vec(),
-                        if current_fill.is_some() { t.accent } else { t.text_faint },
-                        Stroke::NONE,
-                    ));
-                    if resp.clicked() && current_fill.is_none() {
-                        app.execute(shown.command());
-                    }
-                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
-                    egui::Popup::menu(&resp)
-                        .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
-                        .align(egui::RectAlign::RIGHT_START)
-                        .gap(6.0)
-                        .show(|ui| {
-                            for tool in crate::fill_sign::FILL_TOOLS {
-                                if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
-                                    continue;
-                                }
-                                let on = current_fill == Some(tool);
-                                let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
-                                let press = theme::Press::track(ui, &click);
-                                press.wash(ui, row, 4, on);
-                                let body = row.translate(press.offset());
-                                icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
-                                let reserve = if on { 28.0 } else { 8.0 };
-                                crate::widgets::paint_left(
-                                    ui,
-                                    body.left_center() + vec2(34.0, 0.0),
-                                    tl!(tool.label()),
-                                    theme::regular(13.0),
-                                    t.text,
-                                    (row.width() - 34.0 - reserve).max(0.0),
-                                );
-                                if on {
-                                    icons::paint(
+                        // Fill & Sign ▸ (text, marks, date, signature).
+                        let current_fill = match app.quick_tool {
+                            QuickTool::Fill(f) => Some(f),
+                            _ => None,
+                        };
+                        let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
+                        let resp = icons::button(
+                            ui,
+                            if current_fill.is_some() { shown.icon() } else { "pen-line" },
+                            32.0,
+                            current_fill.is_some(),
+                            tl!("Fill & Sign"),
+                        );
+                        let r = resp.rect;
+                        let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+                        ui.painter().add(egui::Shape::convex_polygon(
+                            tri.to_vec(),
+                            if current_fill.is_some() { t.accent } else { t.text_faint },
+                            Stroke::NONE,
+                        ));
+                        if resp.clicked() && current_fill.is_none() {
+                            app.execute(shown.command());
+                        }
+                        let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
+                        egui::Popup::menu(&resp)
+                            .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
+                            .align(egui::RectAlign::RIGHT_START)
+                            .gap(6.0)
+                            .show(|ui| {
+                                for tool in crate::fill_sign::FILL_TOOLS {
+                                    if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
+                                        continue;
+                                    }
+                                    let on = current_fill == Some(tool);
+                                    let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+                                    let press = theme::Press::track(ui, &click);
+                                    press.wash(ui, row, 4, on);
+                                    let body = row.translate(press.offset());
+                                    icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
+                                    let reserve = if on { 28.0 } else { 8.0 };
+                                    crate::widgets::paint_left(
                                         ui,
-                                        Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)),
-                                        "check",
-                                        14.0,
-                                        t.accent,
+                                        body.left_center() + vec2(34.0, 0.0),
+                                        tl!(tool.label()),
+                                        theme::regular(13.0),
+                                        t.text,
+                                        (row.width() - 34.0 - reserve).max(0.0),
                                     );
+                                    if on {
+                                        icons::paint(
+                                            ui,
+                                            Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)),
+                                            "check",
+                                            14.0,
+                                            t.accent,
+                                        );
+                                    }
+                                    let click = theme::hand(click);
+                                    let info = tl!(tool.label()).to_string();
+                                    click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
+                                    if click.clicked() {
+                                        app.execute(tool.command());
+                                        ui.close();
+                                    }
                                 }
-                                let click = theme::hand(click);
-                                let info = tl!(tool.label()).to_string();
-                                click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
-                                if click.clicked() {
-                                    app.execute(tool.command());
+                                ui.separator();
+                                if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
+                                    app.execute(command);
                                     ui.close();
                                 }
-                            }
-                            ui.separator();
-                            if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
-                                app.execute(command);
-                                ui.close();
-                            }
-                        });
-                    if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
-                        ui.label(tl!("Font size:"));
-                        ui.add(
-                            egui::DragValue::new(&mut app.fill_text_size)
-                                .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
-                                .speed(0.25)
-                                .suffix(" pt"),
-                        );
-                    }
+                            });
+                        if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
+                            ui.label(tl!("Font size:"));
+                            ui.add(
+                                egui::DragValue::new(&mut app.fill_text_size)
+                                    .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
+                                    .speed(0.25)
+                                    .suffix(" pt"),
+                            );
+                        }
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());

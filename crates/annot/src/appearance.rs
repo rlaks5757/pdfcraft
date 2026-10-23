@@ -820,10 +820,8 @@ pub fn build_with(d: &Dict, unicode: bool) -> Option<Stream> {
             let mut y = rect[3] - pad - size * 0.9;
             // Text WinAnsi can't encode goes in a subset of the bundled face; Latin-only text
             // keeps Helvetica unchanged.
-            let unicode = unicode
-                .then(|| unicode_face(&text))
-                .flatten()
-                .and_then(|face| pdfcraft_fonts::subset::build(face, &text).map(|f| (face, f)));
+            let unicode =
+                unicode.then(|| unicode_face(&text)).flatten().and_then(|face| pdfcraft_fonts::subset::build(face, &text).map(|f| (face, f)));
             let measure = |s: &str, size: f64| match &unicode {
                 Some((face, _)) => pdfcraft_fonts::subset::width(face, s, size),
                 None => pdfcraft_fonts::helvetica_width(s, size),
@@ -992,9 +990,7 @@ fn stamp(kind: crate::StampKind, rect: [f64; 4], col: Rgb, by: Option<&str>, opa
     out.extend(literal(&win_ansi(label)));
     out.extend_from_slice(b" Tj\n");
     // A "By" line WinAnsi can't encode (a Korean name) is drawn in a subset of the bundled face.
-    let by_font = by
-        .filter(|_| unicode)
-        .and_then(|b| unicode_face(b).and_then(|face| pdfcraft_fonts::subset::build(face, b).map(|f| (face, f))));
+    let by_font = by.filter(|_| unicode).and_then(|b| unicode_face(b).and_then(|face| pdfcraft_fonts::subset::build(face, b).map(|f| (face, f))));
     let by_width = |b: &str, s: f64| match &by_font {
         Some((face, _)) => pdfcraft_fonts::subset::width(face, b, s),
         None => pdfcraft_fonts::helvetica_width(b, s),

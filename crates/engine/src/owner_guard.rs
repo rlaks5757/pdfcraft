@@ -4,7 +4,7 @@
 
 use pdfcraft_annot::ownership as owner;
 
-use crate::{Edit, EditError, EditScope, Ownership, EditClass, EditClasses};
+use crate::{Edit, EditClass, EditClasses, EditError, EditScope, Ownership};
 
 /// Refuse `edit` on `doc` when the session is read-only, or when it would change a comment the
 /// actor doesn't own. What an edit does to comments beyond its named target (page operations,
@@ -156,8 +156,7 @@ fn work(edit: &Edit) -> Work {
         | Edit::DeleteLink { .. }
         | Edit::RemoveLinks { .. }
         | Edit::AddLinks { .. } => Work::Content,
-        Edit::AddMeasurement(..)
-        | Edit::SetMeasurementScale { .. } => Work::Measure,
+        Edit::AddMeasurement(..) | Edit::SetMeasurementScale { .. } => Work::Measure,
         Edit::SetTransition { .. }
         | Edit::SetInfo { .. }
         | Edit::AddBookmark { .. }

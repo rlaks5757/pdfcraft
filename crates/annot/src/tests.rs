@@ -1551,7 +1551,8 @@ fn text_box_ap(contents: &str) -> (String, Dict, Document, usize) {
     let d = list(&doc, 0)[t].clone();
     let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
     let Object::Stream(s) = &*doc.get(n) else { panic!() };
-    let font = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap().as_dict().unwrap().clone();
+    let font =
+        doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap().as_dict().unwrap().clone();
     (ap_content(&doc, &d), font, doc, t)
 }
 
@@ -1596,7 +1597,10 @@ fn korean_text_box_embeds_a_subset_font_and_draws_glyphs() {
     assert!(out.error.is_none(), "{:?}", out.error);
     // The interior of the box, inside its 2 pt border (the text is blue on white).
     let (x0, x1, y0, y1) = (24 * 2, 216 * 2, (792 - 697) * 2, (792 - 678) * 2);
-    let dark = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|(x, y)| out.rgba[((y * out.width as usize + x) * 4)..][..3].iter().any(|c| *c < 200)).count();
+    let dark = (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|(x, y)| out.rgba[((y * out.width as usize + x) * 4)..][..3].iter().any(|c| *c < 200))
+        .count();
     assert!(dark > 100, "glyphs are drawn: {dark} inked pixels");
 }
 
