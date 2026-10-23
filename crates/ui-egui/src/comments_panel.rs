@@ -388,7 +388,8 @@ fn card(
                                     ui.close();
                                 }
                                 if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete"))).clicked() {
-                                    view.comments.selected = None;
+                                    // The parent stays selected; a reply listed before it shifts its index down.
+                                    view.comments.selected = Some((a.page, if r.index < a.index { a.index - 1 } else { a.index }));
                                     edit = Some(Edit::DeleteAnnotation { page: r.page, index: r.index });
                                     ui.close();
                                 }
@@ -442,12 +443,13 @@ fn card(
     if selected {
         ui.data_mut(|d| d.insert_temp(card_id, rect));
     }
-    // Anywhere on the card selects it and shows the comment on the page.
-    let click = under
-        .unwrap_or_else(|| ui.interact(rect, card_id, Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
-    if click.clicked() || text_click {
+    // Anywhere on the card selects it and shows the comment on the page. A selected card has no hit
+    // area until its rect is known (the frame after it was selected), so its buttons never lose a click.
+    let click = under.or_else(|| (!selected).then(|| ui.interact(rect, card_id, Sense::click()))).map(|c| {
+        c.on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]))
+    });
+    if click.as_ref().is_some_and(|c| c.clicked()) || text_click {
         // A draft reply survives another click on the card it is under.
         if !selected {
             view.comments.reply.clear();
@@ -455,7 +457,7 @@ fn card(
         view.comments.selected = Some(key);
         *nav = Some(Nav::Flash(a.page, a.rect));
     }
-    if click.double_clicked() && mine {
+    if click.as_ref().is_some_and(|c| c.double_clicked()) && mine {
         view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
     }
     let menu_id = ui.id().with(("card-menu", key));
