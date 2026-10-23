@@ -1661,10 +1661,22 @@ fn doomed_with(doc: &Document, list: &[Object], target: Option<ObjRef>) -> Vec<O
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    delete_with(doc, page, index, true)
+}
+
+/// [`delete_annotation`] without the Locked check: for a deletion another party already made
+/// (the annotation sync applies a remote delete whatever flags the local copy carries).
+pub fn delete_annotation_unchecked(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    delete_with(doc, page, index, false)
+}
+
+fn delete_with(doc: &mut Document, page: usize, index: usize, respect_lock: bool) -> Result<(), AnnotError> {
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    if let Some(r) = target.as_ref() {
+    if let Some(r) = target.as_ref()
+        && respect_lock
+    {
         unlocked(doc, r)?;
     }
     let doomed = doomed_with(doc, &list, target.as_ref());

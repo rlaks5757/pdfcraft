@@ -4429,11 +4429,15 @@ dependencies = [
 name = "pdfcraft-xfdf"
 version = "0.9.0"
 dependencies = [
+ "base64 0.22.1",
  "pdfcraft-annot",
  "pdfcraft-cos",
+ "pdfcraft-create",
  "pdfcraft-forms",
  "pdfcraft-model",
+ "png 0.18.1",
  "roxmltree",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

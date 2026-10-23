@@ -7,7 +7,7 @@ use pdfcraft_forms::{NewField, add_field, fields, set_value};
 use super::*;
 
 /// Two blank pages with three fields (text, check box, list).
-fn blank() -> Document {
+pub(crate) fn blank() -> Document {
     let mut doc = Document::new_empty();
     let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
     let mut kids = Vec::new();

@@ -11,7 +11,14 @@ workspace = true
 [dependencies]
 pdfcraft-cos = { workspace = true }
 pdfcraft-annot = { workspace = true }
+pdfcraft-create = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-model = { workspace = true }
+# The stamp picture travels as a data URL; custom data is a JSON string map.
+base64 = "0.22"
 roxmltree = "0.20"
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+png = "0.18"
