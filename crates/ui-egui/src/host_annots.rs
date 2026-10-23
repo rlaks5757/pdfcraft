@@ -33,7 +33,8 @@ pub type AnnotInbox = Arc<std::sync::Mutex<Vec<AnnotCommand>>>;
 pub type HostAnnotFn = Box<dyn Fn(&AnnotEvent)>;
 
 /// A message's `xfdf` is one annotation; this bounds what a page can make the app parse.
-const MAX_ITEM_BYTES: usize = 4 << 20;
+// A stamp's picture (at most 4 MB) travels inside it as base64, a third larger.
+const MAX_ITEM_BYTES: usize = 8 << 20;
 
 fn item(v: &serde_json::Value) -> Result<RemoteAnnot, String> {
     let text = |key: &str| v.get(key).and_then(|x| x.as_str()).ok_or_else(|| format!("{key} must be a string"));
@@ -52,18 +53,29 @@ fn items(v: &serde_json::Value, key: &str) -> Result<Vec<serde_json::Value>, Str
     v.get(key).and_then(|x| x.as_array()).cloned().ok_or_else(|| format!("{key} must be an array"))
 }
 
+/// The items that read well; one that doesn't is left out and logged, so a single bad annotation
+/// doesn't keep the rest of the server's list from showing.
+fn good<T>(list: Vec<serde_json::Value>, read: impl Fn(&serde_json::Value) -> Result<T, String>) -> Vec<T> {
+    list.iter()
+        .filter_map(|v| match read(v) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                log::warn!("an annotation from the host was left out: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
 impl AnnotCommand {
-    /// Read a `pdfcraft:annots-*` message (`kind` is the part after `annots-`) from its JSON; the
-    /// error says what was wrong with it.
+    /// Read a `pdfcraft:annots-*` message (`kind` is the part after `annots-`) from its JSON. A
+    /// malformed envelope is an error; a malformed item is skipped.
     pub fn from_json(kind: &str, v: &serde_json::Value) -> Result<Self, String> {
         match kind {
-            "reset" => Ok(Self::Reset { items: items(v, "items")?.iter().map(item).collect::<Result<_, _>>()? }),
+            "reset" => Ok(Self::Reset { items: good(items(v, "items")?, item) }),
             "apply" => {
-                let deletes = items(v, "deletes")?
-                    .iter()
-                    .map(|d| d.as_str().map(str::to_string).ok_or_else(|| "deletes must be strings".to_string()))
-                    .collect::<Result<_, _>>()?;
-                Ok(Self::Apply { upserts: items(v, "upserts")?.iter().map(item).collect::<Result<_, _>>()?, deletes })
+                let deletes = good(items(v, "deletes")?, |d| d.as_str().map(str::to_string).ok_or_else(|| "a delete must be a string".to_string()));
+                Ok(Self::Apply { upserts: good(items(v, "upserts")?, item), deletes })
             }
             "reject" => {
                 let one = |r: &serde_json::Value| {
@@ -74,7 +86,7 @@ impl AnnotCommand {
                     };
                     Ok::<_, String>(RejectedAnnot { annot_id: annot_id.into(), server })
                 };
-                Ok(Self::Reject { items: items(v, "items")?.iter().map(one).collect::<Result<_, _>>()? })
+                Ok(Self::Reject { items: good(items(v, "items")?, one) })
             }
             "select" => match v.get("annotId").and_then(|x| x.as_str()) {
                 Some(annot_id) => Ok(Self::Select { annot_id: annot_id.into() }),
@@ -116,9 +128,16 @@ impl PdfCraftApp {
     /// Once a frame, after the frame's edits: apply the host's annotation messages, then report
     /// what the user changed and which annotation is selected.
     pub(crate) fn host_annots_tick(&mut self) {
-        let Some(doc) = self.session.annot_sync_doc() else {
-            // Nothing shared is open yet: the messages wait for the document (the page sends them
-            // right behind `pdfcraft:open`).
+        // The messages wait for the document they belong to (the page sends them right behind
+        // `pdfcraft:open`): not for an earlier one, nor while a password is still asked for.
+        if self.annot_open_waiting {
+            if self.password_prompt.is_some() {
+                return;
+            }
+            self.adopt_annot_target();
+        }
+        let Some(doc) = self.annot_target.filter(|d| self.session.get(*d).is_some_and(|d| d.annot_sync())) else {
+            self.annot_target = None;
             return;
         };
         if self.host_open_pending() {
@@ -138,6 +157,30 @@ impl PdfCraftApp {
             report(&AnnotEvent::Changed(changes));
         }
         self.report_annot_selection(doc);
+    }
+
+    /// The newest shared document becomes the one the messages go to, if it is a new one.
+    fn adopt_annot_target(&mut self) {
+        let newest = self.session.annot_sync_doc();
+        if newest.is_some() && newest != self.annot_target {
+            self.annot_target = newest;
+            self.annot_open_waiting = false;
+            self.annot_selected_sent = None;
+        }
+    }
+
+    /// A file the host opened with `annotSync` went through the open: its messages follow it, or
+    /// (open failed) are dropped, never applied to the document that was open before.
+    pub(crate) fn annot_open_finished(&mut self, ok: bool) {
+        self.annot_open_waiting = ok;
+        if ok {
+            self.adopt_annot_target();
+        } else {
+            self.annot_target = None;
+            if let Ok(mut q) = self.annot_inbox.lock() {
+                q.clear();
+            }
+        }
     }
 
     fn run_annot_command(&mut self, doc: DocId, command: AnnotCommand) {
@@ -173,6 +216,13 @@ impl PdfCraftApp {
             };
             if selected_at.is_none() {
                 view.comments.reply.clear();
+            }
+            // These hold an index, which the patch may have moved to another annotation.
+            if matches!(view.comments.gesture, Some(crate::comments::Gesture::Move { .. } | crate::comments::Gesture::Resize { .. })) {
+                view.comments.gesture = None;
+            }
+            if matches!(view.comments.composer.as_ref().map(|c| c.kind), Some(crate::comments::ComposerKind::Edit(_))) {
+                view.comments.composer = None;
             }
         }
     }
@@ -235,11 +285,32 @@ mod tests {
     #[test]
     fn refuses_wrong_shapes() {
         assert!(AnnotCommand::from_json("reset", &json!({})).is_err());
-        assert!(AnnotCommand::from_json("reset", &json!({"items": [{"annotId": "a", "xfdf": "<x/>"}]})).is_err());
-        assert!(AnnotCommand::from_json("apply", &json!({"upserts": [], "deletes": [1]})).is_err());
-        assert!(AnnotCommand::from_json("reject", &json!({"items": [{"server": null}]})).is_err());
+        assert!(AnnotCommand::from_json("reset", &json!({"items": "no"})).is_err());
+        assert!(AnnotCommand::from_json("apply", &json!({"upserts": []})).is_err());
         assert!(AnnotCommand::from_json("select", &json!({"annotId": 3})).is_err());
         assert!(AnnotCommand::from_json("nope", &json!({})).is_err());
+    }
+
+    #[test]
+    fn a_bad_item_is_left_out_and_the_rest_stay() {
+        let good = json!({"annotId": "a", "authorId": "u", "xfdf": "<x/>"});
+        let bad = json!({"annotId": "b", "xfdf": "<x/>"});
+        let AnnotCommand::Reset { items } = AnnotCommand::from_json("reset", &json!({"items": [bad, good, 3]})).unwrap() else {
+            panic!("not a reset")
+        };
+        assert_eq!(items.iter().map(|i| i.annot_id.as_str()).collect::<Vec<_>>(), ["a"]);
+        let AnnotCommand::Apply { upserts, deletes } =
+            AnnotCommand::from_json("apply", &json!({"upserts": [bad, good], "deletes": [1, "z"]})).unwrap()
+        else {
+            panic!("not an apply")
+        };
+        assert_eq!((upserts.len(), deletes), (1, vec!["z".to_string()]));
+        let AnnotCommand::Reject { items } =
+            AnnotCommand::from_json("reject", &json!({"items": [{"server": null}, {"annotId": "c", "server": bad}, {"annotId": "d"}]})).unwrap()
+        else {
+            panic!("not a reject")
+        };
+        assert_eq!(items.iter().map(|i| i.annot_id.as_str()).collect::<Vec<_>>(), ["d"]);
     }
 
     #[test]
@@ -253,5 +324,64 @@ mod tests {
         let (kind, body) = AnnotEvent::Changed(changes).to_json();
         assert_eq!(kind, "pdfcraft:annots-changed");
         assert_eq!(body, json!({"upserts": [{"annotId": "a", "page": 2, "type": "Text", "xfdf": "<x/>"}], "deletes": ["d"]}));
+    }
+
+    /// One blank page.
+    fn pdf() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn square(id: &str) -> RemoteAnnot {
+        let xfdf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><annots><square page="0" name="{id}" rect="10,10,60,60" title="Kim" flags="print"/></annots></xfdf>"#
+        );
+        RemoteAnnot { annot_id: id.into(), author_id: "u-kim".into(), xfdf }
+    }
+
+    fn share() -> pdfcraft_engine::Ownership {
+        pdfcraft_engine::Ownership { actor: Some("alice".into()), annot_sync: true, ..Default::default() }
+    }
+
+    /// The page's messages go to the document they were sent for: after a second open fails, the
+    /// first document is not the target of its list.
+    #[test]
+    fn messages_of_a_failed_open_are_not_applied_to_the_document_before() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.run_steps(4);
+        let (_, a) = h.state().active_ids().unwrap();
+        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("first")] });
+        h.run_steps(2);
+        let at = |h: &egui_kittest::Harness<'_, PdfCraftApp>, nm: &str| h.state().session.get(a).unwrap().annot_position(nm);
+        assert!(at(&h, "first").is_some(), "the target receives its list");
+
+        // The second open fails; its list arrives right behind it and must not land on `a`.
+        h.state().ownership_inbox.lock().unwrap().push(share());
+        h.state().startup_inbox.lock().unwrap().push(("b.pdf".into(), b"not a pdf".to_vec()));
+        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("second")] });
+        h.run_steps(4);
+        assert!(at(&h, "second").is_none(), "a failed open's list is dropped");
+        assert!(at(&h, "first").is_some(), "and the document is as it was");
+        assert!(inbox.lock().unwrap().is_empty());
     }
 }

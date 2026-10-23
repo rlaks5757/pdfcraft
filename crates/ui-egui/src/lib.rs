@@ -654,6 +654,10 @@ pub struct PdfCraftApp {
     pub host_annots: Option<HostAnnotFn>,
     /// The selection last reported to the page (`None`: nothing reported yet).
     annot_selected_sent: Option<Option<String>>,
+    /// The document the page's `annots-*` messages belong to: the last one opened with `annotSync`.
+    annot_target: Option<pdfcraft_engine::DocId>,
+    /// An `annotSync` file was taken but its document isn't here yet (a password is asked for).
+    annot_open_waiting: bool,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
     pub compare_inbox: CompareInbox,
     pub host_compare: Option<HostCompareFn>,
@@ -1027,6 +1031,8 @@ impl PdfCraftApp {
             annot_inbox: Default::default(),
             host_annots: None,
             annot_selected_sent: None,
+            annot_target: None,
+            annot_open_waiting: false,
             armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -3172,22 +3178,24 @@ impl eframe::App for PdfCraftApp {
                 })
                 .unwrap_or_default();
             for (name, bytes) in startup {
+                let mut shares = false;
                 if let Some(ownership) = rules.pop_front() {
+                    shares = ownership.annot_sync;
                     self.session.set_open_ownership(ownership);
                 } else if self.host_lock {
                     self.session.set_open_ownership(host_lock::viewer_ownership());
                 }
                 let activate = !self.startup_superseded;
-                if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
+                let opened = self.open_bytes_with_focus(&name, None, bytes, activate);
+                if shares {
+                    self.annot_open_finished(opened.is_ok());
+                }
+                if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
                 }
             }
         }
         let failed: Vec<(String, String)> = self.failed_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
-        // A failed open drops the annotation messages that were waiting for it.
-        if !failed.is_empty() && let Ok(mut q) = self.annot_inbox.lock() {
-            q.clear();
-        }
         for (name, e) in failed {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
         }
