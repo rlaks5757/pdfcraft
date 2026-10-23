@@ -6922,3 +6922,426 @@ Files 04 to 12 are incremental saves of `01_base.pdf` after the edit (`Session::
         put("README.md", readme.as_bytes());
     }
 }
+
+// ---- annotation sharing with the host (`annotSync`) ----
+
+mod annot_sync {
+    use super::*;
+
+    fn sharing(actor: &str) -> (Session, DocId) {
+        let (mut s, id) = session_with(2);
+        s.set_ownership(Ownership { actor: Some(actor.into()), annot_sync: true, ..Default::default() });
+        (s, id)
+    }
+
+    fn rect(page: usize, x: f64) -> Edit {
+        rect_comment(page, [x, 20.0, x + 40.0, 60.0])
+    }
+
+    /// The `/NM`s of the annotations on the page, in `/Annots` order (pop-ups included).
+    fn names(s: &Session, id: DocId, page: usize) -> Vec<String> {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let p = &pdfcraft_model::pages(cos)[page];
+        let list = p.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        list.iter()
+            .filter_map(|e| cos.resolve(e).as_dict().and_then(|d| d.get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text())))
+            .collect()
+    }
+
+    fn owner_of(s: &Session, id: DocId, nm: &str) -> Option<String> {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let mut found = None;
+        for p in pdfcraft_model::pages(cos) {
+            let list = p.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+            for e in list {
+                if let Some(d) = cos.resolve(&e).as_dict()
+                    && d.get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text()).as_deref() == Some(nm)
+                {
+                    found = d.get(b"PpmOwner").and_then(|o| o.as_string()).map(|s| s.to_text());
+                }
+            }
+        }
+        found
+    }
+
+    fn remote(u: &AnnotUpsert, author: &str) -> RemoteAnnot {
+        RemoteAnnot { annot_id: u.annot_id.clone(), author_id: author.into(), xfdf: u.xfdf.clone() }
+    }
+
+    fn only(changes: Option<AnnotChanges>) -> AnnotUpsert {
+        let c = changes.expect("a change");
+        assert!(c.deletes.is_empty(), "{c:?}");
+        assert_eq!(c.upserts.len(), 1, "{c:?}");
+        c.upserts.into_iter().next().unwrap()
+    }
+
+    fn history(s: &Session, id: DocId) -> usize {
+        let e = s.get(id).unwrap().editor.as_ref().unwrap();
+        e.undo.len() + e.redo.len()
+    }
+
+    /// Every state undo and redo hold, then the working one, as the `/NM`s they have on page 0.
+    fn all_states(s: &Session, id: DocId) -> Vec<Vec<String>> {
+        let e = s.get(id).unwrap().editor.as_ref().unwrap();
+        let of = |cos: &pdfcraft_cos::Document| {
+            let p = &pdfcraft_model::pages(cos)[0];
+            let list = p.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+            let mut v: Vec<String> = list
+                .iter()
+                .filter_map(|x| cos.resolve(x).as_dict().and_then(|d| d.get(b"NM").and_then(|o| o.as_string()).map(|s| s.to_text())))
+                .collect();
+            v.sort();
+            v
+        };
+        e.undo.iter().map(|x| of(&x.1)).chain(e.redo.iter().map(|x| of(&x.1))).chain(std::iter::once(of(&e.cos))).collect()
+    }
+
+    #[test]
+    fn edits_undo_and_redo_are_handed_out_once_and_never_dirty() {
+        let (mut s, id) = sharing("u-a");
+        assert_eq!(s.take_annot_changes(id), None, "nothing yet");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let first = only(s.take_annot_changes(id));
+        assert_eq!((first.page, first.annot_id.len()), (0, 36), "a fork-made UUID name");
+        assert!(first.xfdf.contains(&format!("name=\"{}\"", first.annot_id)), "{}", first.xfdf);
+        assert_eq!(s.take_annot_changes(id), None, "taken once");
+        assert!(!s.get(id).unwrap().dirty, "an annotation is the host's to keep, not a file to save");
+
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 30.0, dy: 0.0 }).unwrap();
+        let moved = only(s.take_annot_changes(id));
+        assert_eq!(moved.annot_id, first.annot_id);
+        assert_ne!(moved.xfdf, first.xfdf);
+
+        s.undo(id).unwrap();
+        assert_eq!(only(s.take_annot_changes(id)).xfdf, first.xfdf, "undo hands out the earlier version");
+        s.undo(id).unwrap();
+        let gone = s.take_annot_changes(id).unwrap();
+        assert_eq!((gone.upserts.len(), gone.deletes), (0, vec![first.annot_id.clone()]));
+        s.redo(id).unwrap();
+        assert_eq!(only(s.take_annot_changes(id)).xfdf, first.xfdf);
+        assert!(!s.get(id).unwrap().dirty, "also after undo and redo");
+
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+        assert_eq!(s.take_annot_changes(id).unwrap().deletes, vec![first.annot_id]);
+    }
+
+    #[test]
+    fn a_batch_and_an_xfdf_import_are_handed_out_too() {
+        let (mut s, id) = sharing("u-a");
+        s.apply(id, Edit::Batch { label: "two".into(), edits: vec![rect(0, 10.0), rect(1, 10.0)] }).unwrap();
+        let c = s.take_annot_changes(id).unwrap();
+        assert_eq!(c.upserts.len(), 2);
+        assert!(!s.get(id).unwrap().dirty);
+
+        let (mut other, oid) = session_with(2);
+        other.apply(oid, rect(1, 80.0)).unwrap();
+        let xfdf = other.export_data(oid, DataFormat::Xfdf, true, false).unwrap();
+        s.apply(id, Edit::ImportData { name: "c.xfdf".into(), bytes: Arc::new(xfdf) }).unwrap();
+        let c = s.take_annot_changes(id).unwrap();
+        assert_eq!(c.upserts.len(), 1, "{c:?}");
+        assert_eq!(owner_of(&s, id, &c.upserts[0].annot_id).as_deref(), Some("u-a"));
+        assert!(!s.get(id).unwrap().dirty, "an import of comments is annotation work too");
+    }
+
+    #[test]
+    fn annotations_in_the_file_are_not_news() {
+        let (mut s, id) = sharing("u-a");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let bytes = s.save_bytes(id).unwrap();
+        let mut again = Session::new().with_clock(|| 1_700_000_000);
+        again.set_open_ownership(Ownership { actor: Some("u-a".into()), annot_sync: true, ..Default::default() });
+        let id2 = again.open("again.pdf", None, bytes, None).unwrap();
+        assert_eq!(again.take_annot_changes(id2), None, "what the file had is not handed out");
+        again.apply(id2, Edit::MoveAnnotation { page: 0, index: 0, dx: 5.0, dy: 0.0 }).unwrap();
+        only(again.take_annot_changes(id2));
+    }
+
+    #[test]
+    fn a_document_that_doesnt_share_is_as_before() {
+        let (mut s, id) = session_with(1);
+        s.set_ownership(Ownership { actor: Some("u-a".into()), ..Default::default() });
+        s.apply(id, rect(0, 10.0)).unwrap();
+        assert_eq!(s.take_annot_changes(id), None);
+        assert!(s.get(id).unwrap().dirty);
+        assert!(s.annots_reset(id, vec![]).is_err(), "the page never asked for sharing");
+    }
+
+    #[test]
+    fn a_form_edit_still_makes_the_document_dirty() {
+        let (mut s, id) = sharing("u-a");
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: "x".into() }).unwrap();
+        assert!(s.get(id).unwrap().dirty);
+    }
+
+    /// B makes two annotations and A receives them.
+    fn with_remote() -> (Session, DocId, Vec<AnnotUpsert>) {
+        let (mut b, bid) = sharing("u-b");
+        b.apply(bid, rect(0, 100.0)).unwrap();
+        b.apply(bid, rect(0, 150.0)).unwrap();
+        let ups = b.take_annot_changes(bid).unwrap().upserts;
+        assert_eq!(ups.len(), 2);
+        let (mut a, aid) = sharing("u-a");
+        let items = ups.iter().map(|u| remote(u, "u-b")).collect();
+        let report = a.annots_apply(aid, items, vec![]).unwrap();
+        assert_eq!((report.applied, report.failed.len()), (2, 0), "{report:?}");
+        (a, aid, ups)
+    }
+
+    #[test]
+    fn remote_annotations_take_the_servers_author_and_are_not_handed_back() {
+        let (mut a, id, ups) = with_remote();
+        for u in &ups {
+            assert_eq!(owner_of(&a, id, &u.annot_id).as_deref(), Some("u-b"));
+        }
+        assert_eq!(a.take_annot_changes(id), None, "no echo");
+        let d = a.get(id).unwrap();
+        assert!(!d.dirty);
+        assert_eq!(d.can_undo(), None, "no undo step");
+        assert!(!d.can_edit_comment(0, 0), "someone else's");
+    }
+
+    #[test]
+    fn undo_and_redo_never_remove_or_bring_back_remote_annotations() {
+        let (mut a, id, ups) = with_remote();
+        let (r1, r2) = (ups[0].annot_id.clone(), ups[1].annot_id.clone());
+        a.apply(id, rect(1, 10.0)).unwrap();
+        let m1 = only(a.take_annot_changes(id)).annot_id;
+        // A remote annotation arrives after A's edit: the stored state before it gets it too.
+        let (mut b, bid) = sharing("u-b");
+        b.apply(bid, rect(0, 20.0)).unwrap();
+        let late = b.take_annot_changes(bid).unwrap().upserts.remove(0);
+        a.annots_apply(id, vec![remote(&late, "u-b")], vec![]).unwrap();
+        assert_eq!(a.take_annot_changes(id), None);
+        a.apply(id, rect(1, 80.0)).unwrap();
+        let m2 = only(a.take_annot_changes(id)).annot_id;
+
+        a.undo(id).unwrap();
+        let c = a.take_annot_changes(id).unwrap();
+        assert_eq!((c.upserts.len(), c.deletes), (0, vec![m2.clone()]), "only my annotation goes");
+        a.undo(id).unwrap();
+        assert_eq!(a.take_annot_changes(id).unwrap().deletes, vec![m1.clone()]);
+        let present = names(&a, id, 0);
+        for nm in [&r1, &r2, &late.annot_id] {
+            assert!(present.contains(nm), "{nm} survives undo: {present:?}");
+        }
+        a.redo(id).unwrap();
+        a.redo(id).unwrap();
+        let c = a.take_annot_changes(id).unwrap();
+        assert_eq!(c.upserts.iter().map(|u| u.annot_id.clone()).collect::<Vec<_>>().len(), 2, "{c:?}");
+        for state in all_states(&a, id) {
+            for nm in [&r1, &r2, &late.annot_id] {
+                assert!(state.contains(nm), "every stored state has {nm}: {state:?}");
+            }
+        }
+        assert!(!a.get(id).unwrap().dirty);
+    }
+
+    #[test]
+    fn a_remote_delete_stays_deleted_through_redo_and_undo() {
+        let (mut a, id, ups) = with_remote();
+        let r1 = ups[0].annot_id.clone();
+        a.apply(id, rect(1, 10.0)).unwrap();
+        a.take_annot_changes(id);
+        a.undo(id).unwrap();
+        a.take_annot_changes(id);
+        // The server deletes r1 while a redo is waiting.
+        let done = a.annots_apply(id, vec![], vec![r1.clone()]).unwrap();
+        assert_eq!(done.applied, 1);
+        assert!(!names(&a, id, 0).contains(&r1));
+        a.redo(id).unwrap();
+        assert!(!names(&a, id, 0).contains(&r1), "redo doesn't resurrect it");
+        a.undo(id).unwrap();
+        assert!(!names(&a, id, 0).contains(&r1), "nor does undo");
+        assert!(all_states(&a, id).iter().all(|s| !s.contains(&r1)));
+        // My own annotation went through redo and undo and is back where it was handed out: no news.
+        assert_eq!(a.take_annot_changes(id), None);
+    }
+
+    #[test]
+    fn a_reject_puts_the_servers_state_back() {
+        let (mut a, id) = sharing("u-a");
+        a.apply(id, rect(0, 10.0)).unwrap();
+        let original = only(a.take_annot_changes(id));
+        a.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 40.0, dy: 0.0 }).unwrap();
+        let moved = only(a.take_annot_changes(id));
+        assert_ne!(moved.xfdf, original.xfdf);
+        // The server refused the move: it still has the original.
+        let item = RejectedAnnot { annot_id: original.annot_id.clone(), server: Some(remote(&original, "u-a")) };
+        a.annots_reject(id, vec![item]).unwrap();
+        assert_eq!(a.take_annot_changes(id), None, "the server's state isn't sent back");
+        // Undoing the refused move changes nothing visible any more, and creates no news.
+        a.undo(id).unwrap();
+        let c = a.take_annot_changes(id);
+        assert!(c.is_none() || c.as_ref().is_some_and(|c| c.upserts.iter().all(|u| u.xfdf == original.xfdf)), "{c:?}");
+        // A refused new annotation (the server has none) is gone.
+        a.redo(id).unwrap();
+        a.take_annot_changes(id);
+        a.apply(id, rect(1, 10.0)).unwrap();
+        let fresh = only(a.take_annot_changes(id));
+        a.annots_reject(id, vec![RejectedAnnot { annot_id: fresh.annot_id.clone(), server: None }]).unwrap();
+        assert!(!names(&a, id, 1).contains(&fresh.annot_id));
+        assert_eq!(a.take_annot_changes(id), None);
+    }
+
+    #[test]
+    fn a_reject_brings_back_a_deleted_annotation_for_good() {
+        let (mut a, id) = sharing("u-a");
+        a.apply(id, rect(0, 10.0)).unwrap();
+        let original = only(a.take_annot_changes(id));
+        a.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+        assert_eq!(a.take_annot_changes(id).unwrap().deletes, vec![original.annot_id.clone()]);
+        a.annots_reject(id, vec![RejectedAnnot { annot_id: original.annot_id.clone(), server: Some(remote(&original, "u-a")) }]).unwrap();
+        assert!(names(&a, id, 0).contains(&original.annot_id));
+        assert_eq!(a.take_annot_changes(id), None);
+        assert_eq!(owner_of(&a, id, &original.annot_id).as_deref(), Some("u-a"));
+        // The deletion is still in the history, and undoing it doesn't lose the annotation.
+        a.undo(id).unwrap();
+        assert!(names(&a, id, 0).contains(&original.annot_id));
+    }
+
+    #[test]
+    fn a_reset_with_history_replaces_the_servers_annotations_in_every_state() {
+        let (mut a, id, ups) = with_remote();
+        let (r1, r2) = (ups[0].annot_id.clone(), ups[1].annot_id.clone());
+        a.apply(id, rect(1, 10.0)).unwrap();
+        a.apply(id, rect(1, 60.0)).unwrap();
+        let mine = a.take_annot_changes(id).unwrap().upserts;
+        assert_eq!(mine.len(), 2);
+        // The server's list now: r1 changed (moved), r2 gone, a new r3.
+        let (mut b, bid) = sharing("u-b");
+        b.apply(bid, rect(0, 120.0)).unwrap();
+        let r3 = b.take_annot_changes(bid).unwrap().upserts.remove(0);
+        let r1_new = AnnotUpsert { xfdf: ups[0].xfdf.replacen("rect=\"", "rect=\"1", 1), ..ups[0].clone() };
+        let report = a.annots_reset(id, vec![remote(&r1_new, "u-b"), remote(&r3, "u-b"), remote(&mine[0], "u-a"), remote(&mine[1], "u-a")]).unwrap();
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(a.take_annot_changes(id), None, "a reset isn't the user's change");
+        for state in all_states(&a, id) {
+            assert!(state.contains(&r1) && state.contains(&r3.annot_id), "{state:?}");
+            assert!(!state.contains(&r2), "{state:?}");
+        }
+        assert!(!a.get(id).unwrap().dirty);
+        // Undo twice and redo twice: the servers annotations are steady.
+        a.undo(id).unwrap();
+        a.undo(id).unwrap();
+        a.redo(id).unwrap();
+        a.redo(id).unwrap();
+        let present = names(&a, id, 0);
+        assert!(present.contains(&r1) && present.contains(&r3.annot_id) && !present.contains(&r2), "{present:?}");
+    }
+
+    #[test]
+    fn a_reset_leaves_what_came_with_the_file_and_what_is_not_sent_yet() {
+        let (mut a, id) = sharing("u-a");
+        a.apply(id, rect(0, 10.0)).unwrap();
+        // Not handed out yet: the reset must not take it away.
+        let report = a.annots_reset(id, vec![]).unwrap();
+        assert_eq!(report.failed.len(), 0);
+        assert_eq!(names(&a, id, 0).len(), 1);
+        assert_eq!(a.take_annot_changes(id).map(|c| c.upserts.len()), Some(1));
+    }
+
+    #[test]
+    fn a_reset_keeps_my_reply_linked_to_the_remote_annotation() {
+        let (mut a, id, ups) = with_remote();
+        let parent = ups[0].annot_id.clone();
+        let index = {
+            let d = a.get(id).unwrap();
+            (0..2).find(|i| d.annot_name_at(0, *i).as_deref() == Some(parent.as_str())).unwrap()
+        };
+        a.apply(id, Edit::ReplyToAnnotation { page: 0, index, text: "me too".into(), author: "A".into() }).unwrap();
+        let reply = only(a.take_annot_changes(id));
+        assert!(reply.xfdf.contains(&parent), "{}", reply.xfdf);
+        // A reset with the same parent (and my reply, as the server has it) arrives.
+        let items = vec![remote(&ups[0], "u-b"), remote(&ups[1], "u-b"), remote(&reply, "u-a")];
+        let report = a.annots_reset(id, items).unwrap();
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(a.take_annot_changes(id), None);
+        let d = a.get(id).unwrap();
+        let cos = &d.editor.as_ref().unwrap().cos;
+        let linked = pdfcraft_annot::summaries(cos).into_iter().find(|s| s.name.as_deref() == Some(reply.annot_id.as_str())).expect("the reply is still there");
+        assert_eq!(linked.in_reply_to.is_some() || linked.parent.is_some(), true, "{linked:?}");
+        // And the reply goes with a deleted parent only when the server says so.
+        assert!(names(&a, id, 0).contains(&parent));
+    }
+
+    #[test]
+    fn a_read_only_session_still_shows_what_the_server_sends() {
+        let (mut b, bid) = sharing("u-b");
+        b.apply(bid, rect(0, 100.0)).unwrap();
+        let u = b.take_annot_changes(bid).unwrap().upserts.remove(0);
+        let (mut a, id) = session_with(1);
+        a.set_ownership(Ownership { actor: Some("u-a".into()), read_only: true, annot_sync: true, ..Default::default() });
+        assert!(a.apply(id, rect(0, 10.0)).is_err());
+        let report = a.annots_apply(id, vec![remote(&u, "u-b")], vec![]).unwrap();
+        assert_eq!(report.applied, 1);
+        assert!(names(&a, id, 0).contains(&u.annot_id));
+        a.annots_apply(id, vec![], vec![u.annot_id.clone()]).unwrap();
+        assert!(names(&a, id, 0).is_empty());
+    }
+
+    #[test]
+    fn an_applied_item_that_is_already_here_is_skipped_and_a_bad_one_is_reported() {
+        let (mut a, id, ups) = with_remote();
+        let again = a.annots_apply(id, vec![remote(&ups[0], "u-b")], vec![]).unwrap();
+        assert_eq!((again.applied, again.skipped), (0, 1));
+        let mut bad = remote(&ups[0], "u-b");
+        bad.annot_id = "other-name".into();
+        let report = a.annots_apply(id, vec![bad, remote(&ups[1], "u-c")], vec![]).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.applied, 1, "the good one still went in");
+        assert_eq!(owner_of(&a, id, &ups[1].annot_id).as_deref(), Some("u-c"), "the server's author wins");
+    }
+
+    #[test]
+    fn undo_that_would_take_away_a_comment_someone_replied_to_is_refused() {
+        let (mut a, id) = sharing("u-a");
+        a.apply(id, rect(0, 10.0)).unwrap();
+        let parent = only(a.take_annot_changes(id));
+        // B gets it and replies.
+        let (mut b, bid) = sharing("u-b");
+        b.annots_apply(bid, vec![remote(&parent, "u-a")], vec![]).unwrap();
+        b.apply(bid, Edit::ReplyToAnnotation { page: 0, index: 0, text: "hi".into(), author: "B".into() }).unwrap();
+        let reply = only(b.take_annot_changes(bid));
+        a.annots_apply(id, vec![remote(&reply, "u-b")], vec![]).unwrap();
+        let err = a.undo(id).expect_err("refused");
+        assert_eq!(err.to_string(), "the comment has replies from someone else");
+        assert!(names(&a, id, 0).contains(&parent.annot_id));
+        assert_eq!(a.take_annot_changes(id), None);
+        // Once the reply is gone the undo goes through.
+        a.annots_apply(id, vec![], vec![reply.annot_id]).unwrap();
+        a.undo(id).unwrap();
+        assert_eq!(a.take_annot_changes(id).unwrap().deletes, vec![parent.annot_id]);
+    }
+
+    #[test]
+    fn a_reply_to_a_reply_is_refused() {
+        let (mut a, id) = sharing("u-a");
+        a.apply(id, rect(0, 10.0)).unwrap();
+        a.apply(id, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }).unwrap();
+        let reply_index = (0..3).find(|i| a.get(id).unwrap().annot_is_reply(0, *i)).expect("the reply");
+        let before = history(&a, id);
+        for edit in [
+            Edit::ReplyToAnnotation { page: 0, index: reply_index, text: "rr".into(), author: "A".into() },
+            Edit::SetAnnotationStatus { page: 0, index: reply_index, state: ReviewState::Accepted, author: "A".into() },
+        ] {
+            assert!(a.apply(id, edit).is_err());
+        }
+        assert_eq!(history(&a, id), before);
+        // Without the sharing the old behaviour stays.
+        let (mut plain, pid) = session_with(1);
+        plain.apply(pid, rect(0, 10.0)).unwrap();
+        plain.apply(pid, Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "A".into() }).unwrap();
+        assert!(plain.apply(pid, Edit::ReplyToAnnotation { page: 0, index: 1, text: "rr".into(), author: "A".into() }).is_ok());
+    }
+
+    #[test]
+    fn positions_and_names_go_both_ways() {
+        let (a, id, ups) = with_remote();
+        let d = a.get(id).unwrap();
+        let nm = &ups[1].annot_id;
+        let (page, index) = d.annot_position(nm).unwrap();
+        assert_eq!(d.annot_name_at(page, index).as_deref(), Some(nm.as_str()));
+        assert_eq!(d.annot_position("nobody"), None);
+        assert_eq!(a.annot_sync_doc(), Some(id));
+    }
+}

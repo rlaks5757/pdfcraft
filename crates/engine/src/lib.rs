@@ -13,6 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod actions;
+mod annot_sync;
 pub mod autotag;
 pub mod build_info;
 pub mod camera;
@@ -40,6 +41,7 @@ mod text_preview;
 pub mod word_count;
 pub mod xfa;
 
+pub use annot_sync::{AnnotChanges, AnnotUpsert, RejectedAnnot, RemoteAnnot, RemoteReport};
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use text_preview::TextEditPreview;
@@ -217,6 +219,9 @@ pub struct Ownership {
     /// The host's per-command policy (`policy.overrides`), sorted by command id. The engine only
     /// carries it; the interface decides what a command's setting means.
     pub overrides: Vec<(String, bool)>,
+    /// The page keeps the document's annotations in its own database (`annotSync`): see
+    /// [`Session::take_annot_changes`]. Needs an `actor`.
+    pub annot_sync: bool,
 }
 
 /// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
@@ -468,6 +473,8 @@ pub struct Document {
     pub edit_notices: Vec<TextNotice>,
     /// The host's `actor` and `readOnly` (see [`Session::set_ownership`]).
     ownership: Ownership,
+    /// Annotation sharing with the host, when it asked for it (see the `annot_sync` module).
+    sync: Option<annot_sync::SyncState>,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -3405,6 +3412,8 @@ impl Session {
                 editor.redo.clear();
             }
             doc.ownership = ownership.clone();
+            doc.sync = None;
+            doc.init_annot_sync();
         }
         self.ownership = ownership;
     }
@@ -3521,6 +3530,7 @@ impl Session {
         let mut document = prepared.document;
         document.id = id;
         document.ownership = self.ownership.clone();
+        document.init_annot_sync();
         self.docs.push(document);
         id
     }
@@ -3793,6 +3803,7 @@ impl Session {
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
             ownership: Ownership::default(),
+            sync: None,
         }
     }
 
@@ -3977,7 +3988,10 @@ impl Session {
             }
             return Err(e);
         }
-        doc.dirty = true;
+        // Annotations of a document that shares them go to the host's database: nothing to save.
+        if doc.sync.is_none() || !annot_sync::is_annotation_work(&edit) {
+            doc.dirty = true;
+        }
         doc.generation += 1;
         doc.edit_notices = notices;
         if !cx.xfa_removed.is_empty() {
@@ -4007,6 +4021,7 @@ impl Session {
             return Err(EditError::HostReadOnly);
         }
         doc.edit_notices.clear();
+        Self::check_history_step(doc, true)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
@@ -4014,7 +4029,10 @@ impl Session {
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        Self::sync_dirty(doc);
+        // A document that shares its annotations has no unsaved annotation work to come back to.
+        if doc.sync.is_none() {
+            Self::sync_dirty(doc);
+        }
         doc.generation += 1;
         Ok(label)
     }
@@ -4025,6 +4043,7 @@ impl Session {
             return Err(EditError::HostReadOnly);
         }
         doc.edit_notices.clear();
+        Self::check_history_step(doc, false)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
@@ -4032,7 +4051,10 @@ impl Session {
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        Self::sync_dirty(doc);
+        // A document that shares its annotations has no unsaved annotation work to come back to.
+        if doc.sync.is_none() {
+            Self::sync_dirty(doc);
+        }
         doc.generation += 1;
         Ok(label)
     }
