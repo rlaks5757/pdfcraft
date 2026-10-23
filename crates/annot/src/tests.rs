@@ -1335,3 +1335,209 @@ fn text_box_font_size_changes_the_da_and_grows_the_box() {
         assert_eq!(props(&doc, 0, i).unwrap().font_size, None);
     }
 }
+
+mod ownership_rules {
+    use super::*;
+    use crate::ownership::*;
+
+    /// A note on page 0 owned by `owner` (none: ownerless); returns its index.
+    fn note(doc: &mut Document, owner: Option<&str>, id: &str) -> usize {
+        let i = add_annotation(doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta(id)).unwrap();
+        if let Some(o) = owner {
+            set_extra(doc, 0, i, OWNER_KEY, o).unwrap();
+        }
+        i
+    }
+
+    fn reply_by(doc: &mut Document, owner: &str, to: usize, id: &str) -> usize {
+        let i = add_reply(doc, 0, to, "re", "R", &meta(id)).unwrap();
+        set_extra(doc, 0, i, OWNER_KEY, owner).unwrap();
+        i
+    }
+
+    #[test]
+    fn only_the_owner_may_change_a_comment() {
+        let mut doc = fixture();
+        let (a, none) = (note(&mut doc, Some("u-a"), "a"), note(&mut doc, None, "n"));
+        assert_eq!(check_target(&doc, 0, a, "u-a"), Ok(()));
+        assert_eq!(check_target(&doc, 0, a, "u-b"), Err(AnnotError::NotOwner));
+        assert_eq!(check_target(&doc, 0, none, "u-a"), Err(AnnotError::NotOwner), "ownerless is locked for everyone");
+        // The fixture's own inline square (index 0) has no owner either.
+        assert_eq!(check_target(&doc, 0, 0, "u-a"), Err(AnnotError::NotOwner));
+        // A position that doesn't exist is the edit's own error to report.
+        assert_eq!(check_target(&doc, 0, 99, "u-a"), Ok(()));
+        assert!(matches!(check_target(&doc, 9, 0, "u-a"), Err(AnnotError::NoSuchPage(9))));
+    }
+
+    #[test]
+    fn owners_in_non_ascii_survive_a_save() {
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("사용자-가"), "a");
+        let doc = reopen(&doc);
+        assert_eq!(check_target(&doc, 0, a, "사용자-가"), Ok(()));
+        assert_eq!(check_target(&doc, 0, a, "사용자-나"), Err(AnnotError::NotOwner));
+        let d = &list(&doc, 0)[a];
+        assert!(d.get(OWNER_KEY.as_bytes()).and_then(|o| o.as_string()).unwrap().bytes.starts_with(&[0xFE, 0xFF]), "UTF-16BE with a BOM");
+    }
+
+    #[test]
+    fn links_and_widgets_belong_to_nobody_and_popups_follow_their_parent() {
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("u-a"), "a");
+        let p = page_refs(&doc).unwrap()[0];
+        let parent = annots(&doc, p)[a].as_ref().unwrap();
+        let popup = doc.add(Object::Dict({
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Popup"));
+            d.set(b"Parent".to_vec(), Object::Ref(parent));
+            d
+        }));
+        let link = doc.add(Object::Dict({
+            let mut d = Dict::new();
+            d.set(b"Subtype".to_vec(), Object::name("Link"));
+            d
+        }));
+        let mut list = annots(&doc, p);
+        list.extend([Object::Ref(popup), Object::Ref(link)]);
+        set_annots(&mut doc, p, list).unwrap();
+        let (pi, li) = (annots(&doc, p).len() - 2, annots(&doc, p).len() - 1);
+        assert_eq!(check_target(&doc, 0, pi, "u-a"), Ok(()));
+        assert_eq!(check_target(&doc, 0, pi, "u-b"), Err(AnnotError::NotOwner));
+        assert_eq!(check_target(&doc, 0, li, "u-b"), Ok(()));
+        assert!(!is_protected(&annot_dict(&doc, popup)) && !is_protected(&annot_dict(&doc, link)));
+        // A pop-up doesn't stop its parent from being deleted.
+        assert_eq!(check_delete(&doc, 0, a, "u-a"), Ok(()));
+    }
+
+    #[test]
+    fn deleting_needs_every_reply_to_be_the_owners() {
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("u-a"), "a");
+        let mine = reply_by(&mut doc, "u-a", a, "r1");
+        assert_eq!(check_delete(&doc, 0, a, "u-a"), Ok(()), "own replies go with it");
+        let theirs = reply_by(&mut doc, "u-b", mine, "r2");
+        assert_eq!(check_delete(&doc, 0, a, "u-a"), Err(AnnotError::ForeignReplies), "a reply to a reply counts");
+        assert_eq!(check_delete(&doc, 0, mine, "u-a"), Err(AnnotError::ForeignReplies));
+        assert_eq!(check_delete(&doc, 0, theirs, "u-b"), Ok(()));
+        assert_eq!(check_delete(&doc, 0, a, "u-b"), Err(AnnotError::NotOwner));
+        // A state reply or a checkmark by someone else counts too.
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("u-a"), "a");
+        let s = set_review_state(&mut doc, 0, a, ReviewState::Accepted, "B", &meta("s")).unwrap();
+        set_extra(&mut doc, 0, s, OWNER_KEY, "u-b").unwrap();
+        assert_eq!(check_delete(&doc, 0, a, "u-a"), Err(AnnotError::ForeignReplies));
+    }
+
+    #[test]
+    fn pages_with_comments_of_others_are_refused() {
+        let mut doc = fixture();
+        note(&mut doc, Some("u-a"), "a");
+        // Page 0 also has the fixture's ownerless square; page 1 its ownerless stamp.
+        assert_eq!(check_pages(&doc, &[0], "u-a"), Err(AnnotError::ForeignPage));
+        assert_eq!(check_pages(&doc, &[1], "u-a"), Err(AnnotError::ForeignPage));
+        assert_eq!(check_pages(&doc, &[7], "u-a"), Ok(()), "unknown pages are the edit's to report");
+        assert_eq!(check_all_pages(&doc, "u-a"), Err(AnnotError::ForeignPage));
+        let mut clean = fixture();
+        let p = page_refs(&clean).unwrap();
+        set_annots(&mut clean, p[0], vec![]).unwrap();
+        set_annots(&mut clean, p[1], vec![]).unwrap();
+        let i = note(&mut clean, Some("u-a"), "a");
+        assert_eq!(check_all_pages(&clean, "u-a"), Ok(()));
+        assert_eq!(check_all_pages(&clean, "u-b"), Err(AnnotError::ForeignPage));
+        let _ = i;
+    }
+
+    #[test]
+    fn the_snapshot_notices_what_happened_to_others_comments() {
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("u-a"), "a");
+        let b = note(&mut doc, Some("u-b"), "b");
+        let before = foreign_snapshot(&doc, "u-a");
+        // Untouched, and the actor's own comment changed freely.
+        move_annotation(&mut doc, 0, a, 5.0, 5.0, &meta("")).unwrap();
+        assert_eq!(check_foreign_kept(&doc, &before), Ok(()));
+        // Others' comment moved, deleted, or its owner rewritten.
+        let mut moved = doc.clone();
+        move_annotation(&mut moved, 0, b, 5.0, 5.0, &meta("")).unwrap();
+        assert_eq!(check_foreign_kept(&moved, &before), Err(AnnotError::ForeignPage));
+        let mut gone = doc.clone();
+        delete_annotation(&mut gone, 0, b).unwrap();
+        assert_eq!(check_foreign_kept(&gone, &before), Err(AnnotError::ForeignPage));
+        let mut taken = doc.clone();
+        set_extra(&mut taken, 0, b, OWNER_KEY, "u-a").unwrap();
+        assert_eq!(check_foreign_kept(&taken, &before), Err(AnnotError::ForeignPage));
+        // The fixture's inline, ownerless square is held too (it has no reference to follow).
+        let mut inline = doc.clone();
+        let p = page_refs(&inline).unwrap()[0];
+        set_annots(&mut inline, p, annots(&doc, p).into_iter().skip(1).collect()).unwrap();
+        assert_eq!(check_foreign_kept(&inline, &before), Err(AnnotError::ForeignPage));
+        // On another page counts as gone.
+        let mut elsewhere = doc.clone();
+        let pages = page_refs(&elsewhere).unwrap();
+        let mut from = annots(&elsewhere, pages[0]);
+        let entry = from.remove(b);
+        set_annots(&mut elsewhere, pages[0], from).unwrap();
+        let mut to = annots(&elsewhere, pages[1]);
+        to.push(entry);
+        set_annots(&mut elsewhere, pages[1], to).unwrap();
+        assert_eq!(check_foreign_kept(&elsewhere, &before), Err(AnnotError::ForeignPage));
+    }
+
+    #[test]
+    fn new_comments_are_claimed_and_given_their_own_names() {
+        let mut doc = fixture();
+        let a = note(&mut doc, Some("u-b"), "dup");
+        let known_before = known(&doc, "u-a");
+        // Two new ones: one with a taken /NM, one without any.
+        let c = note(&mut doc, None, "dup");
+        let d = add_annotation(&mut doc, &new(0, Shape::Note { at: [200.0, 700.0], icon: NoteIcon::Comment }), &meta("")).unwrap();
+        let mut n = 0;
+        let claimed = claim_new(&mut doc, &known_before, "u-a", &mut || {
+            n += 1;
+            format!("fresh-{n}")
+        })
+        .unwrap();
+        assert_eq!(claimed, 2);
+        let l = list(&doc, 0);
+        assert_eq!(text(&l[c], b"PpmOwner"), "u-a");
+        assert_eq!(text(&l[d], b"PpmOwner"), "u-a");
+        assert_eq!(text(&l[c], b"NM"), "fresh-1");
+        assert_eq!(text(&l[d], b"NM"), "fresh-2");
+        // The older ones are left alone, including the inline square of the fixture.
+        assert_eq!(text(&l[a], b"PpmOwner"), "u-b");
+        assert_eq!(text(&l[a], b"NM"), "dup");
+        assert_eq!(text(&l[0], b"PpmOwner"), "");
+        // Nothing new, nothing claimed.
+        let known_now = known(&doc, "u-a");
+        assert_eq!(claim_new(&mut doc, &known_now, "u-a", &mut || "x".into()).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_whole_new_page_is_claimed_even_for_inline_comments() {
+        let mut doc = fixture();
+        let before = known(&doc, "u-a");
+        // A page that was not there, its comment inline.
+        let pages = page_refs(&doc).unwrap();
+        let page = doc.add(Object::Dict({
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Page"));
+            d.set(b"Parent".to_vec(), Object::Ref(ObjRef { num: 2, generation: 0 }));
+            let mut sq = Dict::new();
+            sq.set(b"Subtype".to_vec(), Object::name("Square"));
+            sq.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(1), Object::Int(9), Object::Int(9)]));
+            d.set(b"Annots".to_vec(), Object::Array(vec![Object::Dict(sq)]));
+            d
+        }));
+        doc.update_dict(ObjRef { num: 2, generation: 0 }, |d| {
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(pages[0]), Object::Ref(pages[1]), Object::Ref(page)]));
+            d.set(b"Count".to_vec(), Object::Int(3));
+        })
+        .unwrap();
+        assert_eq!(claim_new(&mut doc, &before, "u-a", &mut || "fresh".into()).unwrap(), 1);
+        let l = list(&doc, 2);
+        assert_eq!(text(&l[0], b"PpmOwner"), "u-a");
+        assert_eq!(text(&l[0], b"NM"), "fresh");
+        // The old pages' comments were not touched.
+        assert_eq!(text(&list(&doc, 0)[0], b"PpmOwner"), "");
+    }
+}

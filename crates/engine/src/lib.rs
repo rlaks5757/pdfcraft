@@ -27,6 +27,7 @@ pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
+mod owner_guard;
 pub mod optimizer;
 pub mod print_raster;
 pub mod printcheck;
@@ -200,6 +201,16 @@ fn record_link_scan() {
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
+
+/// Who is editing, as the embedding page says (`pdfcraft:open` `actor` and `readOnly`).
+/// The default is no checking: anyone edits anything, as in a stand-alone PdfCraft.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ownership {
+    /// The user's id. When set, new comments are marked as theirs and only they change them.
+    pub actor: Option<String>,
+    /// Every edit that changes the document is refused.
+    pub read_only: bool,
+}
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -404,6 +415,8 @@ pub struct Document {
     /// What the last successful [`Session::apply`] wrote that its fonts can't draw: kept as typed,
     /// drawn with `?` in its place (see [`TextNotice`]). The interface shows it; tools return it.
     pub edit_notices: Vec<TextNotice>,
+    /// The host's `actor` and `readOnly` (see [`Session::set_ownership`]).
+    ownership: Ownership,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -660,7 +673,27 @@ impl Document {
     }
 
     pub fn editable(&self) -> bool {
-        self.editor.is_some()
+        self.editor.is_some() && !self.ownership.read_only
+    }
+
+    /// The host's actor and read-only setting this document is edited under.
+    pub fn ownership(&self) -> &Ownership {
+        &self.ownership
+    }
+
+    /// May the host's user change the comment at `(page, index)`? The engine refuses the edit
+    /// either way ([`Session::apply`]); this lets the interface say so first.
+    pub fn can_edit_comment(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = &self.editor else { return false };
+        !self.ownership.read_only
+            && self.ownership.actor.as_deref().is_none_or(|a| pdfcraft_annot::ownership::check_target(&editor.cos, page, index, a).is_ok())
+    }
+
+    /// May the host's user delete the comment at `(page, index)` (also: no replies from others)?
+    pub fn can_delete_comment(&self, page: usize, index: usize) -> bool {
+        let Some(editor) = &self.editor else { return false };
+        !self.ownership.read_only
+            && self.ownership.actor.as_deref().is_none_or(|a| pdfcraft_annot::ownership::check_delete(&editor.cos, page, index, a).is_ok())
     }
 
     /// What the opening password allows; `None` when the document is not encrypted.
@@ -2263,6 +2296,7 @@ struct EditCtx {
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
     renamed_fields: Vec<(String, String)>,
+    ownership: Ownership,
 }
 
 impl EditCtx {
@@ -2289,6 +2323,7 @@ impl EditCtx {
             seed,
             count: 0,
             renamed_fields: Vec::new(),
+            ownership: Ownership::default(),
         }
     }
 
@@ -2329,8 +2364,34 @@ impl EditCtx {
     }
 }
 
-/// Perform an edit on a working copy (the caller discards it on error).
+/// Perform an edit on a working copy (the caller discards it on error), after the owner guard
+/// and with the comments it creates marked as the actor's. A `Batch` comes back here for each
+/// edit in it, so an edit sees the comments the ones before it made.
 fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+    owner_guard::check(doc, edit, &cx.ownership)?;
+    let claim = cx.ownership.actor.clone().filter(|_| owner_guard::creates_comments(edit)).map(|a| {
+        let known = pdfcraft_annot::ownership::known(doc, &a);
+        (a, known)
+    });
+    run_edit_body(doc, edit, cx)?;
+    if let Some((actor, known)) = claim {
+        pdfcraft_annot::ownership::claim_new(doc, &known, &actor, &mut || cx.meta().id)?;
+    }
+    Ok(())
+}
+
+/// [`run_edit`] for a whole edit: when there is an actor, no comment of anyone else's may be
+/// gone, moved or different afterwards, whatever the edit was (page operations, flattening,
+/// redaction, sanitizing…). The server holds a saved file to the same rule.
+fn run_edit_checked(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+    let Some(actor) = cx.ownership.actor.clone() else { return run_edit(doc, edit, cx) };
+    let others = pdfcraft_annot::ownership::foreign_snapshot(doc, &actor);
+    run_edit(doc, edit, cx)?;
+    pdfcraft_annot::ownership::check_foreign_kept(doc, &others)?;
+    Ok(())
+}
+
+fn run_edit_body(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
         Edit::RotatePages { pages, degrees } => pdfcraft_organize::rotate_pages(doc, pages, *degrees)?,
         Edit::DeletePages { pages } => pdfcraft_organize::delete_pages(doc, pages)?,
@@ -2914,6 +2975,9 @@ pub enum EditError {
     Signed,
     #[error("{0}")]
     Invalid(String),
+    /// The embedding page opened the document read-only (`pdfcraft:open` `readOnly`).
+    #[error("the document is read-only")]
+    HostReadOnly,
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {
@@ -2941,6 +3005,8 @@ pub struct Session {
     date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
     date_language: Option<String>,
+    /// The host's actor and read-only setting; new documents are opened under it.
+    ownership: Ownership,
 }
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -3265,6 +3331,30 @@ impl Session {
         Self::default()
     }
 
+    /// Set who is editing (the embedding page's `actor`, `readOnly`) for every open document and
+    /// the ones opened later. An actor marks the comments it creates as its own and keeps it from
+    /// changing anyone else's; read-only refuses every edit. [`Ownership::default`] turns both
+    /// off. A document whose actor changes loses its undo history: the new actor must not undo
+    /// the old one's work.
+    pub fn set_ownership(&mut self, ownership: Ownership) {
+        for doc in &mut self.docs {
+            if doc.ownership.actor != ownership.actor
+                && let Some(editor) = doc.editor.as_mut()
+            {
+                editor.undo.clear();
+                editor.redo.clear();
+            }
+            doc.ownership = ownership.clone();
+        }
+        self.ownership = ownership;
+    }
+
+    /// [`Session::set_ownership`] for the documents opened from now on only; the ones already
+    /// open keep the rules they were opened under (a held-back second open must not change them).
+    pub fn set_open_ownership(&mut self, ownership: Ownership) {
+        self.ownership = ownership;
+    }
+
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
@@ -3363,6 +3453,7 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        document.ownership = self.ownership.clone();
         self.docs.push(document);
         id
     }
@@ -3634,6 +3725,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            ownership: Ownership::default(),
         }
     }
 
@@ -3656,6 +3748,11 @@ impl Session {
         }
         cx.pages = doc.info.pages.len();
         cx.today = today;
+        cx.ownership = doc.ownership.clone();
+        // The host's read-only setting holds before anything else, also for edits that would do nothing.
+        if cx.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
@@ -3689,7 +3786,7 @@ impl Session {
         }
         cx.renamed_fields.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        guard(|| run_edit(&mut next, &edit, &mut cx))
+        guard(|| run_edit_checked(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
@@ -3836,6 +3933,9 @@ impl Session {
 
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
+        if doc.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
@@ -3851,6 +3951,9 @@ impl Session {
 
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
+        if doc.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         doc.edit_notices.clear();
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
@@ -4871,6 +4974,9 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if d.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -4889,6 +4995,9 @@ impl Session {
         tsa: &dyn pdfcraft_sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if d.ownership.read_only {
+            return Err(EditError::HostReadOnly);
+        }
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();

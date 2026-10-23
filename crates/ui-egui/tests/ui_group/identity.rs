@@ -61,3 +61,22 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     restored.restore(&format!(r#"{{"author": "{}"}}"#, "x".repeat(10_000)));
     assert_eq!(restored.comment_prefs.author.chars().count(), 200);
 }
+
+#[test]
+fn the_host_name_wins_over_saved_settings_and_is_not_saved() {
+    let mut app = PdfCraftApp::new();
+    app.restore(r#"{"author": "Previous User"}"#);
+    app.set_host_author("  Current User ");
+    assert_eq!(app.comment_prefs.author, "Current User", "the host's name beats the saved one");
+    let saved = app.persist();
+    let mut plain = PdfCraftApp::new();
+    plain.restore(&saved);
+    assert_eq!(plain.comment_prefs.author, "Previous User", "a PdfCraft opened without a host keeps the saved name");
+    // An empty name from the host changes nothing; a repeated call keeps the first saved name.
+    app.set_host_author("  ");
+    assert_eq!(app.comment_prefs.author, "Current User");
+    app.set_host_author("Other");
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert_eq!(again.comment_prefs.author, "Previous User");
+}

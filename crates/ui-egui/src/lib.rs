@@ -63,6 +63,7 @@ mod sign_ui;
 mod stamps_ui;
 mod host_compare;
 mod host_stamp;
+pub use pdfcraft_engine::Ownership;
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
 mod standards_ui;
@@ -393,6 +394,10 @@ pub struct PageClip {
 /// Files delivered asynchronously: (name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// Who is editing, one entry per `pdfcraft:open`, in the order of the files in `startup_inbox`;
+/// each applies to its own file only ([`PdfCraftApp::ownership_inbox`]).
+pub type OwnershipInbox = std::sync::Arc<std::sync::Mutex<Vec<pdfcraft_engine::Ownership>>>;
+
 /// Files that failed to arrive asynchronously (a browser `?file=` URL that couldn't be fetched):
 /// `(name, error)`, reported to the user on the next frame (#173).
 pub type FailedInbox = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
@@ -616,6 +621,10 @@ pub struct PdfCraftApp {
     /// arrival opens in the background once the user has started working (#171).
     pub startup_inbox: Inbox,
     startup_superseded: bool,
+    /// The embedding page's `actor` and `readOnly` for each file it opened (pushed before the
+    /// file). The nth entry belongs to the nth file taken from `startup_inbox`; documents already
+    /// open keep the rules they were opened under.
+    pub ownership_inbox: OwnershipInbox,
     /// Asynchronous opens that failed (web `?file=` fetches), shown as a notice.
     pub failed_inbox: FailedInbox,
     /// Mirrors "some document has unsaved work" each frame, so the web page's `beforeunload` handler can read it (#812).
@@ -624,6 +633,9 @@ pub struct PdfCraftApp {
     pub os_events: Option<OsEventsFn>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
+    /// While the host names the user ([`Self::set_host_author`]): the name saved in settings, which
+    /// `persist` keeps writing so the host's name never reaches a PdfCraft opened without a host.
+    stored_author: Option<String>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
     /// Stamp requests from the embedding page, and where to report them (web, see [`StampCommand`]).
@@ -977,11 +989,13 @@ impl PdfCraftApp {
             full_screen: false,
             inbox: Default::default(),
             startup_inbox: Default::default(),
+            ownership_inbox: Default::default(),
             startup_superseded: false,
             failed_inbox: Default::default(),
             unsaved_flag: Default::default(),
             os_events: None,
             host_save: None,
+            stored_author: None,
             host_dirty: None,
             stamp_inbox: Default::default(),
             compare_inbox: Default::default(),
@@ -2264,6 +2278,19 @@ impl PdfCraftApp {
         }
     }
 
+    /// The embedding page's name for the user signs new comments, whatever name the settings hold
+    /// (they are shared by every tab of the origin). Nothing but the host changes it, and it is not
+    /// saved. Empty names are ignored. Call after [`Self::restore`].
+    pub fn set_host_author(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let stored = self.stored_author.take().unwrap_or_else(|| self.comment_prefs.author.clone());
+        self.stored_author = Some(stored);
+        self.comment_prefs.author = name.chars().take(MAX_AUTHOR_CHARS).collect();
+    }
+
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(pdfcraft_engine::sign::x509::to_pem).collect();
@@ -2295,7 +2322,7 @@ impl PdfCraftApp {
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
-            "author": self.comment_prefs.author,
+            "author": self.stored_author.as_ref().unwrap_or(&self.comment_prefs.author),
             // Per-tool comment defaults (colours, opacity, widths), so Make Current
             // Properties Default survives a restart (#340).
             "comment_styles": self
@@ -3061,7 +3088,19 @@ impl eframe::App for PdfCraftApp {
             if !startup.is_empty() {
                 self.disarm_stamp();
             }
+            // Whoever opened a file also says who edits it; entries for files not yet here wait.
+            let mut rules: std::collections::VecDeque<_> = self
+                .ownership_inbox
+                .lock()
+                .map(|mut o| {
+                    let take = startup.len().min(o.len());
+                    o.drain(..take).collect()
+                })
+                .unwrap_or_default();
             for (name, bytes) in startup {
+                if let Some(ownership) = rules.pop_front() {
+                    self.session.set_open_ownership(ownership);
+                }
                 let activate = !self.startup_superseded;
                 if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);

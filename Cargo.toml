@@ -107,6 +107,14 @@ incremental = false
 lto = "thin"
 codegen-units = 1
 
+# Quick local web builds (ppm/build-web.sh --fast): not for release or deploy.
+[profile.web-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+opt-level = 2
+
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [patch.crates-io]
 hayro-interpret = { path = "vendor/hayro-interpret" }

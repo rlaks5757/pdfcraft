@@ -1574,7 +1574,7 @@ pub(crate) fn page_rotation(info: &DocInfo, page: usize) -> i64 {
 }
 
 /// Delete / Escape handling for comments (only while no text field has focus).
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraft_engine::Document, tool: &mut QuickTool, allowed: bool) {
     if !ctx.input(|i| i.pointer.any_down()) {
         view.comments.cancelled_drag = false;
     }
@@ -1591,6 +1591,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     }
     if allowed
         && let Some((page, index)) = cv.selected
+        && doc.can_delete_comment(page, index)
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
         cv.selected = None;
@@ -1616,14 +1617,23 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 }
 
 /// Items of the canvas context menu for the selected comment (or the page).
-pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
+pub(crate) fn context_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
+    prefs: &CommentPrefs,
+    allowed: bool,
+) -> Option<CanvasAction> {
     let mut action = None;
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && a.in_reply_to.is_none()));
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
+            // Others' comments (and ones nobody owns) take replies only; the engine refuses the rest.
+            let mine = allowed && doc.can_edit_comment(page, index);
             attachment_items(ui, view, info, a);
-            if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!("Edit text…"))).clicked() {
                 view.comments.composer = Some(Composer {
                     page,
                     at: [a.rect[2] as f64, a.rect[3] as f64],
@@ -1638,7 +1648,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 action = Some(CanvasAction::OpenComments);
                 ui.close();
             }
-            ui.add_enabled_ui(allowed, |ui| {
+            ui.add_enabled_ui(mine, |ui| {
                 ui.menu_button(tl!("Set status"), |ui| {
                     for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
                         if ui.button(tl!(s.name())).clicked() {
@@ -1664,7 +1674,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
             });
             let thread: Vec<&pdfcraft_render::Annotation> = info.annotations.iter().filter(|r| a.name.is_some() && r.in_reply_to == a.name).collect();
             let marked = crate::comments_panel::is_marked(&thread);
-            if ui.add_enabled(allowed, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!(if marked { "Remove checkmark" } else { "Mark with checkmark" }))).clicked() {
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
                 ui.close();
             }
@@ -1673,12 +1683,12 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            if ui.add_enabled(allowed && !a.locked && doc.can_delete_comment(page, index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();
             }
-            if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
+            if ui.add_enabled(mine, egui::Button::new(tl!("Properties…"))).clicked() {
                 action = Some(CanvasAction::Properties(page, index));
                 ui.close();
             }
