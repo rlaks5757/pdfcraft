@@ -38,6 +38,13 @@ pub enum SaveTarget {
     As,
 }
 
+/// The page and name of the comment the annotation at `(page, index)` replies to (`None` for a
+/// comment of its own).
+fn reply_parent(annotations: &[pdfcraft_render::Annotation], page: usize, index: usize) -> Option<(usize, String)> {
+    let a = annotations.iter().find(|a| a.page == page && a.index == index)?;
+    Some((page, a.in_reply_to.clone()?))
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
@@ -53,6 +60,11 @@ impl PdfCraftApp {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
             (None, 0, false)
+        };
+        // Deleting a reply leaves its comment selected: noted by name, as the delete shifts indexes.
+        let reply_parent = match &edit {
+            Edit::DeleteAnnotation { page, index } => self.session.get(id).and_then(|d| reply_parent(&d.info.annotations, *page, *index)),
+            _ => None,
         };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
@@ -168,7 +180,11 @@ impl PdfCraftApp {
                             view.comments.editing = Some((a.page, n, String::new()));
                         }
                     }
-                    Edit::DeleteAnnotation { .. } => view.comments.selected = None,
+                    Edit::DeleteAnnotation { .. } => {
+                        view.comments.selected = reply_parent.and_then(|(page, nm)| {
+                            info.annotations.iter().find(|x| x.page == page && x.in_reply_to.is_none() && x.name.as_deref() == Some(nm.as_str())).map(|x| (x.page, x.index))
+                        })
+                    }
                     _ => {}
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {

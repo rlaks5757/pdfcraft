@@ -292,6 +292,8 @@ fn card(
     let mut more_rect = None;
     // A click on a selectable text label (it senses clicks itself, so the card's own area never sees it).
     let mut text_click = false;
+    // Where the replies start: a double click below it is not on the comment itself.
+    let mut replies_top = f32::INFINITY;
     let card_id = ui.id().with(("card", key));
     // The selected card takes clicks anywhere on it, below its buttons and editors: laid out before
     // them from last frame's rect, so those keep their own clicks.
@@ -374,7 +376,8 @@ fn card(
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                             }
-                            if can_edit || can_delete {
+                            // Only on the selected card: an unselected one takes every click for itself.
+                            if selected && (can_edit || can_delete) {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     menu = Some(icons::button(ui, "ellipsis", 22.0, false, tl!("More")));
                                 });
@@ -388,8 +391,6 @@ fn card(
                                     ui.close();
                                 }
                                 if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete"))).clicked() {
-                                    // The parent stays selected; a reply listed before it shifts its index down.
-                                    view.comments.selected = Some((a.page, if r.index < a.index { a.index - 1 } else { a.index }));
                                     edit = Some(Edit::DeleteAnnotation { page: r.page, index: r.index });
                                     ui.close();
                                 }
@@ -402,6 +403,7 @@ fn card(
                         }
                     });
                 });
+                replies_top = replies_top.min(resp.response.rect.top());
                 let x = resp.response.rect.left() + 12.0;
                 ui.painter().vline(x, (resp.response.rect.top() - 14.0)..=(resp.response.rect.top() - 2.0), Stroke::new(1.5, t.border));
             }
@@ -442,6 +444,8 @@ fn card(
     ui.add_space(5.0);
     if selected {
         ui.data_mut(|d| d.insert_temp(card_id, rect));
+    } else {
+        ui.data_mut(|d| d.remove::<egui::Rect>(card_id));
     }
     // Anywhere on the card selects it and shows the comment on the page. A selected card has no hit
     // area until its rect is known (the frame after it was selected), so its buttons never lose a click.
@@ -457,7 +461,7 @@ fn card(
         view.comments.selected = Some(key);
         *nav = Some(Nav::Flash(a.page, a.rect));
     }
-    if click.as_ref().is_some_and(|c| c.double_clicked()) && mine {
+    if click.as_ref().is_some_and(|c| c.double_clicked() && c.interact_pointer_pos().is_some_and(|p| p.y < replies_top)) && mine {
         view.comments.editing = Some((a.page, a.index, a.contents.clone().unwrap_or_default()));
     }
     let menu_id = ui.id().with(("card-menu", key));
