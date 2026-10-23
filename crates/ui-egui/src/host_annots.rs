@@ -13,16 +13,31 @@ use crate::PdfCraftApp;
 /// What the host asks for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AnnotCommand {
-    Reset { items: Vec<RemoteAnnot> },
-    Apply { upserts: Vec<RemoteAnnot>, deletes: Vec<String> },
-    Reject { items: Vec<RejectedAnnot> },
-    Select { annot_id: String },
+    /// `seq`: the last `annots-changed` number the page had received when it fetched the list.
+    Reset {
+        items: Vec<RemoteAnnot>,
+        seq: u64,
+    },
+    Apply {
+        upserts: Vec<RemoteAnnot>,
+        deletes: Vec<String>,
+    },
+    Reject {
+        items: Vec<RejectedAnnot>,
+    },
+    Select {
+        annot_id: String,
+    },
 }
 
 /// What the host is told.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AnnotEvent {
-    Changed(AnnotChanges),
+    /// One `annots-changed` message; `seq` counts them from 1 for each document the page opens.
+    Changed {
+        seq: u64,
+        changes: AnnotChanges,
+    },
     Selected(Option<String>),
 }
 
@@ -72,7 +87,7 @@ impl AnnotCommand {
     /// malformed envelope is an error; a malformed item is skipped.
     pub fn from_json(kind: &str, v: &serde_json::Value) -> Result<Self, String> {
         match kind {
-            "reset" => Ok(Self::Reset { items: good(items(v, "items")?, item) }),
+            "reset" => Ok(Self::Reset { items: good(items(v, "items")?, item), seq: v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0) }),
             "apply" => {
                 let deletes = good(items(v, "deletes")?, |d| d.as_str().map(str::to_string).ok_or_else(|| "a delete must be a string".to_string()));
                 Ok(Self::Apply { upserts: good(items(v, "upserts")?, item), deletes })
@@ -103,31 +118,32 @@ const MAX_PER_MESSAGE: usize = 2000;
 /// The longest id the page accepts, counted in UTF-16 units like its `.length`.
 const MAX_ID_UNITS: usize = 200;
 
+/// A change cut to what the page takes in one `annots-changed`: a delete id it can't take (it drops
+/// the whole message for one) is left out, and the engine's order is kept, so a reply stays behind
+/// the annotation it replies to.
+pub(crate) fn split_changes(c: AnnotChanges) -> Vec<AnnotChanges> {
+    let deletes: Vec<String> = c.deletes.into_iter().filter(|d| (1..=MAX_ID_UNITS).contains(&d.encode_utf16().count())).collect();
+    let parts = c.upserts.len().div_ceil(MAX_PER_MESSAGE).max(deletes.len().div_ceil(MAX_PER_MESSAGE)).max(1);
+    let mut upserts = c.upserts.into_iter();
+    let mut deletes = deletes.into_iter();
+    (0..parts)
+        .map(|_| AnnotChanges {
+            upserts: upserts.by_ref().take(MAX_PER_MESSAGE).collect(),
+            deletes: deletes.by_ref().take(MAX_PER_MESSAGE).collect(),
+        })
+        .collect()
+}
+
 impl AnnotEvent {
-    /// The message bodies the page gets (`type` is added by the bridge): `annots-changed`
-    /// (several when a change is bigger than the page takes in one; the engine lists a reply after
-    /// the annotation it replies to) or `annots-selected`. `page` counts from 1, as the server's.
+    /// The message the page gets (`type` is added by the bridge): `annots-changed` or
+    /// `annots-selected`, as a list for the bridge. `page` counts from 1, as the server's.
     pub fn to_messages(&self) -> Vec<(&'static str, serde_json::Value)> {
         use serde_json::json;
         match self {
-            Self::Changed(c) => {
-                // The page drops a whole message that has an id it can't take; leave such a delete out.
-                let deletes: Vec<&String> = c.deletes.iter().filter(|d| (1..=MAX_ID_UNITS).contains(&d.encode_utf16().count())).collect();
-                let parts = c.upserts.len().div_ceil(MAX_PER_MESSAGE).max(deletes.len().div_ceil(MAX_PER_MESSAGE)).max(1);
-                (0..parts)
-                    .map(|i| {
-                        let from = i * MAX_PER_MESSAGE;
-                        let upserts: Vec<_> = c
-                            .upserts
-                            .iter()
-                            .skip(from)
-                            .take(MAX_PER_MESSAGE)
-                            .map(|u| json!({"annotId": u.annot_id, "page": u.page + 1, "type": u.subtype, "xfdf": u.xfdf}))
-                            .collect();
-                        let deletes: Vec<_> = deletes.iter().skip(from).take(MAX_PER_MESSAGE).collect();
-                        ("pdfcraft:annots-changed", json!({ "upserts": upserts, "deletes": deletes }))
-                    })
-                    .collect()
+            Self::Changed { seq, changes: c } => {
+                let upserts: Vec<_> =
+                    c.upserts.iter().map(|u| json!({"annotId": u.annot_id, "page": u.page + 1, "type": u.subtype, "xfdf": u.xfdf})).collect();
+                vec![("pdfcraft:annots-changed", json!({ "seq": seq, "upserts": upserts, "deletes": c.deletes }))]
             }
             Self::Selected(id) => vec![("pdfcraft:annots-selected", json!({ "annotId": id }))],
         }
@@ -199,9 +215,16 @@ impl PdfCraftApp {
         if self.host_annots.is_some()
             && let Some(changes) = self.session.take_annot_changes(doc)
             && !changes.is_empty()
-            && let Some(report) = self.host_annots.as_ref()
         {
-            report(&AnnotEvent::Changed(changes));
+            for part in split_changes(changes) {
+                self.annot_seq += 1;
+                // A reset the page fetched before it had this message must not undo it.
+                let names = part.upserts.iter().map(|u| u.annot_id.clone()).chain(part.deletes.iter().cloned()).collect();
+                self.session.record_annot_sent(doc, self.annot_seq, names);
+                if let Some(report) = self.host_annots.as_ref() {
+                    report(&AnnotEvent::Changed { seq: self.annot_seq, changes: part });
+                }
+            }
         }
         let problems = self.session.take_annot_problems(doc);
         if !problems.is_empty() {
@@ -216,6 +239,7 @@ impl PdfCraftApp {
             self.annot_target = newest;
             self.annot_open_waiting = false;
             self.annot_selected_sent = None;
+            self.annot_seq = 0;
         }
     }
 
@@ -238,7 +262,7 @@ impl PdfCraftApp {
         let mut ops: Vec<AnnotOp> = Vec::new();
         for command in commands {
             match command {
-                AnnotCommand::Reset { items } => ops.push(AnnotOp::Reset(items)),
+                AnnotCommand::Reset { items, seq } => ops.push(AnnotOp::Reset { items, seq }),
                 AnnotCommand::Apply { upserts, deletes } => ops.push(AnnotOp::Apply { upserts, deletes }),
                 AnnotCommand::Reject { items } => ops.push(AnnotOp::Reject(items)),
                 AnnotCommand::Select { annot_id } => {
@@ -373,7 +397,10 @@ mod tests {
     fn reads_every_message_shape() {
         let it = json!({"annotId": "a", "authorId": "u", "xfdf": "<x/>"});
         let reset = AnnotCommand::from_json("reset", &json!({"items": [it]})).unwrap();
-        assert_eq!(reset, AnnotCommand::Reset { items: vec![RemoteAnnot { annot_id: "a".into(), author_id: "u".into(), xfdf: "<x/>".into() }] });
+        assert_eq!(
+            reset,
+            AnnotCommand::Reset { seq: 0, items: vec![RemoteAnnot { annot_id: "a".into(), author_id: "u".into(), xfdf: "<x/>".into() }] }
+        );
         let apply = AnnotCommand::from_json("apply", &json!({"upserts": [], "deletes": ["z"]})).unwrap();
         assert_eq!(apply, AnnotCommand::Apply { upserts: vec![], deletes: vec!["z".into()] });
         let reject =
@@ -396,7 +423,7 @@ mod tests {
     fn a_bad_item_is_left_out_and_the_rest_stay() {
         let good = json!({"annotId": "a", "authorId": "u", "xfdf": "<x/>"});
         let bad = json!({"annotId": "b", "xfdf": "<x/>"});
-        let AnnotCommand::Reset { items } = AnnotCommand::from_json("reset", &json!({"items": [bad, good, 3]})).unwrap() else {
+        let AnnotCommand::Reset { items, .. } = AnnotCommand::from_json("reset", &json!({"items": [bad, good, 3]})).unwrap() else {
             panic!("not a reset")
         };
         assert_eq!(items.iter().map(|i| i.annot_id.as_str()).collect::<Vec<_>>(), ["a"]);
@@ -421,11 +448,13 @@ mod tests {
             upserts: vec![pdfcraft_engine::AnnotUpsert { annot_id: "a".into(), page: 2, subtype: "Text".into(), xfdf: "<x/>".into() }],
             deletes: vec!["d".into()],
         };
-        let messages = AnnotEvent::Changed(changes).to_messages();
+        let messages = AnnotEvent::Changed { seq: 7, changes }.to_messages();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].0, "pdfcraft:annots-changed");
         // The page counts from 1, the engine from 0.
-        assert_eq!(messages[0].1, json!({"upserts": [{"annotId": "a", "page": 3, "type": "Text", "xfdf": "<x/>"}], "deletes": ["d"]}));
+        assert_eq!(messages[0].1, json!({"seq": 7, "upserts": [{"annotId": "a", "page": 3, "type": "Text", "xfdf": "<x/>"}], "deletes": ["d"]}));
+        let reset = AnnotCommand::from_json("reset", &json!({"items": [], "seq": 9})).unwrap();
+        assert_eq!(reset, AnnotCommand::Reset { items: vec![], seq: 9 });
     }
 
     /// One blank page.
@@ -472,7 +501,7 @@ mod tests {
         let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
         h.run_steps(4);
         let (_, a) = h.state().active_ids().unwrap();
-        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("first")] });
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("first")] });
         h.run_steps(2);
         let at = |h: &egui_kittest::Harness<'_, PdfCraftApp>, nm: &str| h.state().session.get(a).unwrap().annot_position(nm);
         assert!(at(&h, "first").is_some(), "the target receives its list");
@@ -480,7 +509,7 @@ mod tests {
         // The second open fails; its list arrives right behind it and must not land on `a`.
         h.state().ownership_inbox.lock().unwrap().push(share());
         h.state().startup_inbox.lock().unwrap().push(("b.pdf".into(), b"not a pdf".to_vec()));
-        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("second")] });
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("second")] });
         h.run_steps(4);
         assert!(at(&h, "second").is_none(), "a failed open's list is dropped");
         assert!(at(&h, "first").is_some(), "and the document is as it was");
@@ -496,7 +525,7 @@ mod tests {
         app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
         {
             let mut q = app.annot_inbox.lock().unwrap();
-            q.push(AnnotCommand::Reset { items: vec![square("one"), square("two")] });
+            q.push(AnnotCommand::Reset { seq: 0, items: vec![square("one"), square("two")] });
             q.push(AnnotCommand::Apply { upserts: vec![square("three")], deletes: vec!["one".into()] });
             q.push(AnnotCommand::Select { annot_id: "three".into() });
         }
@@ -532,12 +561,11 @@ mod tests {
         let up = |i: usize| pdfcraft_engine::AnnotUpsert { annot_id: format!("a{i}"), page: 0, subtype: "Text".into(), xfdf: "<x/>".into() };
         let changes =
             AnnotChanges { upserts: (0..4500).map(up).collect(), deletes: vec!["ok".into(), String::new(), "x".repeat(201), "é".repeat(200)] };
-        let messages = AnnotEvent::Changed(changes).to_messages();
-        let sizes: Vec<usize> = messages.iter().map(|m| m.1["upserts"].as_array().unwrap().len()).collect();
+        let parts = split_changes(changes);
+        let sizes: Vec<usize> = parts.iter().map(|p| p.upserts.len()).collect();
         assert_eq!(sizes, [2000, 2000, 500]);
-        assert_eq!(messages[0].1["deletes"].as_array().unwrap().len(), 2, "the empty and the 201-unit ids are left out");
-        assert_eq!(messages[0].1["upserts"][0]["page"], 1);
-        assert_eq!(messages[0].1["upserts"][0]["annotId"], "a0", "order is kept");
+        assert_eq!(parts[0].deletes, ["ok", &"é".repeat(200)], "the empty and the 201-unit ids are left out");
+        assert_eq!(parts[0].upserts[0].annot_id, "a0", "order is kept");
     }
 
     /// The reply order and the page number hold from the engine to the message.
@@ -556,7 +584,7 @@ mod tests {
         add(&mut app, 10.0);
         app.session.apply(id, pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: "r".into(), author: "alice".into() }).unwrap();
         let changes = app.session.take_annot_changes(id).unwrap();
-        let messages = AnnotEvent::Changed(changes).to_messages();
+        let messages = AnnotEvent::Changed { seq: 1, changes }.to_messages();
         let ups = messages[0].1["upserts"].as_array().unwrap();
         assert!(ups.iter().all(|u| u["page"] == 1), "{ups:?}");
         assert!(!ups[0]["xfdf"].as_str().unwrap().contains("inreplyto") && ups[1]["xfdf"].as_str().unwrap().contains("inreplyto"));
@@ -596,7 +624,7 @@ mod tests {
         assert!(target.is_some());
         h.state_mut().annot_open_waiting = true;
         // An open that adopts nothing new: the same document is still the newest shared one.
-        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("late")] });
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("late")] });
         h.run_steps(2);
         assert!(inbox.lock().unwrap().is_empty());
         assert!(!h.state().annot_open_waiting);
@@ -615,7 +643,7 @@ mod tests {
         let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
         h.run_steps(4);
         let (_, id) = h.state().active_ids().unwrap();
-        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("one")] });
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("one")] });
         h.run_steps(2);
         let gesture = crate::comments::Gesture::Move { page: 0, index: 0, from: egui::Pos2::ZERO };
         let composer =
@@ -624,7 +652,7 @@ mod tests {
         view.comments.gesture = Some(gesture.clone());
         view.comments.composer = Some(composer.clone());
         // The same list again: nothing to put in.
-        inbox.lock().unwrap().push(AnnotCommand::Reset { items: vec![square("one")] });
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("one")] });
         h.run_steps(2);
         let view = h.state().views.iter().find(|v| v.id == id).unwrap();
         assert_eq!(view.comments.gesture, Some(gesture));

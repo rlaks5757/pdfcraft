@@ -161,9 +161,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   to annotations no longer make the file dirty, and the user's changes go out as
 ///   `pdfcraft:annots-changed` instead of `pdfcraft:save`. `commentsPanel: false` hides this
 ///   interface's own comments panel and the buttons that open it.
-/// - `pdfcraft:annots-reset` (from the parent): `{ items }`, the server's whole list, item =
-///   `{ annotId, authorId, xfdf }` (one annotation as XFDF, `name` = `/NM`). It replaces every
-///   annotation that came from the server and adds the items. `pdfcraft:annots-apply`
+/// - `pdfcraft:annots-reset` (from the parent): `{ items, seq }`, the server's whole list, item =
+///   `{ annotId, authorId, xfdf }` (one annotation as XFDF, `name` = `/NM`). It makes the document
+///   match the list; `seq` is the last `annots-changed` number the page had received when it
+///   fetched the list, and the actor's annotations changed in later messages (or not yet sent) are
+///   left as they are. The actor's own annotations change in the working document only, so undo
+///   keeps their history. `pdfcraft:annots-apply`
 ///   `{ upserts, deletes }` changes some (upserts are items, same `annotId` replaces; deletes are
 ///   annotIds). `pdfcraft:annots-reject` `{ items: [{ annotId, server }] }` puts back what the
 ///   server holds after it refused a change: `server` is an item, or `null` when the server has
@@ -172,9 +175,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   fails, and a new `pdfcraft:open` drops those still waiting.
 /// - `pdfcraft:annots-select` (from the parent): `{ annotId }` goes to the annotation's page and
 ///   selects it (nothing is selected when the id is unknown).
-/// - `pdfcraft:annots-changed` (to the parent): `{ upserts: [{ annotId, page, type, xfdf }], deletes: [annotId] }`
+/// - `pdfcraft:annots-changed` (to the parent): `{ seq, upserts: [{ annotId, page, type, xfdf }], deletes: [annotId] }`
 ///   after the user applies, undoes or redoes an edit: the difference, by `/NM`, of the annotations
-///   the `actor` owns (`page` counts from 1 like the server's, `type` is the annotation's subject or XFDF tag, at most 100 characters). Stamps count too.
+///   the `actor` owns (`seq` counts the messages from 1 for each document opened; `page` counts from 1 like the server's, `type` is the annotation's subject or XFDF tag, at most 100 characters). Stamps count too.
 ///   `pdfcraft:annots-selected` `{ annotId | null }` when the selection on the canvas changes.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).

@@ -76,7 +76,8 @@ pub struct RejectedAnnot {
 /// How a server message treats the actor's own annotations.
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
-    /// The server's whole list: the actor's own are never put in or taken out by it.
+    /// The server's whole list, the truth for everything but what the actor changed after the page
+    /// fetched it.
     Reset,
     /// A push from the socket: another user's edit of the actor's own annotation is put in, unless
     /// the actor has a change of it not yet handed out.
@@ -85,10 +86,28 @@ enum Mode {
     Reject,
 }
 
+/// What a server message comes to: items to put in, `/NM`s to remove everywhere, the actor's own
+/// to remove from the working document only, and (reset) the `/NM`s it must not touch.
+struct Plan {
+    upserts: Vec<RemoteAnnot>,
+    deletes: Vec<String>,
+    mine_deletes: Vec<String>,
+    mode: Mode,
+    guard: HashSet<String>,
+}
+
 /// One message from the server, for [`Session::annots_run`].
 pub enum AnnotOp {
-    Reset(Vec<RemoteAnnot>),
-    Apply { upserts: Vec<RemoteAnnot>, deletes: Vec<String> },
+    /// The server's whole list; `seq` is the last change message of the actor's the page had
+    /// received (see [`Session::record_annot_sent`]) when it fetched the list.
+    Reset {
+        items: Vec<RemoteAnnot>,
+        seq: u64,
+    },
+    Apply {
+        upserts: Vec<RemoteAnnot>,
+        deletes: Vec<String>,
+    },
     Reject(Vec<RejectedAnnot>),
 }
 
@@ -150,8 +169,8 @@ struct Entry {
     /// The annotation's dictionary as last seen: the same allocation means nothing changed, so
     /// an edit elsewhere costs this annotation no hashing.
     arc: Option<Arc<Object>>,
-    /// Hash of (author, XFDF) as the server last sent this annotation, `0` when it never did. A
-    /// later reset that carries the same text is not news.
+    /// Hash of (author, XFDF) as the server last sent this annotation, `0` when it never did. The
+    /// same text again is not news.
     server: u64,
     /// The server has it (handed out, or applied from the server). An annotation that was in the
     /// file when it opened is not synced: it has never been handed out.
@@ -176,6 +195,9 @@ pub(crate) struct SyncState {
     failed: HashMap<String, FailedAt>,
     /// Annotations that just failed to be written out, for the interface to tell the user.
     problems: Vec<String>,
+    /// The `/NM`s of each change message handed to the page, by its number, until a reset shows the
+    /// page has seen them.
+    sent: Vec<(u64, Vec<String>)>,
 }
 
 impl SyncState {
@@ -573,6 +595,14 @@ impl Session {
         Some(changes)
     }
 
+    /// The interface sent a change message numbered `seq` carrying these `/NM`s. A reset made
+    /// before the page had that message leaves them alone.
+    pub fn record_annot_sent(&mut self, id: DocId, seq: u64, names: Vec<String>) {
+        if let Some(st) = self.docs.iter_mut().find(|d| d.id == id).and_then(|d| d.sync.as_mut()) {
+            st.sent.push((seq, names));
+        }
+    }
+
     /// The annotations of the actor's that could not be written out since this was last called
     /// (too large for the database, or of a kind it has no form for).
     pub fn take_annot_problems(&mut self, id: DocId) -> Vec<String> {
@@ -580,11 +610,19 @@ impl Session {
         std::mem::take(&mut st.problems)
     }
 
-    /// The server's whole list: annotations of the server's that aren't in it are removed, the
-    /// rest are put in (an annotation that is already here keeps its place in the document, so
-    /// replies stay linked). Annotations that came with the file are left alone.
+    /// The server's whole list, taken as the truth: what it lacks is removed and what it has is put
+    /// in (an annotation already here keeps its place, so replies stay linked). The actor's own
+    /// annotations follow it too, in the working document only (the undo states keep the actor's
+    /// history), except the ones the actor changed after the page fetched the list: those are the
+    /// numbers above `seq` (see [`Session::record_annot_sent`]) or not yet handed out. Annotations
+    /// that came with the file are left alone.
     pub fn annots_reset(&mut self, id: DocId, items: Vec<RemoteAnnot>) -> Result<RemoteReport, EditError> {
-        self.annots_one(id, AnnotOp::Reset(items))
+        self.annots_reset_at(id, items, u64::MAX)
+    }
+
+    /// [`Session::annots_reset`] for a list fetched when the page had the change messages up to `seq`.
+    pub fn annots_reset_at(&mut self, id: DocId, items: Vec<RemoteAnnot>, seq: u64) -> Result<RemoteReport, EditError> {
+        self.annots_one(id, AnnotOp::Reset { items, seq })
     }
 
     /// Changes the server pushed: annotations to put in (the same `/NM` is replaced) and `/NM`s to remove.
@@ -608,8 +646,8 @@ impl Session {
         let mut changed = false;
         let mut failure = None;
         for op in ops {
-            let (upserts, deletes, mode) = Self::op_items(doc, op);
-            match Self::patch_remote(doc, upserts, deletes, mode) {
+            let plan = Self::op_items(doc, op);
+            match Self::patch_remote(doc, plan) {
                 Ok((report, did)) => {
                     changed |= did;
                     reports.push(report);
@@ -630,11 +668,11 @@ impl Session {
         failure.map_or(Ok(reports), Err)
     }
 
-    /// What one server message comes to: items to put in, `/NM`s to remove, and whether an item
-    /// that is here as given is left alone.
-    fn op_items(doc: &mut Document, op: AnnotOp) -> (Vec<RemoteAnnot>, Vec<String>, Mode) {
+    /// What one server message comes to.
+    fn op_items(doc: &mut Document, op: AnnotOp) -> Plan {
+        let plain = |upserts, deletes, mode| Plan { upserts, deletes, mine_deletes: Vec::new(), mode, guard: HashSet::new() };
         match op {
-            AnnotOp::Apply { upserts, deletes } => (upserts, deletes, Mode::Apply),
+            AnnotOp::Apply { upserts, deletes } => plain(upserts, deletes, Mode::Apply),
             AnnotOp::Reject(items) => {
                 let mut upserts = Vec::new();
                 let mut deletes = Vec::new();
@@ -648,37 +686,53 @@ impl Session {
                     }
                 }
                 // Always applied: the local copy is what differs from the server.
-                (upserts, deletes, Mode::Reject)
+                plain(upserts, deletes, Mode::Reject)
             }
-            AnnotOp::Reset(items) => {
-                let Some(st) = doc.sync.as_ref() else { return (items, Vec::new(), Mode::Reset) };
+            AnnotOp::Reset { items, seq } => {
+                sync_now(doc);
+                let Some(st) = doc.sync.as_mut() else { return plain(items, Vec::new(), Mode::Reset) };
+                // The page has seen the messages up to `seq`; later ones, and changes not yet
+                // handed out, are newer than the list.
+                st.sent.retain(|(n, _)| *n > seq);
+                let guard: HashSet<String> = st
+                    .sent
+                    .iter()
+                    .flat_map(|(_, names)| names.iter().cloned())
+                    .chain(st.upserts.keys().cloned())
+                    .chain(st.deletes.iter().cloned())
+                    .collect();
                 let listed: HashSet<&str> = items.iter().map(|i| i.annot_id.as_str()).collect();
-                // Only what was received from others and is no longer listed. The actor's own
-                // annotations are the actor's to keep; one the server lost arrives as an apply delete.
-                let deletes: Vec<String> = st.remote.keys().filter(|nm| !listed.contains(nm.as_str())).cloned().collect();
-                (items, deletes, Mode::Reset)
+                let gone = |nm: &&String| !listed.contains(nm.as_str()) && !guard.contains(*nm);
+                let deletes: Vec<String> = st.remote.keys().filter(gone).cloned().collect();
+                let mine_deletes: Vec<String> = st.mine.keys().filter(gone).cloned().collect();
+                Plan { upserts: items, deletes, mine_deletes, mode: Mode::Reset, guard }
             }
         }
     }
 
     /// Apply the server's changes outside the edit pipeline: to the working document and to every
-    /// state undo and redo can bring back. `skip_known` leaves out an annotation that is already
-    /// here as given. The caller refreshes. Returns the report and whether the document changed.
-    ///
-    /// The actor's own annotations are never put back by news of what the server already has: a
-    /// reset after a reconnect would otherwise bring them into states where an undo took them away.
-    fn patch_remote(doc: &mut Document, upserts: Vec<RemoteAnnot>, deletes: Vec<String>, mode: Mode) -> Result<(RemoteReport, bool), EditError> {
+    /// state undo and redo can bring back, except that a reset changes the actor's own annotations
+    /// in the working document only. The caller refreshes. Returns the report and whether the
+    /// document changed.
+    fn patch_remote(doc: &mut Document, plan: Plan) -> Result<(RemoteReport, bool), EditError> {
+        let Plan { upserts, deletes, mine_deletes, mode, guard } = plan;
         // Changes the user made but the interface hasn't taken yet stay pending.
         sync_now(doc);
         let mut report = RemoteReport::default();
         let actor = doc.ownership.actor.clone().unwrap_or_default();
         let hash_item = |a: &RemoteAnnot| hash_of(&(&a.author_id, &a.xfdf));
         let mut live: Vec<RemoteAnnot> = Vec::new();
+        // The actor's own annotations a reset differs on: they change in the working document only.
+        let mut current_only: Vec<RemoteAnnot> = Vec::new();
         // The ones of the actor's the cache knows: they go only into states that have them.
         let mut cached_mine: HashSet<String> = HashSet::new();
         if let Some(st) = doc.sync.as_mut() {
             for a in upserts {
                 let h = hash_item(&a);
+                if mode == Mode::Reset && guard.contains(&a.annot_id) {
+                    report.skipped += 1;
+                    continue;
+                }
                 if mode != Mode::Reject {
                     if st.remote.get(&a.annot_id) == Some(&h) {
                         report.skipped += 1;
@@ -691,15 +745,19 @@ impl Session {
                     }
                 }
                 if let Some(e) = st.mine.get_mut(&a.annot_id) {
+                    // The same text as the server last sent or as the actor's own copy is not news.
+                    let same = e.server == h || (mode == Mode::Reset && e.xfdf == hash_of(&a.xfdf));
                     if mode == Mode::Reset {
-                        // Whose it is decides, not what the text looks like (the server writes it
-                        // out differently): the server has it, the actor's copy stays.
-                        e.server = h;
-                        e.synced = true;
-                        report.skipped += 1;
+                        if same {
+                            e.server = h;
+                            e.synced = true;
+                            report.skipped += 1;
+                        } else {
+                            current_only.push(a);
+                        }
                         continue;
                     }
-                    if mode == Mode::Apply && (st.upserts.contains_key(&a.annot_id) || e.server == h) {
+                    if mode == Mode::Apply && (st.upserts.contains_key(&a.annot_id) || same) {
                         report.skipped += 1;
                         continue;
                     }
@@ -713,8 +771,9 @@ impl Session {
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         let mut pictures = pdfcraft_xfdf::PictureCache::default();
-        let live_refs: Vec<&RemoteAnnot> = live.iter().collect();
-        let done = xf::apply(&mut editor.cos, &live_refs, &deletes, &mut pictures);
+        let doc_items: Vec<&RemoteAnnot> = live.iter().chain(&current_only).collect();
+        let doc_deletes: Vec<String> = deletes.iter().chain(&mine_deletes).cloned().collect();
+        let done = xf::apply(&mut editor.cos, &doc_items, &doc_deletes, &mut pictures);
         report.failed = done.failed.clone();
         report.applied = done.applied.len() + done.removed.len();
         // The stored states get what the working document got; one that can't take an item is a
@@ -739,8 +798,9 @@ impl Session {
         if done.applied.is_empty() && done.removed.is_empty() {
             return Ok((report, false));
         }
-        let touched: HashSet<String> = done.applied.iter().chain(&deletes).cloned().collect();
-        let hashes: HashMap<&str, u64> = on_states.iter().map(|a| (a.annot_id.as_str(), hash_item(a))).collect();
+        let touched: HashSet<String> = done.applied.iter().chain(&doc_deletes).cloned().collect();
+        let hashes: HashMap<&str, u64> =
+            doc_items.iter().filter(|a| placed.contains(a.annot_id.as_str())).map(|a| (a.annot_id.as_str(), hash_item(a))).collect();
         doc.generation += 1;
         // What the server sent is not the user's change: take it into the cache so it isn't handed back.
         let generation = doc.generation;

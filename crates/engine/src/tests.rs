@@ -7478,7 +7478,7 @@ mod annot_sync {
     }
 
     /// The server writes an annotation out differently from the way it came in. A reset that lists
-    /// the actor's own annotation in that form still leaves the actor's copy, and its history, alone.
+    /// the actor's own annotation in that form still leaves the actor's history alone.
     #[test]
     fn a_reset_with_the_servers_own_wording_leaves_the_actors_history_alone() {
         let (mut s, id) = sharing("alice");
@@ -7486,31 +7486,70 @@ mod annot_sync {
         let first = only(s.take_annot_changes(id));
         s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 30.0, dy: 0.0 }).unwrap();
         let moved = only(s.take_annot_changes(id));
-        let mut theirs = remote(&first, "alice");
+        s.record_annot_sent(id, 1, vec![first.annot_id.clone()]);
+        // The server's copy, as it wrote it out (the moved one with another opacity).
+        let mut theirs = remote(&moved, "alice");
         theirs.xfdf = theirs.xfdf.replace("<square ", "<square opacity=\"0.5\" ");
-        let report = s.annots_reset(id, vec![theirs]).unwrap();
-        assert_eq!((report.applied, report.skipped), (0, 1), "{report:?}");
-        assert_eq!(s.take_annot_changes(id), None, "nothing is handed back");
+        let report = s.annots_reset_at(id, vec![theirs], 1).unwrap();
+        assert_eq!(report.skipped, 0, "{report:?}");
+        assert_eq!(s.take_annot_changes(id), None, "what the server sent is not handed back");
+        // The undo states were not touched: the move is undone to the first version.
         s.undo(id).unwrap();
-        assert_eq!(only(s.take_annot_changes(id)).xfdf, first.xfdf, "the move is undone, not overwritten");
-        assert_ne!(first.xfdf, moved.xfdf);
+        assert_eq!(only(s.take_annot_changes(id)).xfdf, first.xfdf);
     }
 
-    /// A list that lacks an annotation of the actor's does not take it away, whether the server
-    /// has it or not; only an apply delete does.
+    /// A reset made before the page had the actor's delete does not bring the annotation back, now
+    /// or at the next reset.
     #[test]
-    fn a_reset_never_removes_the_actors_annotations() {
+    fn a_late_reset_does_not_bring_back_what_the_actor_deleted() {
         let (mut s, id) = sharing("alice");
         s.apply(id, rect(0, 10.0)).unwrap();
         let up = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 1, vec![up.annot_id.clone()]);
+        s.apply(id, Edit::DeleteAnnotation { page: 0, index: 0 }).unwrap();
+        assert_eq!(s.take_annot_changes(id).unwrap().deletes, vec![up.annot_id.clone()]);
+        s.record_annot_sent(id, 2, vec![up.annot_id.clone()]);
+        let report = s.annots_reset_at(id, vec![remote(&up, "alice")], 1).unwrap();
+        assert_eq!((report.applied, names(&s, id, 0).len()), (0, 0), "{report:?}");
+        // The next list was fetched after the page had the delete: it lacks the annotation.
+        s.annots_reset_at(id, vec![], 2).unwrap();
+        assert!(names(&s, id, 0).is_empty());
+    }
+
+    /// What was missed while disconnected (an administrator's delete or edit of the actor's own
+    /// annotation) is brought in by the next reset, in the working document only.
+    #[test]
+    fn a_reset_catches_up_with_what_was_missed() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let a = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 1, vec![a.annot_id.clone()]);
         s.apply(id, rect(0, 90.0)).unwrap();
-        let report = s.annots_reset(id, vec![]).unwrap();
+        let b = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 2, vec![b.annot_id.clone()]);
+        // The page's list lacks `a` (deleted by an administrator) and has `b` changed.
+        let mut edited = remote(&b, "alice");
+        edited.xfdf = edited.xfdf.replace("<square ", "<square opacity=\"0.5\" ");
+        let report = s.annots_reset_at(id, vec![edited], 2).unwrap();
+        assert_eq!((report.applied, names(&s, id, 0).len()), (2, 1), "{report:?}");
+        assert_eq!(s.take_annot_changes(id), None, "the server's state is not handed back");
+        // The undo states still hold the actor's history.
+        assert!(all_states(&s, id).iter().any(|st| st.contains(&a.annot_id)));
+    }
+
+    /// An annotation made after the page fetched the list, handed out or not, is not touched by it.
+    #[test]
+    fn a_reset_leaves_what_the_actor_did_after_the_list_was_fetched() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let sent = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 5, vec![sent.annot_id.clone()]);
+        s.apply(id, rect(0, 90.0)).unwrap();
+        let report = s.annots_reset_at(id, vec![], 4).unwrap();
         assert_eq!((report.applied, names(&s, id, 0).len()), (0, 2), "{report:?}");
-        assert_eq!(only(s.take_annot_changes(id)).page, 0, "the new one still goes out");
-        // The server's own delete (an administrator) is the way one goes.
-        let report = s.annots_apply(id, vec![], vec![up.annot_id.clone()]).unwrap();
-        assert_eq!(report.applied, 1);
-        assert_eq!(names(&s, id, 0).len(), 1);
-        assert!(all_states(&s, id).iter().all(|st| !st.contains(&up.annot_id)));
+        assert_eq!(only(s.take_annot_changes(id)).page, 0, "the unsent one still goes out");
+        // A list the page fetched after message 5 is the truth: it lacks them, so they go.
+        s.annots_reset_at(id, vec![], 5).unwrap();
+        assert!(names(&s, id, 0).is_empty());
     }
 }

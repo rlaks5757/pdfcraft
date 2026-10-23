@@ -658,6 +658,8 @@ pub struct PdfCraftApp {
     annot_target: Option<pdfcraft_engine::DocId>,
     /// An `annotSync` file was taken but its document isn't here yet (a password is asked for).
     annot_open_waiting: bool,
+    /// The number of the last `annots-changed` message sent for the shared document.
+    annot_seq: u64,
     /// The open ownership was set for a file the host opened and is to be cleared once it is in.
     open_ownership_spent: bool,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
@@ -1035,6 +1037,7 @@ impl PdfCraftApp {
             annot_selected_sent: None,
             annot_target: None,
             annot_open_waiting: false,
+            annot_seq: 0,
             open_ownership_spent: false,
             armed_stamp: None,
             close_request: None,
@@ -3193,6 +3196,9 @@ impl eframe::App for PdfCraftApp {
                     self.session.set_open_ownership(ownership);
                 } else if self.host_lock {
                     self.session.set_open_ownership(host_lock::viewer_ownership());
+                } else {
+                    // Not the rules the file before it came with.
+                    self.session.set_open_ownership(Default::default());
                 }
                 let activate = !self.startup_superseded;
                 let opened = self.open_bytes_with_focus(&name, None, bytes, activate);
