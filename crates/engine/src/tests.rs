@@ -7038,6 +7038,11 @@ mod annot_sync {
         let list = page.dict.get(b"Annots").map(|a| cos.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         let dict = list.iter().filter_map(|e| cos.resolve(e).as_dict().cloned()).next().unwrap();
         assert!(dict.get(b"PpmImageSrc").is_some());
+        // What goes out is those very bytes, not a re-encoded picture.
+        let data = up.xfdf.split("<imagedata>").nth(1).and_then(|t| t.split("</imagedata>").next()).expect("imagedata");
+        let encoded = data.split("base64,").nth(1).expect("a data url");
+        let sent = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+        assert_eq!(&sent, &*quadrant_png());
         assert!(!s.get(id).unwrap().dirty);
         assert!(s.take_annot_changes(id).is_none());
     }

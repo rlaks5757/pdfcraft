@@ -4106,6 +4106,7 @@ dependencies = [
 name = "pdfcraft-engine"
 version = "0.9.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "craft-docpath",
  "icu_properties",
