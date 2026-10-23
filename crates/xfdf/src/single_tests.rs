@@ -622,3 +622,15 @@ fn an_index_serves_many_exports_and_the_kind_is_cut_in_utf16() {
     assert_eq!((many[0].1.is_some(), many[1].1.is_some(), many[2].1.is_some()), (true, false, true));
     assert!(matches!(export_annotation_in(&doc, &idx, "nope"), Err(DataError::NotFound(_))));
 }
+
+#[test]
+fn copying_an_object_that_points_back_to_itself_ends() {
+    let mut from = blank();
+    let a = from.add(Object::Null);
+    let mut d = Dict::new();
+    d.set(b"Self".to_vec(), Object::Ref(a));
+    from.set(a, Object::Dict(d));
+    let mut to = blank();
+    let new = crate::single::import_object(&from, &mut to, a, &mut HashMap::new());
+    assert_eq!(to.get(new).as_dict().unwrap().reference(b"Self"), Some(new));
+}

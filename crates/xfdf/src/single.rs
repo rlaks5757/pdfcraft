@@ -700,13 +700,15 @@ fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Copy object `r` of `from` into `to` with everything it points to; the byte buffers are shared.
-fn import_object(from: &Document, to: &mut Document, r: ObjRef, copied: &mut HashMap<ObjRef, ObjRef>) -> ObjRef {
+pub(crate) fn import_object(from: &Document, to: &mut Document, r: ObjRef, copied: &mut HashMap<ObjRef, ObjRef>) -> ObjRef {
     if let Some(done) = copied.get(&r) {
         return *done;
     }
-    let obj = remap(from, to, (*from.get(r)).clone(), copied);
-    let new = to.add(obj);
+    // The number is taken before the walk, so a reference back to `r` finds it instead of looping.
+    let new = to.add(Object::Null);
     copied.insert(r, new);
+    let obj = remap(from, to, (*from.get(r)).clone(), copied);
+    to.set(new, obj);
     new
 }
 
