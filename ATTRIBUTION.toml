@@ -228,7 +228,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "7fa70f68a9fa24d0b1cac05fe3aaabaeaca9750c57416124bd317a4eda806d5a"
+sha256 = "98e8e4fc33d5172b614c9411aa09ce5ff50b2d91e173e744e5e4e579da4b4d04"
 
 
 [[asset]]
@@ -3352,7 +3352,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "95b5fc6d10f7bc8371688772741870448de716fa2dd9af62fdfe4e009d269b45"
+sha256 = "f458aa008848781a0b8f13a4d8983e0f4d0965dca9a7fe5bf46c7450fd36f55c"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/sl.tsv"
@@ -3376,3 +3376,25 @@ licence_file = "vendor/vello_common/LICENSE-MIT"
 kind = "image"
 usage = "Reference picture of the vendored vello_common probe module, for people only; the build reads probe.rgba, not this file"
 sha256 = "78c59a0cfd2c829909d77006f94e34dac1ae5d1f90e7f10f72e84de541fef697"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ko.tsv"
+title = "Korean interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels and user-facing messages for the PPM build; AI-assisted and reviewed by Korean-speaking contributors"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Korean UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "cb64f72711079c94119b0af8f49d812a60af577ca56074caad8e72e7bb5cf4c3"
+
+[[asset]]
+path = "ppm/fonts-ko/fonts/nanum-gothic/NanumGothic-Regular.ttf"
+title = "Nanum Gothic Regular"
+author = "NHN Corporation"
+source = "https://hangeul.naver.com/font/nanum"
+licence = "OFL-1.1"
+licence_file = "ppm/fonts-ko/fonts/nanum-gothic/OFL.txt"
+kind = "font"
+usage = "Korean glyph fallback font for the PPM build"
+sha256 = "76f45ef4a6bcff344c837c95a7dcc26e017e38b5846d5ae0cdcb5b86be2e2d31"
