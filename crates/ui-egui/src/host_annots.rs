@@ -306,6 +306,7 @@ impl PdfCraftApp {
         );
         // The pages to draw again; `None` is every page.
         let mut redraw: Option<std::collections::BTreeSet<usize>> = Some(Default::default());
+        let generation = self.session.get(doc).map(|d| d.edit_generation());
         let changed = match self.session.annots_run(doc, ops) {
             Ok(reports) => {
                 for report in &reports {
@@ -323,8 +324,10 @@ impl PdfCraftApp {
             }
             Err(e) => {
                 log::warn!("annotation message refused: {e}");
+                // A refusal that changed nothing (the generation is the same) draws nothing again;
+                // one that came after some messages were applied does not say which pages.
                 redraw = None;
-                true
+                self.session.get(doc).map(|d| d.edit_generation()) != generation
             }
         };
         // A message that put in or took away nothing moved nothing.
@@ -985,6 +988,7 @@ mod tests {
         assert!(view.page_is_stale(1), "the page with the new annotation is drawn again");
         assert!(!view.page_is_stale(0) && !view.page_is_stale(2), "the other pages are left alone");
         // Taking it away draws the page it was on again.
+        assert!(h.state().session.get(h.state().views[0].id).unwrap().annot_position("one").is_some(), "the annotation is there to be taken away");
         for _ in 0..80 {
             h.run_steps(2);
             std::thread::sleep(std::time::Duration::from_millis(25));
@@ -993,5 +997,47 @@ mod tests {
         h.step();
         let view = &h.state().views[0];
         assert!(view.page_is_stale(1) && !view.page_is_stale(0) && !view.page_is_stale(2));
+    }
+
+    fn open_read_only(language: Option<&str>) -> (egui_kittest::Harness<'static, PdfCraftApp>, std::sync::Arc<std::sync::Mutex<Vec<AnnotCommand>>>) {
+        let mut app = PdfCraftApp::new();
+        if let Some(l) = language {
+            app.set_option("language", l).unwrap();
+        }
+        app.ownership_inbox.lock().unwrap().push(pdfcraft_engine::Ownership { read_only: true, ..share() });
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..20 {
+            h.run_steps(2);
+        }
+        assert!(h.state().views.first().is_some_and(|v| h.state().session.get(v.id).is_some()), "the document is open");
+        (h, inbox)
+    }
+
+    /// A read-only (viewer-only) shared document shows other people's annotations as they come.
+    #[test]
+    fn a_read_only_shared_document_takes_the_remote_annotations() {
+        let (mut h, inbox) = open_read_only(None);
+        let doc = h.state().views[0].id;
+        assert!(h.state().session.get(doc).unwrap().ownership().read_only);
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("one")] });
+        h.step();
+        assert!(h.state().session.get(doc).unwrap().annot_position("one").is_some(), "reset");
+        inbox.lock().unwrap().push(AnnotCommand::Apply { upserts: vec![square("two")], deletes: vec!["one".into()] });
+        h.step();
+        let d = h.state().session.get(doc).unwrap();
+        assert!(d.annot_position("two").is_some() && d.annot_position("one").is_none(), "apply");
+    }
+
+    /// Undo and redo refused by the sharing rules say so in the UI language.
+    #[test]
+    fn a_refused_undo_is_said_in_the_ui_language() {
+        let (mut h, _) = open_read_only(Some("ko"));
+        h.state_mut().undo();
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("문서가 읽기 전용입니다"));
+        h.state_mut().toast = None;
+        h.state_mut().redo();
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("문서가 읽기 전용입니다"));
     }
 }

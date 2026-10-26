@@ -266,7 +266,8 @@ impl PdfCraftApp {
                     self.notify_fmt("Redid {label}", &[("label", &label)]);
                 }
             }
-            Err(e) => self.notify_error(e),
+            // The sharing rules' refusals are said in the UI language.
+            Err(e) => self.notify_error(crate::i18n::refusal(&e.to_string())),
         }
     }
 

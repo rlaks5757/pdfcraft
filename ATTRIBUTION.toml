@@ -228,7 +228,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "0e8b8f04eea7f4f1bbe501c0af945336141d71354d4492173b623091b525b8fa"
+sha256 = "b7988c67c33c5aec3a7907c78fd3dddfcde5de475b9214f4c5085cfffbbdc6f1"
 
 
 [[asset]]
@@ -3352,7 +3352,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Vietnamese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "d6a37f783dd1caf0629204d0d8219eb3c8e6f7f9972625700686a331b46c3170"
+sha256 = "657857a35a844a1fd893d64c273e24ff0e51c10a3cc9ab2c426120ca9171ab6f"
 
 [[asset]]
 path = "crates/ui-egui/src/i18n/sl.tsv"
@@ -3386,7 +3386,7 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Korean UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
-sha256 = "e5da9d6f21cf6973f21d7bfc11d89a35a3d939df8832a35d50bc01fc2ef39467"
+sha256 = "b6a358fc6f8a58b84a31d3ddd75acb2ce48638b99778edb5c25f46786bd621ae"
 
 [[asset]]
 path = "ppm/fonts-ko/fonts/nanum-gothic/NanumGothic-Regular.ttf"
