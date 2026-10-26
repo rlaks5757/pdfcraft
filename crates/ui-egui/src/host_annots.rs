@@ -322,10 +322,15 @@ impl PdfCraftApp {
         if !changed {
             return;
         }
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
         let position = |app: &Self, name: &Option<String>| name.as_deref().and_then(|n| app.session.get(doc)?.annot_position(n));
         let (selected_at, editing_at) = (position(self, &selected), position(self, &editing_name));
         let (dragged_at, composing_at) = (position(self, &dragged), position(self, &composing));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
+            // What is on screen was drawn before the message: draw the pages again.
+            view.annotations_changed_remotely();
             view.comments.selected = selected_at;
             view.comments.editing = match (editing, editing_at) {
                 (Some((_, _, text)), Some((p, i))) => Some((p, i, text)),
@@ -915,5 +920,29 @@ mod tests {
         let d = h.state().session.get(id).unwrap();
         assert!(d.annot_position(&names[0]).is_none(), "the list is the truth for what it had seen");
         assert!(d.annot_position(&names[1]).is_some(), "message 2 came after the list was fetched");
+    }
+    /// A change from the page makes the pages it touched be drawn again: what is on screen was
+    /// rendered before it.
+    #[test]
+    fn a_remote_change_makes_the_pages_be_drawn_again() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf()));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..40 {
+            h.run_steps(2);
+            let m = h.state().views.first().map(|v| v.raster_memory());
+            if m.is_some_and(|m| m.page_count + m.tile_count + m.thumbnail_count > 0) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(h.state().views[0].raster_memory().page_count + h.state().views[0].raster_memory().tile_count > 0, "the page was drawn");
+        assert!(!h.state().views[0].page_is_stale(0));
+        inbox.lock().unwrap().push(AnnotCommand::Reset { seq: 0, items: vec![square("one")] });
+        // Stop before the next render replaces the old raster.
+        h.step();
+        assert!(h.state().views[0].page_is_stale(0), "the old raster waits for its replacement");
     }
 }

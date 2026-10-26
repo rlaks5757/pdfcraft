@@ -987,6 +987,20 @@ impl DocView {
         }
     }
 
+    /// The host's annotation messages changed some pages (which ones is not known here): re-render
+    /// them all, keeping the old rasters on screen until the new ones arrive.
+    pub fn annotations_changed_remotely(&mut self) {
+        for page in 0..self.page_count {
+            self.page_changed(page);
+        }
+    }
+
+    /// A raster of `page` that is out of date is on screen or waiting to be replaced.
+    #[cfg(test)]
+    pub(crate) fn page_is_stale(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) || self.stale_thumbs.contains(&page) || self.stale_tiles.iter().any(|k| k.0 == page)
+    }
+
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else. Out-of-date tiles stay on screen until replacements arrive.
     pub fn page_changed(&mut self, page: usize) {

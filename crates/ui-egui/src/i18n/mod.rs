@@ -1086,6 +1086,23 @@ mod tests {
         assert_eq!(auto_language(false, JA), JA());
     }
 
+    /// The refusals a shared document shows (someone else's comment, a read-only or viewer-only page)
+    /// are said in Korean, not in the English of the layer below.
+    #[test]
+    fn korean_says_the_ownership_refusals() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        let refusals = [
+            "this comment belongs to someone else".to_string(),
+            "the comment has replies from someone else".to_string(),
+            "this page has comments from someone else".to_string(),
+            pdfcraft_engine::EditError::HostReadOnly.to_string(),
+            pdfcraft_engine::EditError::HostViewerOnly.to_string(),
+        ];
+        for r in refusals {
+            assert_ne!(tr(ko, &r), r.as_str(), "no Korean for: {r}");
+        }
+    }
+
     /// Italian translates every registered command and every All tools group, section and item.
     #[test]
     fn italian_covers_commands_and_catalogue() {

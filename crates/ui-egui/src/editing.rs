@@ -218,6 +218,8 @@ impl PdfCraftApp {
                     view.comments.drawings_refused();
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                // The refusals of the layers below are fixed sentences: said in the UI language.
+                let message = crate::i18n::words(&message);
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
