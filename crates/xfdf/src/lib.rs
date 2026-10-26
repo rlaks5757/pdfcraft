@@ -18,12 +18,16 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod position;
 mod single;
+pub use position::{AnnotEntry, ExportRequest, export_positions, list_annotations, strip_positions};
 pub use single::{
     AnnotIndex, AnnotXfdf, MAX_XFDF_LEN, PictureCache, RemoteItem, RemoteReport, apply_remote, apply_remote_cached, export_annotation,
     export_annotation_in, export_annotations, remove_by_name, remove_by_name_in,
 };
 
+#[cfg(test)]
+mod position_tests;
 #[cfg(test)]
 mod single_tests;
 #[cfg(test)]

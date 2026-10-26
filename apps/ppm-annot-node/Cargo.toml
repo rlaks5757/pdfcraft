@@ -1,0 +1,20 @@
+[package]
+name = "ppm-annot-node"
+description = "PPM server module: list, export, strip and merge a PDF's annotations (wasm-bindgen, nodejs target; build with ppm/build-node.sh)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pdfcraft-cos = { workspace = true }
+pdfcraft-xfdf = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "0.2.129"
