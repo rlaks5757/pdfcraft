@@ -5000,6 +5000,15 @@ impl Session {
         true
     }
 
+    /// Leave replies out of the page picture (or draw them): a document the host opens only to
+    /// look at, as a comparison, hides them like one it shares. Returns whether anything changed.
+    pub fn set_hide_replies(&mut self, id: DocId, hide: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        let was = doc.replies_hidden();
+        doc.set_replies_hidden(hide);
+        was != hide
+    }
+
     /// Hide or show every comment on the page (Acrobat's Comments ▸ Hide all comments). Form
     /// fields and links still draw. Returns whether anything changed.
     pub fn set_hide_comments(&mut self, id: DocId, hide: bool) -> bool {

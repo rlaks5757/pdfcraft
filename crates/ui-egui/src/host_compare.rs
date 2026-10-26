@@ -107,6 +107,10 @@ impl PdfCraftApp {
         if self.views.len() != before + 2 {
             return Err("couldn't open both files".into());
         }
+        // The host's own viewer draws no replies in a comparison either.
+        for view in &self.views[before..] {
+            self.session.set_hide_replies(view.id, true);
+        }
         self.compare = None;
         self.compare_old = Some(self.views[before].id);
         self.run_compare();
@@ -261,6 +265,18 @@ mod tests {
             assert!(own.read_only && !own.annot_sync && !own.hide_comments_panel, "{own:?}");
         }
         assert_eq!(state.session.open_ownership().actor, None, "later opens start from the build's own rules again");
+        for id in [s.old, s.new] {
+            assert!(state.session.get(id).unwrap().replies_hidden(), "the host's comparison draws no replies");
+        }
+    }
+
+    /// A document opened on the build's own (not for the host's comparison) draws what it always did.
+    #[test]
+    fn the_replies_of_a_document_opened_without_the_host_are_drawn() {
+        let (mut h, _) = app(true);
+        h.state_mut().open_bytes_with_focus("a.pdf", None, text_pdf("x"), true).unwrap();
+        let id = h.state().views[0].id;
+        assert!(!h.state().session.get(id).unwrap().replies_hidden());
     }
 
     /// A password prompt or a host file still on its way in is not taken over by a compare.

@@ -479,9 +479,14 @@ impl Document {
     pub(crate) fn init_annot_sync(&mut self) {
         self.start_or_stop_annot_sync();
         // A document shared with the host draws no replies on the page, as the host's own viewer.
-        let replies_hidden = self.sync.is_some();
-        if self.config.hide_replies != replies_hidden {
-            self.config.hide_replies = replies_hidden;
+        self.set_replies_hidden(self.sync.is_some());
+    }
+
+    /// Draw the document's replies on the page, or leave them out (they stay in the file and the
+    /// comments list). Draws the pages again when it changes.
+    pub(crate) fn set_replies_hidden(&mut self, hidden: bool) {
+        if self.config.hide_replies != hidden {
+            self.config.hide_replies = hidden;
             self.renderer = RenderPool::new(self.display.clone(), render_threads(), self.config.clone());
             self.generation += 1;
             // Redrawing is not an edit: nothing to scan for.
@@ -489,6 +494,11 @@ impl Document {
                 st.seen = self.generation;
             }
         }
+    }
+
+    /// Are replies left out of the page picture?
+    pub fn replies_hidden(&self) -> bool {
+        self.config.hide_replies
     }
 
     fn start_or_stop_annot_sync(&mut self) {
