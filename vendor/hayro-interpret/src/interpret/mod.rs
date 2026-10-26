@@ -18,7 +18,7 @@ use crate::x_object::{
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
 use hayro_syntax::object::dict::keys::{
-    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, MCID, N, OC, QUADPOINTS, RECT, SUBTYPE,
+    ACTUAL_TEXT, ANNOTS, AP, AS, C, CA, F, IRT, MCID, N, OC, QUADPOINTS, RECT, RT, SUBTYPE,
 };
 use hayro_syntax::object::{Array, Dict, Object, Rect, Stream, dict_or_stream};
 use hayro_syntax::page::{ContentReader, Page, Resources};
@@ -108,6 +108,10 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: hide comments (markup annotations) but keep form fields (`/Widget`)
     /// and links, for the viewer's "Hide all comments".
     pub hide_comments: bool,
+    /// PdfCraft patch: skip the annotations that are replies (`/IRT` naming the annotation
+    /// replied to, `/RT` absent or `/R`; a `/RT /Group` annotation is part of its parent, not a
+    /// reply), so a reply is only in the comments list and not drawn over its parent.
+    pub hide_replies: bool,
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
@@ -139,6 +143,7 @@ impl Default for InterpreterSettings {
             warning_sink: Arc::new(|_| {}),
             render_annotations: true,
             hide_comments: false,
+            hide_replies: false,
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
@@ -189,6 +194,15 @@ pub fn interpret_page<'a>(
             // PdfCraft patch: "Hide all comments" keeps widgets and links.
             if context.settings.hide_comments
                 && !matches!(annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref(), Some(b"Widget" | b"Link"))
+            {
+                continue;
+            }
+
+            // PdfCraft patch: a reply is listed, not drawn (ISO 32000-1 §12.5.6.2: `/RT` is `/R`
+            // when absent; `/Group` makes the annotation part of the one it points at).
+            if context.settings.hide_replies
+                && annot.get::<Dict<'_>>(IRT).is_some()
+                && annot.get::<hayro_syntax::object::Name<'_>>(RT).as_deref() != Some(b"Group")
             {
                 continue;
             }

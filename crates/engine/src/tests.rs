@@ -7617,4 +7617,20 @@ mod annot_sync {
         s.annots_reset_at(id, vec![], 5).unwrap();
         assert!(names(&s, id, 0).is_empty());
     }
+
+    /// A shared document draws no replies on the page (they are in the comments list), as the
+    /// host's own viewer; any other document draws what it always did. The reply stays in the file.
+    #[test]
+    fn a_shared_document_leaves_replies_out_of_the_page_picture() {
+        let (s, id) = sharing("u-a");
+        assert!(s.get(id).unwrap().config.hide_replies);
+        let (s2, id2) = session_with(1);
+        assert!(!s2.get(id2).unwrap().config.hide_replies);
+        // Turning the sharing off (a new ownership) draws them again, and on hides them.
+        let (mut s3, id3) = session_with(1);
+        s3.set_ownership(Ownership { actor: Some("u-a".into()), annot_sync: true, ..Default::default() });
+        assert!(s3.get(id3).unwrap().config.hide_replies);
+        s3.set_ownership(Ownership::default());
+        assert!(!s3.get(id3).unwrap().config.hide_replies);
+    }
 }

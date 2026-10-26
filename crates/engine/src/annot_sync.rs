@@ -26,7 +26,8 @@ use pdfcraft_annot::AnnotError;
 use pdfcraft_annot::ownership::{is_protected, owner_of};
 use pdfcraft_cos::{Dict, ObjRef, Object};
 
-use crate::{DocId, Document, Edit, EditError, Scope, Session};
+use crate::{DocId, Document, Edit, EditError, Scope, Session, render_threads};
+use pdfcraft_render::RenderPool;
 
 type Cos = pdfcraft_cos::Document;
 
@@ -476,6 +477,21 @@ impl Document {
     /// Start tracking the actor's annotations from the document as it is (none of them are
     /// handed out), or stop. Called when the ownership of a document is set.
     pub(crate) fn init_annot_sync(&mut self) {
+        self.start_or_stop_annot_sync();
+        // A document shared with the host draws no replies on the page, as the host's own viewer.
+        let replies_hidden = self.sync.is_some();
+        if self.config.hide_replies != replies_hidden {
+            self.config.hide_replies = replies_hidden;
+            self.renderer = RenderPool::new(self.display.clone(), render_threads(), self.config.clone());
+            self.generation += 1;
+            // Redrawing is not an edit: nothing to scan for.
+            if let Some(st) = self.sync.as_mut() {
+                st.seen = self.generation;
+            }
+        }
+    }
+
+    fn start_or_stop_annot_sync(&mut self) {
         let on = self.ownership.annot_sync && self.ownership.actor.is_some() && self.editor.is_some();
         if !on {
             self.sync = None;
