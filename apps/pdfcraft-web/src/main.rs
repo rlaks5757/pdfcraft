@@ -165,8 +165,8 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   `{ annotId, authorId, xfdf }` (one annotation as XFDF, `name` = `/NM`). It makes the document
 ///   match the list; `seq` is the last `annots-changed` number the page had received when it
 ///   fetched the list, and the actor's annotations changed in later messages (or not yet sent) are
-///   left as they are. The actor's own annotations change in the working document only, so undo
-///   keeps their history. `pdfcraft:annots-apply`
+///   left as they are. The actor's own annotations change in the working document and in the undo
+///   states that hold the same version, so undoing an edit of theirs still works. `pdfcraft:annots-apply`
 ///   `{ upserts, deletes }` changes some (upserts are items, same `annotId` replaces; deletes are
 ///   annotIds). `pdfcraft:annots-reject` `{ items: [{ annotId, server }] }` puts back what the
 ///   server holds after it refused a change: `server` is an item, or `null` when the server has

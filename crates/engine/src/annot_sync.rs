@@ -87,7 +87,7 @@ enum Mode {
 }
 
 /// What a server message comes to: items to put in, `/NM`s to remove everywhere, the actor's own
-/// to remove from the working document only, and (reset) the `/NM`s it must not touch.
+/// to remove from the working document and the states that hold the same version, and (reset) the `/NM`s it must not touch.
 struct Plan {
     upserts: Vec<RemoteAnnot>,
     deletes: Vec<String>,
@@ -612,10 +612,10 @@ impl Session {
 
     /// The server's whole list, taken as the truth: what it lacks is removed and what it has is put
     /// in (an annotation already here keeps its place, so replies stay linked). The actor's own
-    /// annotations follow it too, in the working document only (the undo states keep the actor's
-    /// history), except the ones the actor changed after the page fetched the list: those are the
+    /// annotations follow it too, in the working document and in the undo and redo states that hold
+    /// the same version of them (a state with a version the actor made keeps it), except the ones the actor changed after the page fetched the list: those are the
     /// numbers above `seq` (see [`Session::record_annot_sent`]) or not yet handed out. Annotations
-    /// that came with the file are left alone.
+    /// that came with the file (never sent) are left alone.
     pub fn annots_reset(&mut self, id: DocId, items: Vec<RemoteAnnot>) -> Result<RemoteReport, EditError> {
         self.annots_reset_at(id, items, u64::MAX)
     }
@@ -704,7 +704,9 @@ impl Session {
                 let listed: HashSet<&str> = items.iter().map(|i| i.annot_id.as_str()).collect();
                 let gone = |nm: &&String| !listed.contains(nm.as_str()) && !guard.contains(*nm);
                 let deletes: Vec<String> = st.remote.keys().filter(gone).cloned().collect();
-                let mine_deletes: Vec<String> = st.mine.keys().filter(gone).cloned().collect();
+                // Only those the server knows: one that came with the file was never sent, so its absence
+                // from the list says nothing.
+                let mine_deletes: Vec<String> = st.mine.iter().filter(|(nm, e)| e.synced && gone(nm)).map(|(nm, _)| nm.clone()).collect();
                 Plan { upserts: items, deletes, mine_deletes, mode: Mode::Reset, guard }
             }
         }
@@ -712,7 +714,7 @@ impl Session {
 
     /// Apply the server's changes outside the edit pipeline: to the working document and to every
     /// state undo and redo can bring back, except that a reset changes the actor's own annotations
-    /// in the working document only. The caller refreshes. Returns the report and whether the
+    /// in the working document and the states that hold the same version of it. The caller refreshes. Returns the report and whether the
     /// document changed.
     fn patch_remote(doc: &mut Document, plan: Plan) -> Result<(RemoteReport, bool), EditError> {
         let Plan { upserts, deletes, mine_deletes, mode, guard } = plan;
@@ -722,7 +724,7 @@ impl Session {
         let actor = doc.ownership.actor.clone().unwrap_or_default();
         let hash_item = |a: &RemoteAnnot| hash_of(&(&a.author_id, &a.xfdf));
         let mut live: Vec<RemoteAnnot> = Vec::new();
-        // The actor's own annotations a reset differs on: they change in the working document only.
+        // The actor's own annotations a reset differs on: they change in the working document and the states holding the same version.
         let mut current_only: Vec<RemoteAnnot> = Vec::new();
         // The ones of the actor's the cache knows: they go only into states that have them.
         let mut cached_mine: HashSet<String> = HashSet::new();
@@ -773,6 +775,16 @@ impl Session {
         let mut pictures = pdfcraft_xfdf::PictureCache::default();
         let doc_items: Vec<&RemoteAnnot> = live.iter().chain(&current_only).collect();
         let doc_deletes: Vec<String> = deletes.iter().chain(&mine_deletes).cloned().collect();
+        // The actor's own annotations a reset changes: how each looks now, to tell the states that
+        // hold the same version (they get the change) from those holding one the actor made later or
+        // earlier (they stay, so undoing that edit still works).
+        let own_changed: HashSet<&str> = current_only.iter().map(|a| a.annot_id.as_str()).chain(mine_deletes.iter().map(String::as_str)).collect();
+        let before: HashMap<&str, u64> = if own_changed.is_empty() {
+            HashMap::new()
+        } else {
+            let idx = xf::index(&editor.cos);
+            own_changed.iter().filter_map(|nm| xf::export(&editor.cos, &idx, nm).map(|x| (*nm, hash_of(&x.xfdf)))).collect()
+        };
         let done = xf::apply(&mut editor.cos, &doc_items, &doc_deletes, &mut pictures);
         report.failed = done.failed.clone();
         report.applied = done.applied.len() + done.removed.len();
@@ -780,7 +792,8 @@ impl Session {
         // state undo then shows without it.
         let placed: HashSet<&str> = done.applied.iter().map(String::as_str).collect();
         let on_states: Vec<&RemoteAnnot> = live.iter().filter(|a| placed.contains(a.annot_id.as_str())).collect();
-        if !on_states.is_empty() || !deletes.is_empty() {
+        let own_placed: Vec<&RemoteAnnot> = current_only.iter().filter(|a| placed.contains(a.annot_id.as_str())).collect();
+        if !on_states.is_empty() || !deletes.is_empty() || !before.is_empty() {
             let any_mine = on_states.iter().any(|a| cached_mine.contains(&a.annot_id));
             for (_, state, _, _) in editor.undo.iter_mut().chain(editor.redo.iter_mut()) {
                 let here: HashSet<String> = if any_mine {
@@ -792,7 +805,14 @@ impl Session {
                 };
                 let items: Vec<&RemoteAnnot> =
                     on_states.iter().copied().filter(|a| !cached_mine.contains(&a.annot_id) || here.contains(&a.annot_id)).collect();
-                xf::apply(state, &items, &deletes, &mut pictures);
+                let (mut items, mut gone) = (items, deletes.clone());
+                if !before.is_empty() {
+                    let idx = xf::index(state);
+                    let same = |nm: &str| xf::export(state, &idx, nm).map(|x| hash_of(&x.xfdf)) == before.get(nm).copied();
+                    items.extend(own_placed.iter().copied().filter(|a| same(&a.annot_id)));
+                    gone.extend(mine_deletes.iter().filter(|nm| same(nm)).cloned());
+                }
+                xf::apply(state, &items, &gone, &mut pictures);
             }
         }
         if done.applied.is_empty() && done.removed.is_empty() {

@@ -7533,8 +7533,50 @@ mod annot_sync {
         let report = s.annots_reset_at(id, vec![edited], 2).unwrap();
         assert_eq!((report.applied, names(&s, id, 0).len()), (2, 1), "{report:?}");
         assert_eq!(s.take_annot_changes(id), None, "the server's state is not handed back");
-        // The undo states still hold the actor's history.
-        assert!(all_states(&s, id).iter().any(|st| st.contains(&a.annot_id)));
+        // The states that held the version the administrator deleted do not bring it back.
+        assert!(all_states(&s, id).iter().all(|st| !st.contains(&a.annot_id)));
+    }
+
+    /// A delete by an administrator holds against an undo of something else, and an undo of the
+    /// actor's own edit of that annotation still works.
+    #[test]
+    fn an_administrators_delete_survives_an_unrelated_undo_but_not_the_actors_own_edit_history() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let a = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 1, vec![a.annot_id.clone()]);
+        s.apply(id, Edit::MoveAnnotation { page: 0, index: 0, dx: 30.0, dy: 0.0 }).unwrap();
+        let moved = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 2, vec![moved.annot_id.clone()]);
+        s.apply(id, rect(0, 90.0)).unwrap();
+        let b = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 3, vec![b.annot_id.clone()]);
+        // The administrator deleted `a`; the list the page fetched after message 3 has only `b`.
+        s.annots_reset_at(id, vec![remote(&b, "alice")], 3).unwrap();
+        assert_eq!(names(&s, id, 0), vec![b.annot_id.clone()]);
+        // Undoing the unrelated `b` does not bring `a` back.
+        s.undo(id).unwrap();
+        assert!(names(&s, id, 0).is_empty(), "{:?}", names(&s, id, 0));
+        assert_eq!(s.take_annot_changes(id).unwrap().deletes, vec![b.annot_id.clone()]);
+        // The state before the move holds another version than the one the administrator deleted:
+        // it stays, so undoing the actor's own move still works.
+        s.undo(id).unwrap();
+        assert_eq!(names(&s, id, 0), vec![a.annot_id.clone()], "the actor's own history still undoes");
+    }
+
+    /// What came with the file is not known to the server; the first list does not remove it.
+    #[test]
+    fn an_annotation_that_came_with_the_file_stays_after_the_first_reset() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let own = only(s.take_annot_changes(id));
+        let bytes = s.save_bytes(id).unwrap();
+        let mut t = Session::new();
+        t.set_ownership(Ownership { actor: Some("alice".into()), annot_sync: true, ..Default::default() });
+        let id2 = t.open("f.pdf", None, bytes, None).unwrap();
+        assert_eq!(names(&t, id2, 0), vec![own.annot_id.clone()]);
+        t.annots_reset_at(id2, vec![], 0).unwrap();
+        assert_eq!(names(&t, id2, 0), vec![own.annot_id.clone()]);
     }
 
     /// An annotation made after the page fetched the list, handed out or not, is not touched by it.
