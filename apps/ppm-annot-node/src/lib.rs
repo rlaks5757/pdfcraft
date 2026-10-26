@@ -19,8 +19,8 @@ use pdfcraft_xfdf::{ExportRequest, RemoteItem, apply_remote, export_positions, l
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-fn open(pdf: &[u8]) -> Result<Document, String> {
-    Document::open(Arc::new(pdf.to_vec())).map_err(|e| format!("the PDF can't be opened: {e}"))
+fn open(pdf: Vec<u8>) -> Result<Document, String> {
+    Document::open(Arc::new(pdf)).map_err(|e| format!("the PDF can't be opened: {e}"))
 }
 
 fn save(doc: &Document) -> Result<Vec<u8>, String> {
@@ -44,7 +44,7 @@ struct ListEntry {
     exportable: bool,
 }
 
-pub fn list_json(pdf: &[u8]) -> Result<String, String> {
+pub fn list_json(pdf: Vec<u8>) -> Result<String, String> {
     let doc = open(pdf)?;
     let list: Vec<ListEntry> = list_annotations(&doc)
         .into_iter()
@@ -86,7 +86,7 @@ fn page0(page: usize) -> usize {
     page.wrapping_sub(1)
 }
 
-pub fn export_json(pdf: &[u8], requests: &str) -> Result<String, String> {
+pub fn export_json(pdf: Vec<u8>, requests: &str) -> Result<String, String> {
     let input: Vec<ExportIn> = serde_json::from_str(requests).map_err(|e| format!("bad export request: {e}"))?;
     let doc = open(pdf)?;
     let reqs: Vec<ExportRequest> =
@@ -108,10 +108,10 @@ struct StripIn {
     index: usize,
 }
 
-pub fn strip_pdf(pdf: &[u8], targets: &str) -> Result<Vec<u8>, String> {
+pub fn strip_pdf(pdf: Vec<u8>, targets: &str) -> Result<Vec<u8>, String> {
     let input: Vec<StripIn> = serde_json::from_str(targets).map_err(|e| format!("bad strip request: {e}"))?;
     if input.is_empty() {
-        return Ok(pdf.to_vec());
+        return Ok(pdf);
     }
     let mut doc = open(pdf)?;
     let at: Vec<(usize, usize)> = input.iter().map(|t| (page0(t.page), t.index)).collect();
@@ -127,10 +127,10 @@ struct MergeIn {
     xfdf: String,
 }
 
-pub fn merge_pdf(pdf: &[u8], items: &str) -> Result<Vec<u8>, String> {
+pub fn merge_pdf(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, String> {
     let input: Vec<MergeIn> = serde_json::from_str(items).map_err(|e| format!("bad merge request: {e}"))?;
     if input.is_empty() {
-        return Ok(pdf.to_vec());
+        return Ok(pdf);
     }
     let mut doc = open(pdf)?;
     let remote: Vec<RemoteItem> = input.iter().map(|i| RemoteItem { annot_id: &i.annot_id, author_id: &i.author_id, xfdf: &i.xfdf }).collect();
@@ -144,22 +144,22 @@ pub fn merge_pdf(pdf: &[u8], items: &str) -> Result<Vec<u8>, String> {
 }
 
 #[wasm_bindgen]
-pub fn list(pdf: &[u8]) -> Result<String, JsError> {
+pub fn list(pdf: Vec<u8>) -> Result<String, JsError> {
     list_json(pdf).map_err(|e| JsError::new(&e))
 }
 
 #[wasm_bindgen(js_name = exportXfdf)]
-pub fn export_xfdf(pdf: &[u8], requests: &str) -> Result<String, JsError> {
+pub fn export_xfdf(pdf: Vec<u8>, requests: &str) -> Result<String, JsError> {
     export_json(pdf, requests).map_err(|e| JsError::new(&e))
 }
 
 #[wasm_bindgen]
-pub fn strip(pdf: &[u8], targets: &str) -> Result<Vec<u8>, JsError> {
+pub fn strip(pdf: Vec<u8>, targets: &str) -> Result<Vec<u8>, JsError> {
     strip_pdf(pdf, targets).map_err(|e| JsError::new(&e))
 }
 
 #[wasm_bindgen]
-pub fn merge(pdf: &[u8], items: &str) -> Result<Vec<u8>, JsError> {
+pub fn merge(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, JsError> {
     merge_pdf(pdf, items).map_err(|e| JsError::new(&e))
 }
 
@@ -169,15 +169,15 @@ mod tests {
 
     #[test]
     fn bad_input_is_an_error_not_a_panic() {
-        assert!(list_json(b"not a pdf").is_err());
-        assert!(export_json(b"", "[]").is_err());
-        assert!(strip_pdf(b"x", "not json").unwrap_err().contains("bad strip request"));
-        assert!(merge_pdf(b"x", "{}").unwrap_err().contains("bad merge request"));
+        assert!(list_json(b"not a pdf".to_vec()).is_err());
+        assert!(export_json(Vec::new(), "[]").is_err());
+        assert!(strip_pdf(b"x".to_vec(), "not json").unwrap_err().contains("bad strip request"));
+        assert!(merge_pdf(b"x".to_vec(), "{}").unwrap_err().contains("bad merge request"));
     }
 
     #[test]
     fn nothing_to_do_returns_the_input() {
-        assert_eq!(strip_pdf(b"anything", "[]").unwrap(), b"anything");
-        assert_eq!(merge_pdf(b"anything", "[]").unwrap(), b"anything");
+        assert_eq!(strip_pdf(b"anything".to_vec(), "[]").unwrap(), b"anything");
+        assert_eq!(merge_pdf(b"anything".to_vec(), "[]").unwrap(), b"anything");
     }
 }

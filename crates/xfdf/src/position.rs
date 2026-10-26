@@ -7,6 +7,8 @@
 //! the strip that follow it as long as the document isn't changed in between.
 
 use super::single::{annots_of, element_xfdf};
+use std::collections::HashSet;
+
 use super::*;
 
 /// Subtypes that have an XFDF form here but that the host's database doesn't take.
@@ -77,7 +79,7 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotEntry> {
         .collect();
     // A reply to something that can't be exchanged can't be either.
     loop {
-        let bad: Vec<(usize, usize)> = list.iter().filter(|e| !e.exportable).map(|e| (e.page, e.index)).collect();
+        let bad: HashSet<(usize, usize)> = list.iter().filter(|e| !e.exportable).map(|e| (e.page, e.index)).collect();
         let mut changed = false;
         for e in list.iter_mut() {
             if e.exportable && e.irt.is_some_and(|t| bad.contains(&t)) {
@@ -97,36 +99,48 @@ pub fn list_annotations(doc: &Document) -> Vec<AnnotEntry> {
 /// The document is not changed.
 pub fn export_positions(doc: &Document, requests: &[ExportRequest]) -> Vec<Result<AnnotXfdf, DataError>> {
     let pages = pdfcraft_model::pages(doc);
-    let target = |r: &ExportRequest| -> Option<ObjRef> { annots_of(doc, pages.get(r.page)?.obj).get(r.index)?.as_ref() };
-    let mut names: HashMap<ObjRef, String> = HashMap::new();
+    // Each page's /Annots is read once, not once per request.
+    let mut lists: HashMap<usize, Vec<Object>> = HashMap::new();
+    let mut targets: Vec<Option<ObjRef>> = Vec::with_capacity(requests.len());
     for r in requests {
-        if let Some(obj) = target(r) {
+        let list = pages.get(r.page).map(|p| lists.entry(r.page).or_insert_with(|| annots_of(doc, p.obj)));
+        targets.push(list.and_then(|l| l.get(r.index)).and_then(Object::as_ref));
+    }
+    let mut names: HashMap<ObjRef, String> = HashMap::new();
+    for (r, t) in requests.iter().zip(&targets) {
+        if let Some(obj) = *t {
             names.insert(obj, r.name.to_string());
         }
     }
     // A parent that wasn't asked for still gets the name the caller gave for the reply link.
-    for r in requests {
-        if let (Some(obj), Some(parent)) = (target(r), r.in_reply_to)
+    for (r, t) in requests.iter().zip(&targets) {
+        if let (Some(obj), Some(parent)) = (*t, r.in_reply_to)
             && let Some(irt) = doc.get(obj).as_dict().and_then(|d| d.get(b"IRT")).and_then(Object::as_ref)
         {
             names.entry(irt).or_insert_with(|| parent.to_string());
         }
     }
-    requests
-        .iter()
-        .map(|r| {
-            let Some(obj) = target(r) else { return Err(DataError::NotFound(format!("page {} index {}", r.page + 1, r.index))) };
-            let mut d = doc.get(obj).as_dict().cloned().unwrap_or_default();
-            // The name travels in the element; the file's own /NM (if any) is not what it is called.
-            d.set(b"NM".to_vec(), PdfString::text(r.name));
-            // The parent the caller named wins over whatever the file's parent was exported as.
-            let mut own = names.clone();
-            if let (Some(irt), Some(parent)) = (d.get(b"IRT").and_then(Object::as_ref), r.in_reply_to) {
-                own.insert(irt, parent.to_string());
-            }
-            element_xfdf(doc, &d, r.page, &own, r.name)
-        })
-        .collect()
+    let mut out = Vec::with_capacity(requests.len());
+    for (r, t) in requests.iter().zip(&targets) {
+        let Some(obj) = *t else {
+            out.push(Err(DataError::NotFound(format!("page {} index {}", r.page + 1, r.index))));
+            continue;
+        };
+        let mut d = doc.get(obj).as_dict().cloned().unwrap_or_default();
+        // The name travels in the element; the file's own /NM (if any) is not what it is called.
+        d.set(b"NM".to_vec(), PdfString::text(r.name));
+        // The parent the caller named wins over whatever the file's parent was exported as: that one
+        // entry is swapped in the shared map for this call and put back, instead of copying the map.
+        let swapped = d.get(b"IRT").and_then(Object::as_ref).zip(r.in_reply_to).map(|(irt, parent)| (irt, names.insert(irt, parent.to_string())));
+        out.push(element_xfdf(doc, &d, r.page, &names, r.name));
+        if let Some((irt, before)) = swapped {
+            match before {
+                Some(old) => names.insert(irt, old),
+                None => names.remove(&irt),
+            };
+        }
+    }
+    out
 }
 
 /// Remove the annotations at the given (page, index) positions with their pop-ups. Replies are
@@ -134,9 +148,12 @@ pub fn export_positions(doc: &Document, requests: &[ExportRequest]) -> Vec<Resul
 pub fn strip_positions(doc: &mut Document, targets: &[(usize, usize)]) -> Result<usize, DataError> {
     let pages = pdfcraft_model::pages(doc);
     let mut by_page: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Each page's /Annots length is read once, not once per target.
+    let mut lens: HashMap<usize, usize> = HashMap::new();
     for &(page, index) in targets {
         let Some(p) = pages.get(page) else { return Err(DataError::NotFound(format!("page {}", page + 1))) };
-        if index >= annots_of(doc, p.obj).len() {
+        let len = *lens.entry(page).or_insert_with(|| annots_of(doc, p.obj).len());
+        if index >= len {
             return Err(DataError::NotFound(format!("page {} index {index}", page + 1)));
         }
         by_page.entry(page).or_default().push(index);
@@ -145,12 +162,13 @@ pub fn strip_positions(doc: &mut Document, targets: &[(usize, usize)]) -> Result
     for (page, indexes) in by_page {
         let page_ref = pages[page].obj;
         let list = annots_of(doc, page_ref);
-        let mut doomed: Vec<ObjRef> = Vec::new();
+        let wanted: HashSet<usize> = indexes.iter().copied().collect();
+        let mut doomed: HashSet<ObjRef> = HashSet::new();
         for &i in &indexes {
             if let Some(r) = list[i].as_ref() {
-                doomed.push(r);
+                doomed.insert(r);
                 if let Some(pop) = doc.get(r).as_dict().and_then(|d| d.reference(b"Popup")) {
-                    doomed.push(pop);
+                    doomed.insert(pop);
                 }
             }
         }
@@ -162,13 +180,13 @@ pub fn strip_positions(doc: &mut Document, targets: &[(usize, usize)]) -> Result
                     .as_dict()
                     .is_some_and(|d| d.name(b"Subtype") == Some(b"Popup") && d.reference(b"Parent").is_some_and(|p| doomed.contains(&p)))
             {
-                doomed.push(r);
+                doomed.insert(r);
             }
         }
         let kept: Vec<Object> = list
             .iter()
             .enumerate()
-            .filter(|(i, e)| !indexes.contains(i) && !e.as_ref().is_some_and(|r| doomed.contains(&r)))
+            .filter(|(i, e)| !wanted.contains(i) && !e.as_ref().is_some_and(|r| doomed.contains(&r)))
             .map(|(_, e)| e.clone())
             .collect();
         removed += list.len() - kept.len();
