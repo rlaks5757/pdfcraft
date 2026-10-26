@@ -186,7 +186,7 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     c
 }
 
-fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
+pub(crate) fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 

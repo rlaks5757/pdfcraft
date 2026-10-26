@@ -504,7 +504,7 @@ impl PdfCraftApp {
         };
         // A host-armed stamp is only "placed" if the edit is accepted.
         let host_stamp = match &edit {
-            Edit::AddCustomStamp { page, extra: Some(_), .. } => Some(*page),
+            Edit::AddCustomStamp { page, extra: Some(_), .. } | Edit::AddSignBox { page, .. } => Some(*page),
             _ => None,
         };
         let accepted = self.apply_edit(edit.clone());

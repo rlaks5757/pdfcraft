@@ -379,6 +379,14 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
         let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
         let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
     }
+    // A text box's alignment (`/Q`): XFDF names it `justification`, left being the default.
+    if *tag == "freetext" {
+        match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => attrs.push_str(" justification=\"center\""),
+            Some(2) => attrs.push_str(" justification=\"right\""),
+            _ => {}
+        }
+    }
     // A callout: its leader path, text-box inset, intent and (single-name) line ending.
     let cl = nums_of(doc, d.get(b"CL"));
     if cl.len() == 4 || cl.len() == 6 {
@@ -798,6 +806,13 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             bs.set(b"D".to_vec(), arr(&dashes));
         }
         d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    if let Some(q) = match node.attribute("justification").map(str::to_ascii_lowercase).as_deref() {
+        Some("center" | "centered") => Some(1),
+        Some("right") => Some(2),
+        _ => None,
+    } {
+        d.set(b"Q".to_vec(), Object::Int(q));
     }
     if let Some(q) = node.attribute("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));

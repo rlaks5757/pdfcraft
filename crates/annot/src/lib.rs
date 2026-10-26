@@ -1829,6 +1829,31 @@ pub fn set_extra(doc: &mut Document, page: usize, index: usize, key: &str, value
     Ok(())
 }
 
+/// The private key of a sign box's role (the PPM host's `/PpmSignRole`).
+pub const SIGN_ROLE_KEY: &str = "PpmSignRole";
+
+/// A sign box the way the PPM web viewer draws one: a centred, black, 1 pt dashed (4,3) text box
+/// whose text and subject are `label`, with `role` kept in `/PpmSignRole`. `rect` is in user space.
+pub fn add_sign_box(doc: &mut Document, page: usize, rect: [f64; 4], role: &str, label: &str, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
+    let shape = Shape::TextBox { rect, font_size: 12.0 };
+    let style = Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None };
+    let index = add_annotation(doc, &NewAnnotation { page, shape, style, contents: label.to_string(), author: author.to_string() }, meta)?;
+    let (_, r) = annot_ref(doc, page, index)?;
+    doc.update_dict(r, |d| {
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(1.0));
+        bs.set(b"S".to_vec(), Object::name("D"));
+        bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(3.0)]));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"Q".to_vec(), Object::Int(1));
+        d.set(b"Subj".to_vec(), PdfString::text(label));
+        d.set(SIGN_ROLE_KEY.as_bytes().to_vec(), PdfString::text(role));
+        rich_text(d);
+    })?;
+    draw_appearance(doc, r)?;
+    Ok(index)
+}
+
 /// The private key holding the file a picture stamp was made from (a stream of the original
 /// PNG/JPEG bytes), so the annotation database sends it as it came instead of re-encoding.
 pub const PICTURE_SOURCE_KEY: &str = "PpmImageSrc";

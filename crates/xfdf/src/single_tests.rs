@@ -428,6 +428,23 @@ fn a_remote_redaction_mark_is_never_hidden() {
 /// With `XFDF_DUMP_DIR` set, writes sample items (`<id>.json`: id, page, kind, xfdf) for checking
 /// against the server's own parser (`packages/contracts/src/xfdf.ts`). Does nothing otherwise.
 #[test]
+fn an_added_sign_box_exports_the_viewer_form() {
+    let mut src = blank();
+    pdfcraft_annot::add_sign_box(&mut src, 0, [20.0, 200.0, 200.0, 260.0], "reviewer", "서명란 · reviewer", "Ada", &meta("sb")).unwrap();
+    let item = export_annotation(&src, "sb").unwrap();
+    assert_server_rules(&item);
+    let x = &item.xfdf;
+    assert!(x.starts_with("<?xml") && x.contains("<freetext"), "{x}");
+    assert!(x.contains("ppmSignRole") && x.contains("reviewer"), "{x}");
+    assert!(x.contains("style=\"dash\"") && x.contains("dashes=\"4,3\""), "{x}");
+    assert!(x.contains("justification=\"center\"") && x.contains("서명란 · reviewer"), "{x}");
+    // And back in: the role and the look survive a round trip.
+    let mut dst = blank();
+    let again = round_trip(&src, &mut dst, "sb");
+    assert!(again.xfdf.contains("ppmSignRole"), "{}", again.xfdf);
+}
+
+#[test]
 fn dump_samples_for_the_server_parser() {
     let Ok(dir) = std::env::var("XFDF_DUMP_DIR") else { return };
     let mut src = blank();
