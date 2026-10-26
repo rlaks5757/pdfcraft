@@ -304,6 +304,8 @@ impl PdfCraftApp {
                 None => None,
             },
         );
+        // The pages to draw again; `None` is every page.
+        let mut redraw: Option<std::collections::BTreeSet<usize>> = Some(Default::default());
         let changed = match self.session.annots_run(doc, ops) {
             Ok(reports) => {
                 for report in &reports {
@@ -311,10 +313,17 @@ impl PdfCraftApp {
                         log::warn!("annotation {annot_id} from the host was not applied: {why}");
                     }
                 }
+                for report in &reports {
+                    match (&mut redraw, report.pages_unknown) {
+                        (Some(pages), false) => pages.extend(&report.pages),
+                        _ => redraw = None,
+                    }
+                }
                 reports.iter().any(|r| r.applied > 0)
             }
             Err(e) => {
                 log::warn!("annotation message refused: {e}");
+                redraw = None;
                 true
             }
         };
@@ -330,7 +339,7 @@ impl PdfCraftApp {
         let (dragged_at, composing_at) = (position(self, &dragged), position(self, &composing));
         if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
             // What is on screen was drawn before the message: draw the pages again.
-            view.annotations_changed_remotely();
+            view.annotations_changed_remotely(redraw.as_ref());
             view.comments.selected = selected_at;
             view.comments.editing = match (editing, editing_at) {
                 (Some((_, _, text)), Some((p, i))) => Some((p, i, text)),
@@ -464,11 +473,16 @@ mod tests {
 
     /// One blank page.
     fn pdf() -> Vec<u8> {
-        let objs = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
-            "<< /Type /Page /Parent 2 0 R >>",
+        pdf_pages(1)
+    }
+
+    fn pdf_pages(n: usize) -> Vec<u8> {
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 3)).collect();
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")),
         ];
+        objs.extend((0..n).map(|_| "<< /Type /Page /Parent 2 0 R >>".to_string()));
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -485,8 +499,12 @@ mod tests {
     }
 
     fn square(id: &str) -> RemoteAnnot {
+        square_on(id, 0)
+    }
+
+    fn square_on(id: &str, page: usize) -> RemoteAnnot {
         let xfdf = format!(
-            r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><annots><square page="0" name="{id}" rect="10,10,60,60" title="Kim" flags="print"/></annots></xfdf>"#
+            r#"<?xml version="1.0" encoding="UTF-8" ?><xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve"><annots><square page="{page}" name="{id}" rect="10,10,60,60" title="Kim" flags="print"/></annots></xfdf>"#
         );
         RemoteAnnot { annot_id: id.into(), author_id: "u-kim".into(), xfdf }
     }
@@ -944,5 +962,36 @@ mod tests {
         // Stop before the next render replaces the old raster.
         h.step();
         assert!(h.state().views[0].page_is_stale(0), "the old raster waits for its replacement");
+    }
+
+    /// Only the pages the message touched are drawn again, not every page of a large document.
+    #[test]
+    fn a_remote_change_draws_only_its_own_pages_again() {
+        let app = PdfCraftApp::new();
+        app.ownership_inbox.lock().unwrap().push(share());
+        app.startup_inbox.lock().unwrap().push(("a.pdf".into(), pdf_pages(3)));
+        let inbox = app.annot_inbox.clone();
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        for _ in 0..80 {
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let view = &h.state().views[0];
+        assert!(view.has_raster(1), "page 1 was drawn");
+        assert!([0, 1, 2].iter().all(|p| !view.page_is_stale(*p)));
+        inbox.lock().unwrap().push(AnnotCommand::Apply { upserts: vec![square_on("one", 1)], deletes: vec![] });
+        h.step();
+        let view = &h.state().views[0];
+        assert!(view.page_is_stale(1), "the page with the new annotation is drawn again");
+        assert!(!view.page_is_stale(0) && !view.page_is_stale(2), "the other pages are left alone");
+        // Taking it away draws the page it was on again.
+        for _ in 0..80 {
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        inbox.lock().unwrap().push(AnnotCommand::Apply { upserts: vec![], deletes: vec!["one".into()] });
+        h.step();
+        let view = &h.state().views[0];
+        assert!(view.page_is_stale(1) && !view.page_is_stale(0) && !view.page_is_stale(2));
     }
 }

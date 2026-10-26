@@ -112,12 +112,16 @@ pub enum AnnotOp {
 }
 
 /// What a remote application did: how many items were applied or skipped as already current, and
-/// the ones that could not be applied (annot id, reason).
+/// the ones that could not be applied (annot id, reason), and the pages the change touched (the
+/// page an annotation was on and the one it is on now), so a view draws only those again.
+/// `pages_unknown` is set when an applied item's page could not be found: every page is then touched.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteReport {
     pub applied: usize,
     pub skipped: usize,
     pub failed: Vec<(String, String)>,
+    pub pages: std::collections::BTreeSet<usize>,
+    pub pages_unknown: bool,
 }
 
 /// The XFDF functions this module needs; the one place that names the xfdf crate's API.
@@ -252,6 +256,17 @@ fn walk(cos: &Cos, mut f: impl FnMut(usize, usize, Option<ObjRef>, Option<&Arc<O
             }
         }
     }
+}
+
+/// The page each of `names` is on.
+fn pages_of(cos: &Cos, names: &HashSet<&str>) -> HashMap<String, usize> {
+    let mut found = HashMap::new();
+    walk(cos, |page, _, _, _, d| {
+        if let Some(nm) = nm_of(cos, d).filter(|n| names.contains(n.as_str())) {
+            found.entry(nm).or_insert(page);
+        }
+    });
+    found
 }
 
 fn nm_of(cos: &Cos, d: &Dict) -> Option<String> {
@@ -785,9 +800,22 @@ impl Session {
             let idx = xf::index(&editor.cos);
             own_changed.iter().filter_map(|nm| xf::export(&editor.cos, &idx, nm).map(|x| (*nm, hash_of(&x.xfdf)))).collect()
         };
+        // The pages the items are on before and after: the ones to draw again.
+        let wanted: HashSet<&str> = doc_items.iter().map(|a| a.annot_id.as_str()).chain(doc_deletes.iter().map(String::as_str)).collect();
+        let old_pages = pages_of(&editor.cos, &wanted);
         let done = xf::apply(&mut editor.cos, &doc_items, &doc_deletes, &mut pictures);
         report.failed = done.failed.clone();
         report.applied = done.applied.len() + done.removed.len();
+        if report.applied > 0 {
+            let changed: HashSet<&str> = done.applied.iter().chain(&done.removed).map(String::as_str).collect();
+            let new_pages = pages_of(&editor.cos, &changed);
+            for nm in &changed {
+                match (old_pages.get(*nm), new_pages.get(*nm)) {
+                    (None, None) => report.pages_unknown = true,
+                    (old, new) => report.pages.extend(old.into_iter().chain(new).copied()),
+                }
+            }
+        }
         // The stored states get what the working document got; one that can't take an item is a
         // state undo then shows without it.
         let placed: HashSet<&str> = done.applied.iter().map(String::as_str).collect();

@@ -987,12 +987,20 @@ impl DocView {
         }
     }
 
-    /// The host's annotation messages changed some pages (which ones is not known here): re-render
-    /// them all, keeping the old rasters on screen until the new ones arrive.
-    pub fn annotations_changed_remotely(&mut self) {
-        for page in 0..self.page_count {
-            self.page_changed(page);
+    /// The host's annotation messages changed `pages` (`None`: not known, so all of them): re-render
+    /// those, keeping the old rasters on screen until the new ones arrive.
+    pub fn annotations_changed_remotely(&mut self, pages: Option<&std::collections::BTreeSet<usize>>) {
+        let count = self.page_count;
+        match pages {
+            Some(pages) => pages.iter().filter(|p| **p < count).for_each(|p| self.page_changed(*p)),
+            None => (0..count).for_each(|p| self.page_changed(p)),
         }
+    }
+
+    /// Is there a raster of `page`, a thumbnail or a tile?
+    #[cfg(test)]
+    pub(crate) fn has_raster(&self, page: usize) -> bool {
+        self.pages.contains_key(&page)
     }
 
     /// A raster of `page` that is out of date is on screen or waiting to be replaced.
