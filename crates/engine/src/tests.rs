@@ -7564,6 +7564,29 @@ mod annot_sync {
         assert_eq!(names(&s, id, 0), vec![a.annot_id.clone()], "the actor's own history still undoes");
     }
 
+    /// An annotation the working document can't export has no known version: a state that lacks it
+    /// does not get it from a reset.
+    #[test]
+    fn a_reset_does_not_put_an_unexportable_annotation_into_a_state_without_it() {
+        let (mut s, id) = sharing("alice");
+        s.apply(id, rect(0, 10.0)).unwrap();
+        let a = only(s.take_annot_changes(id));
+        s.apply(id, rect(0, 90.0)).unwrap();
+        let b = only(s.take_annot_changes(id));
+        s.record_annot_sent(id, 1, vec![a.annot_id.clone(), b.annot_id.clone()]);
+        s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "x".repeat(250_000) }).unwrap();
+        // Too big for the server: nothing goes out and the working copy of `a` has no exportable version.
+        assert_eq!(s.take_annot_changes(id), None);
+        let wording = |u: &AnnotUpsert| {
+            let mut r = remote(u, "alice");
+            r.xfdf = r.xfdf.replace("<square ", "<square opacity=\"0.5\" ");
+            r
+        };
+        s.annots_reset_at(id, vec![wording(&a), wording(&b)], 1).unwrap();
+        let states = all_states(&s, id);
+        assert!(states[0].is_empty(), "the state from before they were made stays without them: {states:?}");
+    }
+
     /// What came with the file is not known to the server; the first list does not remove it.
     #[test]
     fn an_annotation_that_came_with_the_file_stays_after_the_first_reset() {

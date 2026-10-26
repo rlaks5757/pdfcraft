@@ -808,7 +808,11 @@ impl Session {
                 let (mut items, mut gone) = (items, deletes.clone());
                 if !before.is_empty() {
                     let idx = xf::index(state);
-                    let same = |nm: &str| xf::export(state, &idx, nm).map(|x| hash_of(&x.xfdf)) == before.get(nm).copied();
+                    // A version that can't be exported (here or in the working document) is not known to be the same.
+                    let same = |nm: &str| match (xf::export(state, &idx, nm), before.get(nm)) {
+                        (Some(x), Some(b)) => hash_of(&x.xfdf) == *b,
+                        _ => false,
+                    };
                     items.extend(own_placed.iter().copied().filter(|a| same(&a.annot_id)));
                     gone.extend(mine_deletes.iter().filter(|nm| same(nm)).cloned());
                 }
