@@ -226,9 +226,9 @@ mod tests {
 
     #[test]
     fn a_sign_box_request_is_armed_at_its_fixed_size_and_bad_ones_refused() {
-        let a = validate_sign_box("s1", "reviewer", "서명란 · reviewer").unwrap();
+        let a = validate_sign_box("s1", "reviewer", "reviewer 서명란").unwrap();
         assert_eq!((a.width, a.height), SIGN_BOX_SIZE);
-        assert_eq!(a.sign_box, Some(("reviewer".into(), "서명란 · reviewer".into())));
+        assert_eq!(a.sign_box, Some(("reviewer".into(), "reviewer 서명란".into())));
         assert!(validate_sign_box("", "reviewer", "x").is_err(), "empty id");
         assert!(validate_sign_box("s", " ", "x").is_err(), "empty role");
         assert!(validate_sign_box("s", "r", "").is_err(), "empty label");
@@ -397,13 +397,13 @@ mod flow_tests {
     #[test]
     fn a_sign_box_click_adds_a_role_box_and_reports_placed() {
         let (mut h, ev) = app(true);
-        send(&mut h, StampCommand::AddSignBox { id: "sb".into(), role: "reviewer".into(), label: "서명란 · reviewer".into() });
+        send(&mut h, StampCommand::AddSignBox { id: "sb".into(), role: "reviewer".into(), label: "reviewer 서명란".into() });
         assert_eq!(h.state().quick_tool, QuickTool::HostStamp);
         h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::AddSignBox {
             page: 0,
             rect: [10.0, 10.0, 190.0, 70.0],
             role: "reviewer".into(),
-            label: "서명란 · reviewer".into(),
+            label: "reviewer 서명란".into(),
             author: "Ada".into(),
         });
         h.state_mut().quick_tool = QuickTool::Select;

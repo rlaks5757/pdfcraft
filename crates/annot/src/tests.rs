@@ -1636,7 +1636,7 @@ fn helv(doc: &Document, r: ObjRef) -> Object {
 #[test]
 fn a_sign_box_is_a_centred_dashed_text_box_with_its_role() {
     let mut doc = fixture();
-    let label = "서명란 · reviewer";
+    let label = "reviewer 서명란";
     let i = add_sign_box(&mut doc, 0, [20.0, 600.0, 200.0, 660.0], "reviewer", label, "Ada", &meta("sb")).unwrap();
     let doc = reopen(&doc);
     let d = list(&doc, 0)[i].clone();
