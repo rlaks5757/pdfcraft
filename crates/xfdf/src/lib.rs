@@ -807,11 +807,19 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         }
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
-    if let Some(q) = match node.attribute("justification").map(str::to_ascii_lowercase).as_deref() {
-        Some("center" | "centered") => Some(1),
-        Some("right") => Some(2),
+    // Alignment: the `justification` attribute (name or 0/1/2) wins; else the `text-align` of `<defaultstyle>`,
+    // the only place the web viewer writes it.
+    let align = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+        "left" | "0" => Some(0),
+        "center" | "centered" | "1" => Some(1),
+        "right" | "2" => Some(2),
         _ => None,
-    } {
+    };
+    let style_align = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        let css = c.text().unwrap_or("");
+        css.split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("text-align")).and_then(|(_, v)| align(v)))
+    });
+    if let Some(q) = node.attribute("justification").and_then(align).or(style_align).filter(|q| *q != 0) {
         d.set(b"Q".to_vec(), Object::Int(q));
     }
     if let Some(q) = node.attribute("coords") {

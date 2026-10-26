@@ -445,6 +445,29 @@ fn an_added_sign_box_exports_the_viewer_form() {
 }
 
 #[test]
+fn text_box_alignment_is_read_from_justification_or_defaultstyle() {
+    let q_of = |attr: &str, child: &str| {
+        let xfdf = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><fields /><annots><freetext page=\"0\" rect=\"20,200,200,260\" name=\"a\" {attr}><contents>x</contents>{child}</freetext></annots></xfdf>"
+        );
+        let mut dst = blank();
+        let report = apply_remote(&mut dst, &[RemoteItem { annot_id: "a", author_id: "u-a", xfdf: &xfdf }], &[]);
+        assert_eq!(report.failed, vec![], "{xfdf}");
+        let r = find_by_name(&dst, "a").unwrap();
+        dst.get(r).as_dict().unwrap().int(b"Q").unwrap_or(0)
+    };
+    let style = "<defaultstyle>font: Helvetica 12pt; text-align: center; color: #000000</defaultstyle>";
+    assert_eq!(q_of("justification=\"center\"", ""), 1);
+    assert_eq!(q_of("justification=\"centered\"", ""), 1);
+    assert_eq!(q_of("justification=\"right\"", ""), 2);
+    assert_eq!(q_of("justification=\"1\"", ""), 1);
+    assert_eq!(q_of("justification=\"2\"", ""), 2);
+    assert_eq!(q_of("", style), 1, "defaultstyle only");
+    assert_eq!(q_of("justification=\"right\"", style), 2, "the attribute wins");
+    assert_eq!(q_of("", ""), 0);
+}
+
+#[test]
 fn dump_samples_for_the_server_parser() {
     let Ok(dir) = std::env::var("XFDF_DUMP_DIR") else { return };
     let mut src = blank();
