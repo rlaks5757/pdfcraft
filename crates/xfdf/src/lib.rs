@@ -415,6 +415,33 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
     if let Some(da) = text_of(doc, d, b"DA") {
         let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
     }
+    // The web viewer reads a text box's alignment only from here (CSS), not from `justification`.
+    if *tag == "freetext" {
+        let align = match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => Some("center"),
+            Some(2) => Some("right"),
+            _ => None,
+        };
+        if let Some(align) = align {
+            let da = text_of(doc, d, b"DA").unwrap_or_default();
+            let t: Vec<&str> = da.split_whitespace().collect();
+            let size = t.iter().position(|x| *x == "Tf").and_then(|i| i.checked_sub(1)).and_then(|i| t[i].parse::<f64>().ok()).unwrap_or(12.0);
+            let hex = t
+                .iter()
+                .position(|x| *x == "rg")
+                .filter(|i| *i >= 3)
+                .map(|i| {
+                    let c = |k: usize| (t[i - 3 + k].parse::<f64>().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    format!("#{:02X}{:02X}{:02X}", c(0), c(1), c(2))
+                })
+                .unwrap_or_else(|| "#000000".into());
+            let _ = write!(
+                out,
+                "<defaultstyle>font: Helvetica {}pt; text-align: {align}; text-vertical-align: top; color: {hex}</defaultstyle>",
+                n(size)
+            );
+        }
+    }
     let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     if !ink.is_empty() {
         out.push_str("<inklist>");
@@ -807,8 +834,8 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         }
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
-    // Alignment: the `justification` attribute (name or 0/1/2) wins; else the `text-align` of `<defaultstyle>`,
-    // the only place the web viewer writes it.
+    // Alignment: the `text-align` of `<defaultstyle>` (where the web viewer keeps it) wins; else the
+    // `justification` attribute (name or 0/1/2).
     let align = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
         "left" | "0" => Some(0),
         "center" | "centered" | "1" => Some(1),
@@ -819,7 +846,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         let css = c.text().unwrap_or("");
         css.split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("text-align")).and_then(|(_, v)| align(v)))
     });
-    if let Some(q) = node.attribute("justification").and_then(align).or(style_align).filter(|q| *q != 0) {
+    if let Some(q) = style_align.or_else(|| node.attribute("justification").and_then(align)).filter(|q| *q != 0) {
         d.set(b"Q".to_vec(), Object::Int(q));
     }
     if let Some(q) = node.attribute("coords") {

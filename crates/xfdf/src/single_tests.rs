@@ -437,7 +437,7 @@ fn an_added_sign_box_exports_the_viewer_form() {
     assert!(x.starts_with("<?xml") && x.contains("<freetext"), "{x}");
     assert!(x.contains("ppmSignRole") && x.contains("reviewer"), "{x}");
     assert!(x.contains("style=\"dash\"") && x.contains("dashes=\"4,3\""), "{x}");
-    assert!(x.contains("justification=\"center\"") && x.contains("서명란 · reviewer"), "{x}");
+    assert!(x.contains("justification=\"center\"") && x.contains("text-align: center") && x.contains("Helvetica 12pt") && x.contains("서명란 · reviewer"), "{x}");
     // And back in: the role and the look survive a round trip.
     let mut dst = blank();
     let again = round_trip(&src, &mut dst, "sb");
@@ -463,7 +463,7 @@ fn text_box_alignment_is_read_from_justification_or_defaultstyle() {
     assert_eq!(q_of("justification=\"1\"", ""), 1);
     assert_eq!(q_of("justification=\"2\"", ""), 2);
     assert_eq!(q_of("", style), 1, "defaultstyle only");
-    assert_eq!(q_of("justification=\"right\"", style), 2, "the attribute wins");
+    assert_eq!(q_of("justification=\"right\"", style), 1, "defaultstyle wins");
     assert_eq!(q_of("", ""), 0);
 }
 
