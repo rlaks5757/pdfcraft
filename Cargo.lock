@@ -4431,6 +4431,7 @@ name = "pdfcraft-xfdf"
 version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
+ "image",
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-create",
@@ -4440,6 +4441,7 @@ dependencies = [
  "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
+ "zune-jpeg",
 ]
 
 [[package]]

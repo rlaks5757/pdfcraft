@@ -643,36 +643,89 @@ fn sof(w: u16, h: u16) -> Vec<u8> {
     v
 }
 
-#[test]
-fn jpeg_size_check_reads_the_frame_the_embedder_reads() {
-    use crate::single::pixel_size;
-    let plain = [vec![0xFF, 0xD8], sof(30, 20), vec![0xFF, 0xD9]].concat();
-    assert_eq!(pixel_size(&plain), Some((30, 20)));
-    // A bare marker before the real frame must not make the walk land elsewhere: the frame
-    // header is read as a header, not as the length of a "segment" starting at FF C0.
-    let bare = [vec![0xFF, 0xD8, 0xFF, 0x01], sof(16000, 16000), vec![0xFF, 0xD9]].concat();
-    assert_eq!(pixel_size(&bare), Some((16000, 16000)));
-    // A fake frame inside a comment after the real one is just comment text to both readers;
-    // a second real frame is refused.
-    let fake = sof(1, 1);
-    let mut com = vec![0xFF, 0xFE, 0, (fake.len() + 2) as u8];
-    com.extend_from_slice(&fake);
-    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], sof(16000, 16000), com, vec![0xFF, 0xD9]].concat()), Some((16000, 16000)));
-    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], sof(10, 10), sof(1, 1), vec![0xFF, 0xD9]].concat()), None);
-    // A fake frame in front inside a segment is skipped as the segment it is.
-    let mut app = vec![0xFF, 0xE1, 0, (fake.len() + 2) as u8];
-    app.extend_from_slice(&fake);
-    assert_eq!(pixel_size(&[vec![0xFF, 0xD8], app, sof(7, 9), vec![0xFF, 0xD9]].concat()), Some((7, 9)));
-    // Truncated or zero-length segments: no size, so the picture is refused.
-    assert_eq!(pixel_size(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 1]), None);
-    assert_eq!(pixel_size(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8]), None);
+/// A real baseline grey JPEG, w x h.
+fn real_jpeg(w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut out).encode(&vec![128u8; (w * h) as usize], w, h, image::ExtendedColorType::L8).unwrap();
+    out
+}
+
+/// `jpeg` with `extra` put right after the SOI.
+fn with_after_soi(jpeg: &[u8], extra: &[u8]) -> Vec<u8> {
+    [&jpeg[..2], extra, &jpeg[2..]].concat()
+}
+
+/// Offset of the first segment with this marker.
+fn find_marker(jpeg: &[u8], marker: u8) -> usize {
+    let mut i = 2;
+    loop {
+        if jpeg[i + 1] == marker {
+            return i;
+        }
+        i += 2 + usize::from(u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]));
+    }
 }
 
 #[test]
-fn a_huge_jpeg_with_a_bare_marker_is_refused() {
-    let jpg = [vec![0xFF, 0xD8, 0xFF, 0x01], sof(16000, 16000), vec![0xFF, 0xD9]].concat();
-    let x = stamp_xml("j", &url_of("image/jpeg", &jpg));
+fn jpeg_size_check_is_strict_and_agrees_with_the_decoder() {
+    use crate::single::pixel_size;
+    let ok = real_jpeg(30, 20);
+    assert_eq!(pixel_size(&ok), Some((30, 20)));
+    // A progressive file has another frame marker and the same layout.
+    let mut progressive = ok.clone();
+    let at = find_marker(&progressive, 0xC0);
+    progressive[at + 1] = 0xC2;
+    assert_eq!(pixel_size(&progressive), Some((30, 20)));
+
+    // Layouts the readers disagree about are refused, wherever they sit before the scan.
+    let junk: [(&str, Vec<u8>); 8] = [
+        ("TEM", vec![0xFF, 0x01]),
+        ("RST0", vec![0xFF, 0xD0]),
+        ("RST7", vec![0xFF, 0xD7]),
+        ("SOI again", vec![0xFF, 0xD8]),
+        ("stuffed zero", vec![0xFF, 0x00]),
+        ("fill bytes", vec![0xFF, 0xFF]),
+        ("junk byte", vec![0x00]),
+        ("second frame", sof(1, 1)),
+    ];
+    for (what, extra) in junk {
+        assert_eq!(pixel_size(&with_after_soi(&ok, &extra)), None, "{what} right after SOI");
+        let at = find_marker(&ok, 0xC0);
+        assert_eq!(pixel_size(&[&ok[..at], &extra, &ok[at..]].concat()), None, "{what} before the frame");
+    }
+    // Truncated before the scan.
+    assert_eq!(pixel_size(&ok[..find_marker(&ok, 0xC0) + 6]), None);
+}
+
+#[test]
+fn a_jpeg_that_two_readers_size_differently_is_refused() {
+    // The probe from the review: a TEM marker makes a length-aware reader land 0xFFC0 bytes
+    // further on, inside a comment holding a 16000 x 16000 frame header, while a bare-marker
+    // reader sees a 1 x 1 one.
+    let real = real_jpeg(1, 1);
+    let scan = &real[find_marker(&real, 0xDA)..];
+    let mut b = vec![0xFF, 0xD8, 0xFF, 0x01];
+    b.extend(sof(1, 1));
+    let land = 6 + 0xFFC0 - 2;
+    b.extend([0xFF, 0xFE, 0xFF, 0xFF]);
+    let start = b.len();
+    b.resize(start + 0xFFFF - 2, 0);
+    let big = sof(16000, 16000);
+    b[land..land + big.len()].copy_from_slice(&big);
+    b.extend(scan);
+    assert_eq!(crate::single::pixel_size(&b), None);
+    let x = stamp_xml("j", &url_of("image/jpeg", &b));
     let mut dst = blank();
     let r = apply_remote(&mut dst, &[RemoteItem { annot_id: "j", author_id: "u", xfdf: &x }], &[]);
     assert_eq!(r.failed.len(), 1, "{r:?}");
+    assert!(find_by_name(&dst, "j").is_none());
+    // A genuinely huge but well-formed one is refused by the pixel limit.
+    let mut huge = real_jpeg(8, 8);
+    let at = find_marker(&huge, 0xC0);
+    huge[at + 5..at + 9].copy_from_slice(&[0x3E, 0x80, 0x3E, 0x80]);
+    let x = stamp_xml("h", &url_of("image/jpeg", &huge));
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "h", author_id: "u", xfdf: &x }], &[]).failed.len(), 1);
+    // And an ordinary one gets through.
+    let x = stamp_xml("ok", &url_of("image/jpeg", &real_jpeg(40, 30)));
+    assert_eq!(apply_remote(&mut dst, &[RemoteItem { annot_id: "ok", author_id: "u", xfdf: &x }], &[]).failed, vec![]);
 }

@@ -672,8 +672,11 @@ fn prepare_picture(url: &str) -> Result<Prepared, String> {
 
 /// Width and height from a PNG header or a JPEG frame header, without decoding.
 ///
-/// The JPEG walk is the one `pdfcraft_create`'s JPEG reader does (fill bytes, bare markers,
-/// segment lengths), so both see the same frame; a second frame header is refused outright.
+/// Decoders disagree about odd JPEG byte layouts (bare or length-carrying `FF01`/`RSTn`,
+/// `FF00`, junk between segments), and a picture that two of them read differently can show a
+/// small frame here and a huge one to the decoder that draws it. So the JPEG walk is strict:
+/// before the scan only well-formed segments are allowed, anything else is refused, and the
+/// size must also be what the decoder itself reports.
 pub(crate) fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         if b.get(12..16)? != b"IHDR" {
@@ -683,31 +686,40 @@ pub(crate) fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
         let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
         return Some((w, h));
     }
+    let size = jpeg_frame_size(b)?;
+    // The decoder's own reading of the same bytes must agree.
+    let options = zune_jpeg::zune_core::options::DecoderOptions::default().set_max_width(65535).set_max_height(65535);
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(zune_jpeg::zune_core::bytestream::ZCursor::new(b), options);
+    dec.decode_headers().ok()?;
+    let (w, h) = dec.dimensions()?;
+    (u32::try_from(w).ok()? == size.0 && u32::try_from(h).ok()? == size.1).then_some(size)
+}
+
+/// The one frame header of a JPEG whose segments up to the scan are all well formed.
+fn jpeg_frame_size(b: &[u8]) -> Option<(u32, u32)> {
+    if !b.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
     let mut size = None;
     let mut i = 2;
-    while let Some(&byte) = b.get(i) {
-        if byte != 0xFF {
-            i += 1;
-            continue;
+    loop {
+        // Every segment starts right after the previous one: no junk, no fill bytes.
+        if *b.get(i)? != 0xFF {
+            return None;
         }
-        i += 1;
-        while b.get(i) == Some(&0xFF) {
-            i += 1;
+        let marker = *b.get(i + 1)?;
+        match marker {
+            0xDA => return size,
+            // Markers with no length (or that readers treat as having one), and a repeated SOI.
+            0x00 | 0x01 | 0xD0..=0xD9 | 0xFF => return None,
+            _ => {}
         }
-        let marker = *b.get(i)?;
-        i += 1;
-        if marker == 0xDA || marker == 0xD9 {
-            break;
-        }
-        if marker == 0xD8 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            continue;
-        }
-        let len = usize::from(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]));
+        let len = usize::from(u16::from_be_bytes([*b.get(i + 2)?, *b.get(i + 3)?]));
         if len < 2 {
             return None;
         }
-        let end = i.checked_add(len)?;
-        let seg = b.get(i + 2..end)?;
+        let end = (i + 2).checked_add(len)?;
+        let seg = b.get(i + 4..end)?;
         if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
             if size.is_some() || seg.len() < 6 {
                 return None;
@@ -716,7 +728,6 @@ pub(crate) fn pixel_size(b: &[u8]) -> Option<(u32, u32)> {
         }
         i = end;
     }
-    size
 }
 
 /// Copy object `r` of `from` into `to` with everything it points to; the byte buffers are shared.
