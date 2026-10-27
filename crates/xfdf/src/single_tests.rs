@@ -446,7 +446,7 @@ fn an_added_sign_box_exports_the_viewer_form() {
 }
 
 /// A sign box row as the web viewer stores it: no `color`, a red `TextColor`, a black `/DA`.
-const VIEWER_SIGN_BOX: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><fields /><annots><freetext page=\"0\" rect=\"20,200,200,260\" name=\"vb\" title=\"Ada\" subject=\"reviewer 서명란\" flags=\"print\" width=\"1\" style=\"dash\" dashes=\"4,3\" TextColor=\"#FF0000\" FontSize=\"12\"><contents>reviewer 서명란</contents><defaultappearance>0 0 0 rg /Helvetica 12 Tf</defaultappearance><defaultstyle>font: Helvetica 12pt; text-align: center; text-vertical-align: top; color: #FF0000</defaultstyle><trn-custom-data bytes=\"{&quot;ppmSignRole&quot;:&quot;reviewer&quot;}\"/></freetext></annots></xfdf>";
+const VIEWER_SIGN_BOX: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><fields /><annots><freetext page=\"0\" rect=\"20,200,200,260\" flags=\"print\" name=\"vb\" subject=\"reviewer 서명란\" date=\"D:20261026120000+09'00'\" creationdate=\"D:20261026120000+09'00'\" style=\"dash\" dashes=\"4,3\" TextColor=\"#FF0000\" FontSize=\"12\" title=\"Ada\"><trn-custom-data bytes=\"{&quot;ppmSignRole&quot;:&quot;reviewer&quot;,&quot;authorId&quot;:&quot;u-a&quot;,&quot;trn-wrapped-text-lines&quot;:&quot;[\\&quot;reviewer 서명란\\&quot;]&quot;}\"/><contents>reviewer 서명란</contents><defaultappearance>0 0 0 rg /Helvetica 12 Tf</defaultappearance><defaultstyle>font: Helvetica 12pt; text-align: center; text-vertical-align: top; color: #FF0000</defaultstyle></freetext></annots></xfdf>";
 
 #[test]
 fn a_viewer_sign_box_row_imports_with_red_text_a_black_dashed_border_and_no_fill() {
@@ -455,6 +455,8 @@ fn a_viewer_sign_box_row_imports_with_red_text_a_black_dashed_border_and_no_fill
     assert_eq!(report.failed, vec![], "{VIEWER_SIGN_BOX}");
     let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
     assert!(d.get(b"C").is_none(), "no fill");
+    // No `width` attribute: the dashed border is still 1 pt.
+    assert_eq!(d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()), Some(1.0));
     assert_eq!(pdfcraft_annot::appearance::text_color(&d), [1.0, 0.0, 0.0]);
     assert_eq!(pdfcraft_annot::appearance::parse_da(&d).0, [0.0, 0.0, 0.0], "the /DA colour is the border's");
     assert_eq!(d.int(b"Q"), Some(1));
@@ -477,6 +479,49 @@ fn a_color_attribute_on_a_text_box_is_its_fill_as_in_the_web_viewer() {
     apply_remote(&mut dst, &[RemoteItem { annot_id: "vb", author_id: "u-a", xfdf: &xfdf }], &[]);
     let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
     assert_eq!(d.get(b"C").and_then(|c| c.as_array()).map(|a| a.len()), Some(3));
+}
+
+/// The AP content stream of the annotation named `nm`.
+fn ap_text(doc: &Document, nm: &str) -> String {
+    let d = doc.get(find_by_name(doc, nm).unwrap()).as_dict().unwrap().clone();
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(st) = &*doc.get(n) else { panic!("AP") };
+    String::from_utf8_lossy(&st.decoded().unwrap()).into_owned()
+}
+
+#[test]
+fn an_old_export_with_only_a_defaultstyle_colour_gets_that_text_colour() {
+    let xfdf = VIEWER_SIGN_BOX.replace(" TextColor=\"#FF0000\"", "");
+    let mut dst = blank();
+    apply_remote(&mut dst, &[RemoteItem { annot_id: "vb", author_id: "u-a", xfdf: &xfdf }], &[]);
+    let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
+    assert_eq!(pdfcraft_annot::appearance::text_color(&d), [1.0, 0.0, 0.0]);
+    assert!(ap_text(&dst, "vb").contains("1 0 0 rg"));
+}
+
+#[test]
+fn a_plain_text_box_with_a_blue_border_and_red_text_round_trips() {
+    let xfdf = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><fields /><annots><freetext page=\"0\" rect=\"20,200,200,260\" name=\"gb\" title=\"Ada\" width=\"1\" TextColor=\"#FF0000\" FontSize=\"12\"><contents>hello</contents><defaultappearance>0 0 1 rg /Helvetica 12 Tf</defaultappearance></freetext></annots></xfdf>";
+    let mut dst = blank();
+    let report = apply_remote(&mut dst, &[RemoteItem { annot_id: "gb", author_id: "u-a", xfdf }], &[]);
+    assert_eq!(report.failed, vec![]);
+    let ap = ap_text(&dst, "gb");
+    assert!(ap.contains("0 0 1 RG") && ap.contains("1 0 0 rg"), "{ap}");
+    let back = export_annotation(&dst, "gb").unwrap().xfdf;
+    assert!(back.contains("TextColor=\"#FF0000\"") && back.contains("color: #FF0000") && back.contains("<defaultappearance>0 0 1 rg"), "{back}");
+}
+
+#[test]
+fn changing_a_sign_boxs_colour_makes_text_and_border_one_colour() {
+    let mut dst = blank();
+    apply_remote(&mut dst, &[RemoteItem { annot_id: "vb", author_id: "u-a", xfdf: VIEWER_SIGN_BOX }], &[]);
+    let index = summaries(&dst).iter().find(|s| s.name.as_deref() == Some("vb")).unwrap().index;
+    pdfcraft_annot::set_style(&mut dst, 0, index, Some([0.0, 0.0, 1.0]), None, None, None, &meta("st")).unwrap();
+    let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
+    assert!(d.get(b"PpmTextColor").is_none());
+    assert_eq!(pdfcraft_annot::appearance::text_color(&d), [0.0, 0.0, 1.0]);
+    let ap = ap_text(&dst, "vb");
+    assert!(ap.contains("0 0 1 RG") && ap.contains("0 0 1 rg") && !ap.contains("1 0 0 rg"), "{ap}");
 }
 
 #[test]

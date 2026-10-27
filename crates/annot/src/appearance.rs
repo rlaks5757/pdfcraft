@@ -243,7 +243,7 @@ pub const TEXT_COLOR_KEY: &[u8] = b"PpmTextColor";
 
 /// The colour a text box's text is drawn in: [`TEXT_COLOR_KEY`], else the `/DA` colour.
 pub fn text_color(d: &Dict) -> Rgb {
-    let own = d.get(b"PpmTextColor").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>());
+    let own = d.get(TEXT_COLOR_KEY).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>());
     match own.as_deref() {
         Some([r, g, b]) => [r, g, b].map(|x| x.clamp(0.0, 1.0)),
         _ => parse_da(d).0,
