@@ -1646,7 +1646,8 @@ fn a_sign_box_is_a_centred_dashed_text_box_with_its_role() {
     let bs = d.get(b"BS").unwrap().as_dict().unwrap();
     assert_eq!((bs.name(b"S"), appearance::nums(bs, b"D")), (Some(&b"D"[..]), Some(vec![4.0, 3.0])));
     let content = ap_content(&doc, &d);
-    assert!(content.contains("[4 3] 0 d"), "{content}");
+    assert!(content.contains("[4 3] 0 d") && content.contains("0 0 0 RG") && content.contains("1 0 0 rg"), "black dashed border, red text: {content}");
+    assert!(d.get(b"C").is_none(), "no fill");
     // The Korean face (when this build bundles one) draws the label, in the screen and in the file.
     if pdfcraft_fonts::subset::face().is_some() {
         assert_eq!(pdfcraft_fonts::undrawn_mark(&d), None, "drawn, not marked as `?`");

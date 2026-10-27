@@ -436,10 +436,47 @@ fn an_added_sign_box_exports_the_viewer_form() {
     assert!(x.contains("ppmSignRole") && x.contains("reviewer"), "{x}");
     assert!(x.contains("style=\"dash\"") && x.contains("dashes=\"4,3\""), "{x}");
     assert!(x.contains("justification=\"center\"") && x.contains("text-align: center") && x.contains("Helvetica 12pt") && x.contains("reviewer 서명란"), "{x}");
+    // The web viewer's own row has no fill (`color`) and a red text colour.
+    assert!(!x.contains(" color=\""), "no fill colour attribute: {x}");
+    assert!(x.contains("TextColor=\"#FF0000\"") && x.contains("FontSize=\"12\"") && x.contains("color: #FF0000"), "{x}");
     // And back in: the role and the look survive a round trip.
     let mut dst = blank();
     let again = round_trip(&src, &mut dst, "sb");
     assert!(again.xfdf.contains("ppmSignRole"), "{}", again.xfdf);
+}
+
+/// A sign box row as the web viewer stores it: no `color`, a red `TextColor`, a black `/DA`.
+const VIEWER_SIGN_BOX: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\"><fields /><annots><freetext page=\"0\" rect=\"20,200,200,260\" name=\"vb\" title=\"Ada\" subject=\"reviewer 서명란\" flags=\"print\" width=\"1\" style=\"dash\" dashes=\"4,3\" TextColor=\"#FF0000\" FontSize=\"12\"><contents>reviewer 서명란</contents><defaultappearance>0 0 0 rg /Helvetica 12 Tf</defaultappearance><defaultstyle>font: Helvetica 12pt; text-align: center; text-vertical-align: top; color: #FF0000</defaultstyle><trn-custom-data bytes=\"{&quot;ppmSignRole&quot;:&quot;reviewer&quot;}\"/></freetext></annots></xfdf>";
+
+#[test]
+fn a_viewer_sign_box_row_imports_with_red_text_a_black_dashed_border_and_no_fill() {
+    let mut dst = blank();
+    let report = apply_remote(&mut dst, &[RemoteItem { annot_id: "vb", author_id: "u-a", xfdf: VIEWER_SIGN_BOX }], &[]);
+    assert_eq!(report.failed, vec![], "{VIEWER_SIGN_BOX}");
+    let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
+    assert!(d.get(b"C").is_none(), "no fill");
+    assert_eq!(pdfcraft_annot::appearance::text_color(&d), [1.0, 0.0, 0.0]);
+    assert_eq!(pdfcraft_annot::appearance::parse_da(&d).0, [0.0, 0.0, 0.0], "the /DA colour is the border's");
+    assert_eq!(d.int(b"Q"), Some(1));
+    // Drawn: dashed black border, red text.
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(st) = &*dst.get(n) else { panic!("AP") };
+    let ap = String::from_utf8_lossy(&st.decoded().unwrap()).into_owned();
+    assert!(ap.contains("0 0 0 RG") && ap.contains("[4 3] 0 d") && ap.contains("1 0 0 rg"), "{ap}");
+    // Exported again it keeps the same look.
+    let back = export_annotation(&dst, "vb").unwrap();
+    assert!(!back.xfdf.contains(" color=\"") && back.xfdf.contains("TextColor=\"#FF0000\""), "{}", back.xfdf);
+}
+
+#[test]
+fn a_color_attribute_on_a_text_box_is_its_fill_as_in_the_web_viewer() {
+    // The web viewer reads FreeText `color` as the fill (StrokeColor -> FillColor); black text boxes
+    // with `color="#000000"` are black boxes there too.
+    let xfdf = VIEWER_SIGN_BOX.replace("name=\"vb\"", "name=\"vb\" color=\"#000000\"");
+    let mut dst = blank();
+    apply_remote(&mut dst, &[RemoteItem { annot_id: "vb", author_id: "u-a", xfdf: &xfdf }], &[]);
+    let d = dst.get(find_by_name(&dst, "vb").unwrap()).as_dict().unwrap().clone();
+    assert_eq!(d.get(b"C").and_then(|c| c.as_array()).map(|a| a.len()), Some(3));
 }
 
 #[test]

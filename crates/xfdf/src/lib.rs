@@ -387,6 +387,13 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
             _ => {}
         }
     }
+    // The web viewer's text colour and size attributes (its border colour is the `/DA` one).
+    if *tag == "freetext" {
+        if let Some(c) = hex(&pdfcraft_annot::appearance::text_color(d)) {
+            let _ = write!(attrs, " TextColor=\"{c}\"");
+        }
+        let _ = write!(attrs, " FontSize=\"{}\"", n(pdfcraft_annot::appearance::parse_da(d).1));
+    }
     // A callout: its leader path, text-box inset, intent and (single-name) line ending.
     let cl = nums_of(doc, d.get(b"CL"));
     if cl.len() == 4 || cl.len() == 6 {
@@ -415,30 +422,21 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
     if let Some(da) = text_of(doc, d, b"DA") {
         let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
     }
-    // The web viewer reads a text box's alignment only from here (CSS), not from `justification`.
+    // The web viewer reads a text box's alignment and text colour from here (CSS), not from `justification`.
     if *tag == "freetext" {
         let align = match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
             Some(1) => Some("center"),
             Some(2) => Some("right"),
             _ => None,
         };
-        if let Some(align) = align {
-            let da = text_of(doc, d, b"DA").unwrap_or_default();
-            let t: Vec<&str> = da.split_whitespace().collect();
-            let size = t.iter().position(|x| *x == "Tf").and_then(|i| i.checked_sub(1)).and_then(|i| t[i].parse::<f64>().ok()).unwrap_or(12.0);
-            let hex = t
-                .iter()
-                .position(|x| *x == "rg")
-                .filter(|i| *i >= 3)
-                .map(|i| {
-                    let c = |k: usize| (t[i - 3 + k].parse::<f64>().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-                    format!("#{:02X}{:02X}{:02X}", c(0), c(1), c(2))
-                })
-                .unwrap_or_else(|| "#000000".into());
+        if align.is_some() || pdfcraft_annot::appearance::text_color(d) != pdfcraft_annot::appearance::parse_da(d).0 {
+            let size = pdfcraft_annot::appearance::parse_da(d).1;
+            let hex = hex(&pdfcraft_annot::appearance::text_color(d)).unwrap_or_else(|| "#000000".into());
             let _ = write!(
                 out,
-                "<defaultstyle>font: Helvetica {}pt; text-align: {align}; text-vertical-align: top; color: {hex}</defaultstyle>",
-                n(size)
+                "<defaultstyle>font: Helvetica {}pt; text-align: {}; text-vertical-align: top; color: {hex}</defaultstyle>",
+                n(size),
+                align.unwrap_or("left")
             );
         }
     }
@@ -848,6 +846,16 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     });
     if let Some(q) = style_align.or_else(|| node.attribute("justification").and_then(align)).filter(|q| *q != 0) {
         d.set(b"Q".to_vec(), Object::Int(q));
+    }
+    // Text colour: the `TextColor` attribute, else the `color` of `<defaultstyle>`; the `/DA` colour
+    // stays the border colour, as in the web viewer.
+    let style_color = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        c.text().unwrap_or("").split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("color")).and_then(|(_, v)| parse_hex(v)))
+    });
+    if node.has_tag_name("freetext")
+        && let Some(c) = node.attribute("TextColor").and_then(parse_hex).or(style_color)
+    {
+        d.set(pdfcraft_annot::appearance::TEXT_COLOR_KEY.to_vec(), arr(&c));
     }
     if let Some(q) = node.attribute("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));
