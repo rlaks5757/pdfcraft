@@ -18,12 +18,16 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod position;
 mod single;
+pub use position::{AnnotEntry, ExportRequest, export_positions, list_annotations, strip_positions};
 pub use single::{
     AnnotIndex, AnnotXfdf, MAX_XFDF_LEN, PictureCache, RemoteItem, RemoteReport, apply_remote, apply_remote_cached, export_annotation,
     export_annotation_in, export_annotations, remove_by_name, remove_by_name_in,
 };
 
+#[cfg(test)]
+mod position_tests;
 #[cfg(test)]
 mod single_tests;
 #[cfg(test)]
@@ -375,6 +379,21 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
         let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
         let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
     }
+    // A text box's alignment (`/Q`): XFDF names it `justification`, left being the default.
+    if *tag == "freetext" {
+        match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => attrs.push_str(" justification=\"center\""),
+            Some(2) => attrs.push_str(" justification=\"right\""),
+            _ => {}
+        }
+    }
+    // The web viewer's text colour and size attributes (its border colour is the `/DA` one).
+    if *tag == "freetext" {
+        if let Some(c) = hex(&pdfcraft_annot::appearance::text_color(d)) {
+            let _ = write!(attrs, " TextColor=\"{c}\"");
+        }
+        let _ = write!(attrs, " FontSize=\"{}\"", n(pdfcraft_annot::appearance::parse_da(d).1));
+    }
     // A callout: its leader path, text-box inset, intent and (single-name) line ending.
     let cl = nums_of(doc, d.get(b"CL"));
     if cl.len() == 4 || cl.len() == 6 {
@@ -402,6 +421,24 @@ fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, St
     }
     if let Some(da) = text_of(doc, d, b"DA") {
         let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
+    }
+    // The web viewer reads a text box's alignment and text colour from here (CSS), not from `justification`.
+    if *tag == "freetext" {
+        let align = match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => Some("center"),
+            Some(2) => Some("right"),
+            _ => None,
+        };
+        if align.is_some() || pdfcraft_annot::appearance::text_color(d) != pdfcraft_annot::appearance::parse_da(d).0 {
+            let size = pdfcraft_annot::appearance::parse_da(d).1;
+            let hex = hex(&pdfcraft_annot::appearance::text_color(d)).unwrap_or_else(|| "#000000".into());
+            let _ = write!(
+                out,
+                "<defaultstyle>font: Helvetica {}pt; text-align: {}; text-vertical-align: top; color: {hex}</defaultstyle>",
+                n(size),
+                align.unwrap_or("left")
+            );
+        }
     }
     let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     if !ink.is_empty() {
@@ -794,6 +831,31 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             bs.set(b"D".to_vec(), arr(&dashes));
         }
         d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    // Alignment: the `text-align` of `<defaultstyle>` (where the web viewer keeps it) wins; else the
+    // `justification` attribute (name or 0/1/2).
+    let align = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+        "left" | "0" => Some(0),
+        "center" | "centered" | "1" => Some(1),
+        "right" | "2" => Some(2),
+        _ => None,
+    };
+    let style_align = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        let css = c.text().unwrap_or("");
+        css.split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("text-align")).and_then(|(_, v)| align(v)))
+    });
+    if let Some(q) = style_align.or_else(|| node.attribute("justification").and_then(align)).filter(|q| *q != 0) {
+        d.set(b"Q".to_vec(), Object::Int(q));
+    }
+    // Text colour: the `TextColor` attribute, else the `color` of `<defaultstyle>`; the `/DA` colour
+    // stays the border colour, as in the web viewer.
+    let style_color = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        c.text().unwrap_or("").split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("color")).and_then(|(_, v)| parse_hex(v)))
+    });
+    if node.has_tag_name("freetext")
+        && let Some(c) = node.attribute("TextColor").and_then(parse_hex).or(style_color)
+    {
+        d.set(pdfcraft_annot::appearance::TEXT_COLOR_KEY.to_vec(), arr(&c));
     }
     if let Some(q) = node.attribute("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));

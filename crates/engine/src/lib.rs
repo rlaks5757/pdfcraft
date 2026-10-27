@@ -322,6 +322,7 @@ fn scope_of(edit: &Edit) -> Scope {
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -1473,6 +1474,14 @@ pub enum Edit {
         /// (the PPM host's `/PpmStamp` metadata).
         extra: Option<(String, String)>,
     },
+    /// A sign box (the PPM host's FreeText with `/PpmSignRole`) over `rect` (user space).
+    AddSignBox {
+        page: usize,
+        rect: [f64; 4],
+        role: String,
+        label: String,
+        author: String,
+    },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
         page: usize,
@@ -2077,6 +2086,7 @@ impl Edit {
             Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
             Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
+            Edit::AddSignBox { .. } => Label::of("Add sign box"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
@@ -2241,6 +2251,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -2529,6 +2540,9 @@ fn run_edit_body(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx
             if src.image && cx.ownership.annot_sync {
                 pdfcraft_annot::set_picture_source(doc, *page, index, &file.bytes)?;
             }
+        }
+        Edit::AddSignBox { page, rect, role, label, author } => {
+            pdfcraft_annot::add_sign_box(doc, *page, *rect, role, label, author, &cx.meta())?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,

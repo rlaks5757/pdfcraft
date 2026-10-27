@@ -184,6 +184,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
 ///   placement of a PNG stamp, `width` and `height` in PDF points, `meta` the text stored as the
 ///   stamp's `/PpmStamp`. `pdfcraft:stamp-cancel` `{ id }` withdraws it.
+/// - `pdfcraft:sign-box-add` (from the parent): `{ id, role, label }` arms one placement of a
+///   180 x 60 pt FreeText sign box (text `label`, dashed black border, `/PpmSignRole` = `role`);
+///   it is cancelled and reported with the same `pdfcraft:stamp-*` events and `stamp-cancel`.
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
@@ -308,6 +311,19 @@ mod host {
                                 ctx.request_repaint();
                             }
                             Err(error) => bridge.post_compare(&pdfcraft_ui_egui::CompareEvent::Failed { id: id.chars().take(128).collect(), error }),
+                        }
+                        return;
+                    }
+                    Some("pdfcraft:sign-box-add") => {
+                        let id = string(&data, "id").unwrap_or_default();
+                        match sign_box_add(&data) {
+                            Ok(command) => {
+                                if let Ok(mut q) = stamps.lock() {
+                                    q.push(command);
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(error) => bridge.post_stamp(&pdfcraft_ui_egui::StampEvent::Failed { id, error }),
                         }
                         return;
                     }
@@ -514,6 +530,14 @@ mod host {
             height: number("height")?,
             meta: text("meta")?,
         })
+    }
+
+    /// Read a `pdfcraft:sign-box-add` message; the error is what the parent is told.
+    fn sign_box_add(data: &JsValue) -> Result<pdfcraft_ui_egui::StampCommand, String> {
+        let text = |key: &str| {
+            js_sys::Reflect::get(data, &JsValue::from_str(key)).ok().and_then(|v| v.as_string()).ok_or_else(|| format!("{key} must be a string"))
+        };
+        Ok(pdfcraft_ui_egui::StampCommand::AddSignBox { id: text("id")?, role: text("role")?, label: text("label")? })
     }
 
     /// Read a `pdfcraft:annots-*` message; the error says what was wrong with it.

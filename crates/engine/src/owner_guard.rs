@@ -67,6 +67,7 @@ pub(crate) fn creates_comments(edit: &Edit) -> bool {
         Edit::AddMeasurement(_)
             | Edit::AddAnnotation(_)
             | Edit::AddCustomStamp { .. }
+            | Edit::AddSignBox { .. }
             | Edit::ReplyToAnnotation { .. }
             | Edit::SetAnnotationStatus { .. }
             | Edit::MarkAnnotation { .. }
@@ -116,6 +117,7 @@ fn work(edit: &Edit) -> Work {
     match edit {
         Edit::AddAnnotation(..)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }

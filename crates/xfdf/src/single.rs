@@ -180,19 +180,28 @@ pub fn export_annotation_in(doc: &Document, idx: &AnnotIndex, nm: &str) -> Resul
     }
     let Some(spot) = locate(doc, idx, nm).into_iter().next() else { return Err(DataError::NotFound(nm.into())) };
     let d = doc.get(spot.obj).as_dict().cloned().unwrap_or_default();
+    element_xfdf(doc, &d, spot.page, &idx.names, nm)
+}
+
+/// The XFDF document of the annotation dictionary `d` on zero-based `page`, with `names` giving the
+/// id of each annotation (for `inreplyto`) and `nm` this one's.
+pub(crate) fn element_xfdf(doc: &Document, d: &Dict, page: usize, names: &HashMap<ObjRef, String>, nm: &str) -> Result<AnnotXfdf, DataError> {
+    if utf16_len(nm) > MAX_ID_LEN {
+        return Err(DataError::Invalid("the annotation name is too long".into()));
+    }
     if let Some(parent) = d.get(b"IRT").and_then(Object::as_ref)
-        && !idx.names.contains_key(&parent)
+        && !names.contains_key(&parent)
     {
         return Err(DataError::Invalid("the reply's parent has no name".into()));
     }
     // A kept picture's size is known before it is encoded: don't encode what can't be sent.
-    if let Some(len) = kept_picture_len(doc, &d)
+    if let Some(len) = kept_picture_len(doc, d)
         && len.div_ceil(3) * 4 > MAX_XFDF_LEN
     {
         return Err(DataError::TooLarge { len: len.div_ceil(3) * 4, max: MAX_XFDF_LEN });
     }
     let mut element = String::new();
-    let Some(tag) = annot_element(doc, &d, spot.page, &idx.names, true, &mut element) else {
+    let Some(tag) = annot_element(doc, d, page, names, true, &mut element) else {
         return Err(DataError::Invalid("this kind of annotation has no XFDF form".into()));
     };
     let xfdf = format!("{PREFIX}{}{SUFFIX}", element.trim_end());
@@ -200,7 +209,7 @@ pub fn export_annotation_in(doc: &Document, idx: &AnnotIndex, nm: &str) -> Resul
     if len > MAX_XFDF_LEN {
         return Err(DataError::TooLarge { len, max: MAX_XFDF_LEN });
     }
-    let kind = text_of(doc, &d, b"Subj").filter(|s| !s.trim().is_empty()).unwrap_or_else(|| tag.to_string());
+    let kind = text_of(doc, d, b"Subj").filter(|s| !s.trim().is_empty()).unwrap_or_else(|| tag.to_string());
     // The server counts UTF-16 units, not characters.
     let mut kept = 0;
     let kind: String = kind
@@ -210,7 +219,7 @@ pub fn export_annotation_in(doc: &Document, idx: &AnnotIndex, nm: &str) -> Resul
             kept <= 100
         })
         .collect();
-    Ok(AnnotXfdf { annot_id: nm.into(), page: spot.page, kind, xfdf })
+    Ok(AnnotXfdf { annot_id: nm.into(), page, kind, xfdf })
 }
 
 /// Bytes of the original picture file a stamp keeps, if it keeps one.
