@@ -539,9 +539,11 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 app.run_command("print.dialog");
                             }
                         }
-                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
-                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
-                            app.run_command("file.save");
+                        if app.host_allows("file.save") {
+                            let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
+                            if icons::button(ui, "save", 32.0, false, &tip).clicked() {
+                                app.run_command("file.save");
+                            }
                         }
                         if app.host_allows("file.properties") {
                             let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
@@ -634,6 +636,9 @@ fn main_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     (RightPanel::Search, tl!("Search")),
                     (RightPanel::Compare, tl!("Compare")),
                 ] {
+                    if p == RightPanel::Comments && app.comments_panel_hidden() {
+                        continue;
+                    }
                     if ui.add(widgets::radio(app.right == Some(p), tl!(label))).clicked() {
                         app.choose_right_panel(Some(p));
                     }
@@ -667,7 +672,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 4.0;
             // Each rail button follows the command that opens its panel; a build that has the
             // command off shows no button. Attachments have no command: a viewer's rail has none.
-            let (comments, fields, signatures) = (app.host_allows("comment.list"), app.host_allows("form.fields"), app.host_allows("sign.panel"));
+            let (comments, fields, signatures) = (app.host_allows("comment.list") && !app.comments_panel_hidden(), app.host_allows("form.fields"), app.host_allows("sign.panel"));
             let (accessibility, tags) = (app.host_allows("a11y.report"), app.host_allows("a11y.tags"));
             let viewer = app.host_viewer();
             let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {

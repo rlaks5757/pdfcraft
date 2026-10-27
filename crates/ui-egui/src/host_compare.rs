@@ -82,11 +82,15 @@ impl PdfCraftApp {
         new: (String, Vec<u8>),
         ownership: pdfcraft_engine::Ownership,
     ) -> Result<(usize, usize, usize, usize), String> {
+        // A prompt or a host file still on its way in is not ours to take over.
+        if self.password_prompt.is_some() || self.annot_open_waiting || self.host_open_pending() {
+            return Err("a document is still being opened".into());
+        }
         // A request supersedes whatever the host armed or queued.
         self.disarm_stamp();
         // The rules come from this request alone, never from an open that came before it.
         // Both files are only looked at: read-only, so nothing here is ever saved back to the parent.
-        self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, ..ownership });
+        self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, annot_sync: false, hide_comments_panel: false, ..ownership });
         let before = self.views.len();
         let opened = [(old, false), (new, true)].into_iter().try_for_each(|((name, bytes), activate)| {
             let name = if name.trim().is_empty() { "document.pdf".to_string() } else { name };
@@ -102,6 +106,10 @@ impl PdfCraftApp {
         opened?;
         if self.views.len() != before + 2 {
             return Err("couldn't open both files".into());
+        }
+        // The host's own viewer draws no replies in a comparison either.
+        for view in &self.views[before..] {
+            self.session.set_hide_replies(view.id, true);
         }
         self.compare = None;
         self.compare_old = Some(self.views[before].id);
@@ -236,6 +244,49 @@ mod tests {
             assert!(own.allow.has(pdfcraft_engine::EditClass::Page));
             assert!(own.read_only, "a compared file is only looked at, never saved back");
         }
+    }
+
+    /// The compared files are only looked at: read-only and never in the host's annotation database,
+    /// with the request's actor, and later opens start from the build's own rules again.
+    #[test]
+    fn compare_open_keeps_the_actor_and_drops_sharing_and_the_open_rules_are_the_builds_again() {
+        use pdfcraft_engine::Ownership;
+        let (mut h, events) = app(true);
+        h.state_mut().session.set_open_ownership(Ownership { actor: Some("earlier".into()), ..Default::default() });
+        let mut c = command("c1");
+        c.ownership = Ownership { actor: Some("alice".into()), annot_sync: true, hide_comments_panel: true, ..Default::default() };
+        send(&mut h, c);
+        assert!(matches!(events.borrow().as_slice(), [CompareEvent::Done { .. }]), "{:?}", events.borrow());
+        let state = h.state();
+        let s = state.compare.as_ref().unwrap();
+        for id in [s.old, s.new] {
+            let own = state.session.get(id).unwrap().ownership();
+            assert_eq!(own.actor.as_deref(), Some("alice"));
+            assert!(own.read_only && !own.annot_sync && !own.hide_comments_panel, "{own:?}");
+        }
+        assert_eq!(state.session.open_ownership().actor, None, "later opens start from the build's own rules again");
+        for id in [s.old, s.new] {
+            assert!(state.session.get(id).unwrap().replies_hidden(), "the host's comparison draws no replies");
+        }
+    }
+
+    /// A document opened on the build's own (not for the host's comparison) draws what it always did.
+    #[test]
+    fn the_replies_of_a_document_opened_without_the_host_are_drawn() {
+        let (mut h, _) = app(true);
+        h.state_mut().open_bytes_with_focus("a.pdf", None, text_pdf("x"), true).unwrap();
+        let id = h.state().views[0].id;
+        assert!(!h.state().session.get(id).unwrap().replies_hidden());
+    }
+
+    /// A password prompt or a host file still on its way in is not taken over by a compare.
+    #[test]
+    fn a_compare_waits_while_a_host_file_is_still_coming_in() {
+        let (mut h, events) = app(true);
+        h.state_mut().annot_open_waiting = true;
+        send(&mut h, command("c1"));
+        assert!(matches!(events.borrow().as_slice(), [CompareEvent::Failed { .. }]), "{:?}", events.borrow());
+        assert!(h.state().compare.is_none() && h.state().views.is_empty(), "nothing was opened");
     }
 
     #[test]

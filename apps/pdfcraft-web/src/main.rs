@@ -80,9 +80,11 @@ fn main() {
                             app.stamp_inbox.clone(),
                             app.compare_inbox.clone(),
                             app.ownership_inbox.clone(),
+                            app.annot_inbox.clone(),
                             cc.egui_ctx.clone(),
                         );
                         app.host_stamp = Some(bridge.stamp_fn());
+                        app.host_annots = Some(bridge.annots_fn());
                         app.host_compare = Some(bridge.compare_fn());
                         app.host_save = Some(bridge.save_fn());
                         app.host_dirty = Some(bridge.dirty_fn());
@@ -155,11 +157,36 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   `pdfcraft:failed` instead of opening without the checks. `mode` (`"viewer"` or `"builder"`)
 ///   is how much editing a host-lock build allows: `"builder"` everything it doesn't lock for
 ///   every host, anything else, or nothing, only comments. A build without the lock ignores it.
+///   `annotSync` (a boolean, needs `actor`) turns on sharing the annotations through the page: edits
+///   to annotations no longer make the file dirty, and the user's changes go out as
+///   `pdfcraft:annots-changed` instead of `pdfcraft:save`. `commentsPanel: false` hides this
+///   interface's own comments panel and the buttons that open it.
+/// - `pdfcraft:annots-reset` (from the parent): `{ items, seq }`, the server's whole list, item =
+///   `{ annotId, authorId, xfdf }` (one annotation as XFDF, `name` = `/NM`). It makes the document
+///   match the list; `seq` is the last `annots-changed` number the page had received when it
+///   fetched the list, and the actor's annotations changed in later messages (or not yet sent) are
+///   left as they are. The actor's own annotations change in the working document and in the undo
+///   states that hold the same version, so undoing an edit of theirs still works. `pdfcraft:annots-apply`
+///   `{ upserts, deletes }` changes some (upserts are items, same `annotId` replaces; deletes are
+///   annotIds). `pdfcraft:annots-reject` `{ items: [{ annotId, server }] }` puts back what the
+///   server holds after it refused a change: `server` is an item, or `null` when the server has
+///   none. All three skip undo and the dirty flag, and are not echoed in `annots-changed`. They
+///   may come right behind `pdfcraft:open`: they wait for the document, are dropped when the open
+///   fails, and a new `pdfcraft:open` drops those still waiting.
+/// - `pdfcraft:annots-select` (from the parent): `{ annotId }` goes to the annotation's page and
+///   selects it (nothing is selected when the id is unknown).
+/// - `pdfcraft:annots-changed` (to the parent): `{ seq, upserts: [{ annotId, page, type, xfdf }], deletes: [annotId] }`
+///   after the user applies, undoes or redoes an edit: the difference, by `/NM`, of the annotations
+///   the `actor` owns (`seq` counts the messages from 1 for each document opened; `page` counts from 1 like the server's, `type` is the annotation's subject or XFDF tag, at most 100 characters). Stamps count too.
+///   `pdfcraft:annots-selected` `{ annotId | null }` when the selection on the canvas changes.
 /// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
 ///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
 ///   placement of a PNG stamp, `width` and `height` in PDF points, `meta` the text stored as the
 ///   stamp's `/PpmStamp`. `pdfcraft:stamp-cancel` `{ id }` withdraws it.
+/// - `pdfcraft:sign-box-add` (from the parent): `{ id, role, label }` arms one placement of a
+///   180 x 60 pt FreeText sign box (text `label`, dashed black border, `/PpmSignRole` = `role`);
+///   it is cancelled and reported with the same `pdfcraft:stamp-*` events and `stamp-cancel`.
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
@@ -231,6 +258,7 @@ mod host {
             stamps: pdfcraft_ui_egui::StampInbox,
             compares: pdfcraft_ui_egui::CompareInbox,
             ownership: pdfcraft_ui_egui::OwnershipInbox,
+            annots: pdfcraft_ui_egui::AnnotInbox,
             ctx: egui::Context,
         ) {
             let bridge = self.clone();
@@ -242,7 +270,24 @@ mod host {
                 }
                 let data = event.data();
                 match string(&data, "type").as_deref() {
-                    Some("pdfcraft:open") => {}
+                    Some("pdfcraft:open") => {
+                        // Messages left over from an earlier open belong to that open.
+                        if let Ok(mut q) = annots.lock() {
+                            q.clear();
+                        }
+                    }
+                    Some(kind) if kind.starts_with("pdfcraft:annots-") => {
+                        match annots_command(kind, &data) {
+                            Ok(command) => {
+                                if let Ok(mut q) = annots.lock() {
+                                    q.push(command);
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(error) => eframe::web_sys::console::warn_1(&format!("PdfCraft: {kind} refused: {error}").into()),
+                        }
+                        return;
+                    }
                     Some("pdfcraft:stamp-add") => {
                         let id = string(&data, "id").unwrap_or_default();
                         match stamp_add(&data) {
@@ -266,6 +311,19 @@ mod host {
                                 ctx.request_repaint();
                             }
                             Err(error) => bridge.post_compare(&pdfcraft_ui_egui::CompareEvent::Failed { id: id.chars().take(128).collect(), error }),
+                        }
+                        return;
+                    }
+                    Some("pdfcraft:sign-box-add") => {
+                        let id = string(&data, "id").unwrap_or_default();
+                        match sign_box_add(&data) {
+                            Ok(command) => {
+                                if let Ok(mut q) = stamps.lock() {
+                                    q.push(command);
+                                }
+                                ctx.request_repaint();
+                            }
+                            Err(error) => bridge.post_stamp(&pdfcraft_ui_egui::StampEvent::Failed { id, error }),
                         }
                         return;
                     }
@@ -354,6 +412,27 @@ mod host {
         pub fn compare_fn(&self) -> pdfcraft_ui_egui::HostCompareFn {
             let bridge = self.clone();
             Box::new(move |event| bridge.post_compare(event))
+        }
+
+        /// Tell the parent what the user changed or selected (`annotSync`).
+        pub fn post_annots(&self, event: &pdfcraft_ui_egui::AnnotEvent) {
+            // A big change goes out in several messages, which the page's size limits ask for.
+            for (kind, body) in event.to_messages() {
+                let Ok(json) = serde_json::to_string(&body) else { continue };
+                let Ok(value) = js_sys::JSON::parse(&json) else { continue };
+                if let Some(m) = message(&[("type", kind.into())]) {
+                    // The fields of the body sit beside `type`, like every other message.
+                    if let Some(fields) = value.dyn_ref::<js_sys::Object>() {
+                        let _ = js_sys::Object::assign(&m, fields);
+                    }
+                    let _ = self.post(&m, None);
+                }
+            }
+        }
+
+        pub fn annots_fn(&self) -> pdfcraft_ui_egui::HostAnnotFn {
+            let bridge = self.clone();
+            Box::new(move |event| bridge.post_annots(event))
         }
 
         pub fn stamp_fn(&self) -> pdfcraft_ui_egui::HostStampFn {
@@ -453,6 +532,21 @@ mod host {
         })
     }
 
+    /// Read a `pdfcraft:sign-box-add` message; the error is what the parent is told.
+    fn sign_box_add(data: &JsValue) -> Result<pdfcraft_ui_egui::StampCommand, String> {
+        let text = |key: &str| {
+            js_sys::Reflect::get(data, &JsValue::from_str(key)).ok().and_then(|v| v.as_string()).ok_or_else(|| format!("{key} must be a string"))
+        };
+        Ok(pdfcraft_ui_egui::StampCommand::AddSignBox { id: text("id")?, role: text("role")?, label: text("label")? })
+    }
+
+    /// Read a `pdfcraft:annots-*` message; the error says what was wrong with it.
+    fn annots_command(kind: &str, data: &JsValue) -> Result<pdfcraft_ui_egui::AnnotCommand, String> {
+        let json = js_sys::JSON::stringify(data).ok().and_then(|s| s.as_string()).ok_or("not plain data")?;
+        let value = serde_json::from_str::<serde_json::Value>(&json).map_err(|e| e.to_string())?;
+        pdfcraft_ui_egui::AnnotCommand::from_json(kind.trim_start_matches("pdfcraft:annots-"), &value)
+    }
+
     /// Read `actor`, `readOnly`, `mode` and `policy.overrides` of a `pdfcraft:open` message. Missing means off; a wrong type or
     /// length is an error (the open is refused), never a way around the checks.
     fn open_ownership(data: &JsValue) -> Result<pdfcraft_ui_egui::Ownership, String> {
@@ -471,7 +565,23 @@ mod host {
         };
         // Any other type than a string is "no mode", the narrowest.
         let scope = pdfcraft_ui_egui::open_scope(string(data, "mode").as_deref());
-        let own = pdfcraft_ui_egui::Ownership { actor, read_only, scope, ..Default::default() };
+        // `annotSync` shares the annotations through the page, which needs to know whose they are.
+        let flag = |key: &str| -> Result<bool, String> {
+            let v = get(key);
+            if v.is_undefined() || v.is_null() { Ok(false) } else { v.as_bool().ok_or_else(|| format!("{key} must be a boolean")) }
+        };
+        let annot_sync = flag("annotSync")?;
+        if annot_sync && actor.is_none() {
+            return Err("annotSync needs an actor".into());
+        }
+        // `commentsPanel: false` hides this interface's own panel; absent means shown.
+        let get_panel = get("commentsPanel");
+        let hide_comments_panel = if get_panel.is_undefined() || get_panel.is_null() {
+            false
+        } else {
+            !get_panel.as_bool().ok_or_else(|| "commentsPanel must be a boolean".to_string())?
+        };
+        let own = pdfcraft_ui_egui::Ownership { actor, read_only, scope, annot_sync, hide_comments_panel, ..Default::default() };
         Ok(pdfcraft_ui_egui::with_policy(own, policy_overrides(data)))
     }
 

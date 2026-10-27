@@ -2687,3 +2687,10 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	{n} annotations can't be saved to the server (too large or not supported)	Không thể lưu {n} chú thích lên máy chủ (quá lớn hoặc không được hỗ trợ)
+	this comment belongs to someone else	bình luận này thuộc về người khác
+	the comment has replies from someone else	bình luận có phản hồi từ người khác
+	this page has comments from someone else	trang này có bình luận của người khác
+	the document is read-only	tài liệu ở chế độ chỉ đọc
+	this change isn't available here: only comments can be made in this view	thay đổi này không khả dụng ở đây: ở chế độ xem này chỉ có thể tạo bình luận
+	a reply can't be replied to	không thể trả lời một phản hồi

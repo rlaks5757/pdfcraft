@@ -668,6 +668,10 @@ impl PdfCraftApp {
     /// Whether the host lock and the host's policy let command `id` run now, and show where it
     /// has a button. Always true without the lock.
     pub(crate) fn host_allows(&self, id: &str) -> bool {
+        // The page keeps the annotations itself (`annotSync`): the file isn't saved from here.
+        if matches!(id, "file.save" | "file.save_as") && self.active_shares_annotations() {
+            return false;
+        }
         if !self.host_lock {
             return true;
         }
@@ -1139,6 +1143,92 @@ mod tests {
         let (_, new) = app.active_ids().unwrap();
         assert!(app.session.get(new).unwrap().ownership().read_only);
         assert!(!app.session.get(id).unwrap().ownership().read_only);
+    }
+
+    /// `pdf()` behind the user password "pw".
+    fn encrypted_pdf() -> Vec<u8> {
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf())).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [4; 32],
+        })
+        .unwrap();
+        pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+    }
+
+    /// A one-page file with a password-protected PDF attached (hex in the stream: the file is binary).
+    fn pdf_with_locked_attachment() -> Vec<u8> {
+        let hex: String = encrypted_pdf().iter().map(|b| format!("{b:02x}")).collect::<String>() + ">";
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(in.pdf) 4 0 R] >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Type /Filespec /F (in.pdf) /UF (in.pdf) /EF << /F 5 0 R /UF 5 0 R >> >>".into(),
+            format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}\nendstream", hex.len()),
+        ])
+    }
+
+    /// The host's rules for the parent: an actor, shared annotations, a read-write viewer.
+    fn host_rules() -> Ownership {
+        Ownership { scope: EditScope::Viewer, actor: Some("alice".into()), annot_sync: true, hide_comments_panel: true, ..Default::default() }
+    }
+
+    fn only_looked_at(own: &Ownership) {
+        assert!(own.read_only && !own.annot_sync && !own.hide_comments_panel, "{own:?}");
+        assert_eq!(own.actor.as_deref(), Some("alice"));
+    }
+
+    /// A password-protected attachment is made after its prompt, when the session's rules are the
+    /// host's again: it still has to be read-only and out of the annotation database.
+    #[test]
+    fn a_password_protected_attachment_opens_read_only_under_the_lock() {
+        let mut app = locked();
+        app.session.set_open_ownership(host_rules());
+        app.open_bytes("a.pdf", None, pdf_with_locked_attachment()).unwrap();
+        let (_, parent) = app.active_ids().unwrap();
+        app.attachment_action(parent, 0, true);
+        assert!(app.password_prompt.is_some(), "the attachment asks for its password");
+        assert!(!app.session.open_ownership().read_only, "the session's rules went back to the host's");
+        app.submit_password(Some("pw".into()));
+        let (_, new) = app.active_ids().unwrap();
+        assert_ne!(new, parent);
+        only_looked_at(app.session.get(new).unwrap().ownership());
+        let p = app.session.get(parent).unwrap().ownership();
+        assert!(!p.read_only && p.annot_sync, "the host's document is as it was");
+        assert!(!app.session.open_ownership().read_only, "and a later open is the host's");
+    }
+
+    /// The same through the open worker, which makes the document a few frames after the answer.
+    #[test]
+    fn a_password_protected_attachment_opened_by_the_worker_is_read_only_too() {
+        let mut app = PdfCraftApp::new();
+        app.host_lock = true;
+        app.session.set_open_ownership(host_rules());
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_| app);
+        h.state_mut().open_bytes("a.pdf", None, pdf_with_locked_attachment()).unwrap();
+        h.run_steps(2);
+        let (_, parent) = h.state().active_ids().unwrap();
+        h.state_mut().attachment_action(parent, 0, true);
+        h.run_steps(2);
+        assert!(h.state().password_prompt.is_some());
+        h.state_mut().submit_password(Some("pw".into()));
+        // The session's rules change while the worker is busy: the answer's rules still hold.
+        h.state_mut().session.set_open_ownership(Ownership { scope: EditScope::All, ..Default::default() });
+        for _ in 0..100 {
+            h.run_steps(2);
+            if h.state().active_ids().is_some_and(|(_, id)| id != parent) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, new) = h.state().active_ids().unwrap();
+        assert_ne!(new, parent);
+        only_looked_at(h.state().session.get(new).unwrap().ownership());
+        assert_eq!(h.state().session.open_ownership().scope, EditScope::All, "the rules in force are put back");
     }
 
     /// Only the page tool the administrator turned on works; the grid's other edits do not.

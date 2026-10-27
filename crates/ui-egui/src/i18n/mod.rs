@@ -506,6 +506,22 @@ pub fn words(wording: &str) -> String {
     t(wording).to_owned()
 }
 
+/// The refusals the document-sharing (PPM) rules add. Only these are said in the UI language when
+/// they come up as an edit error; any other engine error keeps its English text, as upstream.
+const OWNERSHIP_REFUSALS: [&str; 6] = [
+    "this comment belongs to someone else",
+    "the comment has replies from someone else",
+    "this page has comments from someone else",
+    "the document is read-only",
+    "this change isn't available here: only comments can be made in this view",
+    "a reply can't be replied to",
+];
+
+/// `message` said in the UI language if it is one of the sharing rules' refusals, else as it is.
+pub fn refusal(message: &str) -> String {
+    if OWNERSHIP_REFUSALS.contains(&message) { words(message) } else { message.to_owned() }
+}
+
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
     lang.catalog().contextual(context, s).unwrap_or_else(|| tr(lang, s))
@@ -1084,6 +1100,27 @@ mod tests {
         assert_eq!(auto_language(true, JA), ko);
         assert_eq!(auto_language(true, || Lang::EN), ko);
         assert_eq!(auto_language(false, JA), JA());
+    }
+
+    /// The refusals a shared document shows (someone else's comment, a read-only or viewer-only page)
+    /// are said in Korean, not in the English of the layer below.
+    #[test]
+    fn korean_says_the_ownership_refusals() {
+        let ko = Lang::from_code("ko").expect("ko registered");
+        let refusals = [
+            "this comment belongs to someone else".to_string(),
+            "the comment has replies from someone else".to_string(),
+            "this page has comments from someone else".to_string(),
+            pdfcraft_engine::EditError::HostReadOnly.to_string(),
+            pdfcraft_engine::EditError::HostViewerOnly.to_string(),
+        ];
+        for r in refusals {
+            assert_ne!(tr(ko, &r), r.as_str(), "no Korean for: {r}");
+            assert!(OWNERSHIP_REFUSALS.contains(&r.as_str()), "not in the refusal list: {r}");
+        }
+        // Another engine error keeps its English text, though a catalog has it.
+        let other = "a document must keep at least one page";
+        assert_eq!(refusal(other), other);
     }
 
     /// Italian translates every registered command and every All tools group, section and item.

@@ -13,6 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod actions;
+mod annot_sync;
 pub mod autotag;
 pub mod build_info;
 pub mod camera;
@@ -40,6 +41,7 @@ mod text_preview;
 pub mod word_count;
 pub mod xfa;
 
+pub use annot_sync::{AnnotChanges, AnnotOp, AnnotUpsert, RejectedAnnot, RemoteAnnot, RemoteReport};
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use text_preview::TextEditPreview;
@@ -217,6 +219,11 @@ pub struct Ownership {
     /// The host's per-command policy (`policy.overrides`), sorted by command id. The engine only
     /// carries it; the interface decides what a command's setting means.
     pub overrides: Vec<(String, bool)>,
+    /// The page keeps the document's annotations in its own database (`annotSync`): see
+    /// [`Session::take_annot_changes`]. Needs an `actor`.
+    pub annot_sync: bool,
+    /// `commentsPanel: false`: the interface hides its own comments panel (the page has its own).
+    pub hide_comments_panel: bool,
 }
 
 /// How far the embedding page lets editing go (`pdfcraft:open` `mode`).
@@ -315,6 +322,7 @@ fn scope_of(edit: &Edit) -> Scope {
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -468,6 +476,8 @@ pub struct Document {
     pub edit_notices: Vec<TextNotice>,
     /// The host's `actor` and `readOnly` (see [`Session::set_ownership`]).
     ownership: Ownership,
+    /// Annotation sharing with the host, when it asked for it (see the `annot_sync` module).
+    sync: Option<annot_sync::SyncState>,
 }
 
 /// Text an edit stored as typed but drew with `?` in place of `ch`, because the font it is drawn
@@ -1464,6 +1474,14 @@ pub enum Edit {
         /// (the PPM host's `/PpmStamp` metadata).
         extra: Option<(String, String)>,
     },
+    /// A sign box (the PPM host's FreeText with `/PpmSignRole`) over `rect` (user space).
+    AddSignBox {
+        page: usize,
+        rect: [f64; 4],
+        role: String,
+        label: String,
+        author: String,
+    },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
         page: usize,
@@ -2068,6 +2086,7 @@ impl Edit {
             Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
             Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
+            Edit::AddSignBox { .. } => Label::of("Add sign box"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
@@ -2232,6 +2251,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -2515,6 +2535,14 @@ fn run_edit_body(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx
             if let Some((key, value)) = extra {
                 pdfcraft_annot::set_extra(doc, *page, index, key, value)?;
             }
+            // The picture file as it came, so the annotation database gets it without re-encoding;
+            // a document that is not shared keeps no second copy of it.
+            if src.image && cx.ownership.annot_sync {
+                pdfcraft_annot::set_picture_source(doc, *page, index, &file.bytes)?;
+            }
+        }
+        Edit::AddSignBox { page, rect, role, label, author } => {
+            pdfcraft_annot::add_sign_box(doc, *page, *rect, role, label, author, &cx.meta())?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
@@ -3405,6 +3433,8 @@ impl Session {
                 editor.redo.clear();
             }
             doc.ownership = ownership.clone();
+            doc.sync = None;
+            doc.init_annot_sync();
         }
         self.ownership = ownership;
     }
@@ -3413,6 +3443,11 @@ impl Session {
     /// open keep the rules they were opened under (a held-back second open must not change them).
     pub fn set_open_ownership(&mut self, ownership: Ownership) {
         self.ownership = ownership;
+    }
+
+    /// The rules documents opened from now on get ([`Self::set_open_ownership`]).
+    pub fn open_ownership(&self) -> &Ownership {
+        &self.ownership
     }
 
     /// Use a fixed clock (tests) instead of the system time.
@@ -3521,6 +3556,7 @@ impl Session {
         let mut document = prepared.document;
         document.id = id;
         document.ownership = self.ownership.clone();
+        document.init_annot_sync();
         self.docs.push(document);
         id
     }
@@ -3793,6 +3829,7 @@ impl Session {
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
             ownership: Ownership::default(),
+            sync: None,
         }
     }
 
@@ -3977,7 +4014,10 @@ impl Session {
             }
             return Err(e);
         }
-        doc.dirty = true;
+        // Annotations of a document that shares them go to the host's database: nothing to save.
+        if doc.sync.is_none() || !annot_sync::is_annotation_work(&edit) {
+            doc.dirty = true;
+        }
         doc.generation += 1;
         doc.edit_notices = notices;
         if !cx.xfa_removed.is_empty() {
@@ -4007,6 +4047,7 @@ impl Session {
             return Err(EditError::HostReadOnly);
         }
         doc.edit_notices.clear();
+        Self::check_history_step(doc, true)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
         let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
@@ -4014,7 +4055,10 @@ impl Session {
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        Self::sync_dirty(doc);
+        // A document that shares its annotations has no unsaved annotation work to come back to.
+        if doc.sync.is_none() {
+            Self::sync_dirty(doc);
+        }
         doc.generation += 1;
         Ok(label)
     }
@@ -4025,6 +4069,7 @@ impl Session {
             return Err(EditError::HostReadOnly);
         }
         doc.edit_notices.clear();
+        Self::check_history_step(doc, false)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
         let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
@@ -4032,7 +4077,10 @@ impl Session {
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
         Self::refresh_scoped(doc, scope).inspect_err(|_| Self::show_released(doc))?;
-        Self::sync_dirty(doc);
+        // A document that shares its annotations has no unsaved annotation work to come back to.
+        if doc.sync.is_none() {
+            Self::sync_dirty(doc);
+        }
         doc.generation += 1;
         Ok(label)
     }
@@ -4964,6 +5012,15 @@ impl Session {
         }
         use_layer_choices(doc);
         true
+    }
+
+    /// Leave replies out of the page picture (or draw them): a document the host opens only to
+    /// look at, as a comparison, hides them like one it shares. Returns whether anything changed.
+    pub fn set_hide_replies(&mut self, id: DocId, hide: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        let was = doc.replies_hidden();
+        doc.set_replies_hidden(hide);
+        was != hide
     }
 
     /// Hide or show every comment on the page (Acrobat's Comments ▸ Hide all comments). Form

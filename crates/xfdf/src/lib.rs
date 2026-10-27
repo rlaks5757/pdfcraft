@@ -18,6 +18,18 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod position;
+mod single;
+pub use position::{AnnotEntry, ExportRequest, export_positions, list_annotations, strip_positions};
+pub use single::{
+    AnnotIndex, AnnotXfdf, MAX_XFDF_LEN, PictureCache, RemoteItem, RemoteReport, apply_remote, apply_remote_cached, export_annotation,
+    export_annotation_in, export_annotations, remove_by_name, remove_by_name_in,
+};
+
+#[cfg(test)]
+mod position_tests;
+#[cfg(test)]
+mod single_tests;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +43,12 @@ pub enum DataError {
     NothingImported,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+    #[error("no annotation named {0}")]
+    NotFound(String),
+    #[error("the annotation's XFDF is {len} characters, over the limit of {max}")]
+    TooLarge { len: usize, max: usize },
+    #[error("the annotation can't be exchanged: {0}")]
+    Invalid(String),
 }
 
 /// What export writes.
@@ -262,12 +280,10 @@ fn arr(v: &[f64]) -> Object {
 
 // ── export ──────────────────────────────────────────────────────────────────────────────────
 
-/// Every comment as an XFDF element (one line per comment, replies included).
-fn xfdf_annots(doc: &Document, out: &mut String) {
-    let pages = pdfcraft_model::pages(doc);
-    // NM of every annotation, for inreplyto.
+/// Names of every annotation, by object, for `inreplyto`.
+fn annot_names(doc: &Document, pages: &[pdfcraft_model::Page]) -> HashMap<ObjRef, String> {
     let mut names: HashMap<ObjRef, String> = HashMap::new();
-    for p in &pages {
+    for p in pages {
         for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = a.as_ref()
                 && let Some(nm) = doc.get(r).as_dict().and_then(|d| text_of(doc, d, b"NM"))
@@ -276,126 +292,200 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
             }
         }
     }
+    names
+}
+
+/// One comment as an XFDF element appended to `out`; its tag name, or `None` when the
+/// annotation has no XFDF form (links, widgets, pop-ups).
+///
+/// `rich` is the one-annotation database form: a non-`text` annotation's `/IRT` goes into custom
+/// data instead of `inreplyto` (the server allows replies on notes only), and the stamp picture
+/// and PdfCraft's private keys are written ([`single`]).
+fn annot_element(doc: &Document, d: &Dict, pi: usize, names: &HashMap<ObjRef, String>, rich: bool, out: &mut String) -> Option<&'static str> {
+    let sub = d.name(b"Subtype")?;
+    let (_, tag) = SUBTYPES.iter().find(|(s, _)| s.as_bytes() == sub)?;
+    let mut attrs = format!(" page=\"{pi}\"");
+    let rect = nums_of(doc, d.get(b"Rect"));
+    if rect.len() == 4 {
+        let _ = write!(
+            attrs,
+            " rect=\"{},{},{},{}\"",
+            n(rect[0].min(rect[2])),
+            n(rect[1].min(rect[3])),
+            n(rect[0].max(rect[2])),
+            n(rect[1].max(rect[3]))
+        );
+    }
+    for (key, attr) in [
+        (&b"NM"[..], "name"),
+        (b"T", "title"),
+        (b"Subj", "subject"),
+        (b"M", "date"),
+        (b"CreationDate", "creationdate"),
+        (b"RT", "replyType"),
+        (b"State", "state"),
+        (b"StateModel", "statemodel"),
+        (b"Name", "icon"),
+    ] {
+        if let Some(v) = text_of(doc, d, key) {
+            let _ = write!(attrs, " {attr}=\"{}\"", esc(&v));
+        }
+    }
+    let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+    let fl: Vec<&str> = FLAGS.iter().filter(|(b, _)| flags & b != 0).map(|(_, s)| *s).collect();
+    if !fl.is_empty() {
+        let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
+    }
+    if let Some(c) = hex(&nums_of(doc, d.get(b"C"))) {
+        let _ = write!(attrs, " color=\"{c}\"");
+    }
+    if let Some(c) = hex(&nums_of(doc, d.get(b"IC"))) {
+        let _ = write!(attrs, " interior-color=\"{c}\"");
+    }
+    if let Some(o) = d.get(b"CA").and_then(|o| doc.resolve(o).as_f64()) {
+        let _ = write!(attrs, " opacity=\"{}\"", n(o));
+    }
+    if let Some(w) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64))) {
+        let _ = write!(attrs, " width=\"{}\"", n(w));
+    }
+    // Border style (XFDF `style` / `dashes`, as PDFTron writes a dashed sign box).
+    if let Some(bs) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().cloned()) {
+        let style = match bs.name(b"S") {
+            Some(b"D") => Some("dash"),
+            Some(b"B") => Some("bevelled"),
+            Some(b"I") => Some("inset"),
+            Some(b"U") => Some("underline"),
+            _ => None,
+        };
+        if let Some(style) = style {
+            let _ = write!(attrs, " style=\"{style}\"");
+        }
+        let dashes = nums_of(doc, bs.get(b"D"));
+        if style == Some("dash") && !dashes.is_empty() {
+            let _ = write!(attrs, " dashes=\"{}\"", dashes.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+        }
+    }
+    let quads = nums_of(doc, d.get(b"QuadPoints"));
+    if !quads.is_empty() {
+        let _ = write!(attrs, " coords=\"{}\"", quads.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+    }
+    let l = nums_of(doc, d.get(b"L"));
+    if l.len() == 4 {
+        let _ = write!(attrs, " start=\"{},{}\" end=\"{},{}\"", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
+    }
+    if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+        && le.len() == 2
+    {
+        let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
+        let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
+    }
+    // A text box's alignment (`/Q`): XFDF names it `justification`, left being the default.
+    if *tag == "freetext" {
+        match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => attrs.push_str(" justification=\"center\""),
+            Some(2) => attrs.push_str(" justification=\"right\""),
+            _ => {}
+        }
+    }
+    // The web viewer's text colour and size attributes (its border colour is the `/DA` one).
+    if *tag == "freetext" {
+        if let Some(c) = hex(&pdfcraft_annot::appearance::text_color(d)) {
+            let _ = write!(attrs, " TextColor=\"{c}\"");
+        }
+        let _ = write!(attrs, " FontSize=\"{}\"", n(pdfcraft_annot::appearance::parse_da(d).1));
+    }
+    // A callout: its leader path, text-box inset, intent and (single-name) line ending.
+    let cl = nums_of(doc, d.get(b"CL"));
+    if cl.len() == 4 || cl.len() == 6 {
+        let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+        let rd = nums_of(doc, d.get(b"RD"));
+        if rd.len() == 4 {
+            let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
+        }
+        if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+            let _ = write!(attrs, " intent=\"{}\"", esc(&it));
+        }
+        if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+            let _ = write!(attrs, " head=\"{}\"", esc(&le));
+        }
+    }
+    let irt = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r));
+    if let Some(irt) = irt
+        && (!rich || *tag == "text")
+    {
+        let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
+    }
+    let _ = write!(out, "<{tag}{attrs}>");
+    if let Some(c) = text_of(doc, d, b"Contents") {
+        let _ = write!(out, "<contents>{}</contents>", esc(&c));
+    }
+    if let Some(da) = text_of(doc, d, b"DA") {
+        let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
+    }
+    // The web viewer reads a text box's alignment and text colour from here (CSS), not from `justification`.
+    if *tag == "freetext" {
+        let align = match d.get(b"Q").map(|o| doc.resolve(o)).and_then(|o| o.as_int()) {
+            Some(1) => Some("center"),
+            Some(2) => Some("right"),
+            _ => None,
+        };
+        if align.is_some() || pdfcraft_annot::appearance::text_color(d) != pdfcraft_annot::appearance::parse_da(d).0 {
+            let size = pdfcraft_annot::appearance::parse_da(d).1;
+            let hex = hex(&pdfcraft_annot::appearance::text_color(d)).unwrap_or_else(|| "#000000".into());
+            let _ = write!(
+                out,
+                "<defaultstyle>font: Helvetica {}pt; text-align: {}; text-vertical-align: top; color: {hex}</defaultstyle>",
+                n(size),
+                align.unwrap_or("left")
+            );
+        }
+    }
+    let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    if !ink.is_empty() {
+        out.push_str("<inklist>");
+        for g in ink {
+            let v = nums_of(doc, Some(&g));
+            let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+            let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
+        }
+        out.push_str("</inklist>");
+    }
+    // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
+    let vertices = nums_of(doc, d.get(b"Vertices"));
+    let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+    if !pts.is_empty() {
+        let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
+    }
+    if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
+        let r = nums_of(doc, pd.get(b"Rect"));
+        if r.len() == 4 {
+            let open = matches!(pd.get(b"Open"), Some(Object::Bool(true)));
+            let _ = write!(
+                out,
+                "<popup page=\"{pi}\" rect=\"{},{},{},{}\" open=\"{}\"/>",
+                n(r[0]),
+                n(r[1]),
+                n(r[2]),
+                n(r[3]),
+                if open { "yes" } else { "no" }
+            );
+        }
+    }
+    if rich {
+        single::rich_children(doc, d, tag, irt.filter(|_| *tag != "text").map(String::as_str), out);
+    }
+    let _ = writeln!(out, "</{tag}>");
+    Some(*tag)
+}
+
+/// Every comment as an XFDF element (one line per comment, replies included).
+fn xfdf_annots(doc: &Document, out: &mut String) {
+    let pages = pdfcraft_model::pages(doc);
+    let names = annot_names(doc, &pages);
     for (pi, p) in pages.iter().enumerate() {
         for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
             let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
-            let Some(sub) = d.name(b"Subtype") else { continue };
-            let Some((_, tag)) = SUBTYPES.iter().find(|(s, _)| s.as_bytes() == sub) else { continue };
-            let mut attrs = format!(" page=\"{pi}\"");
-            let rect = nums_of(doc, d.get(b"Rect"));
-            if rect.len() == 4 {
-                let _ = write!(
-                    attrs,
-                    " rect=\"{},{},{},{}\"",
-                    n(rect[0].min(rect[2])),
-                    n(rect[1].min(rect[3])),
-                    n(rect[0].max(rect[2])),
-                    n(rect[1].max(rect[3]))
-                );
-            }
-            for (key, attr) in [
-                (&b"NM"[..], "name"),
-                (b"T", "title"),
-                (b"Subj", "subject"),
-                (b"M", "date"),
-                (b"CreationDate", "creationdate"),
-                (b"RT", "replyType"),
-                (b"State", "state"),
-                (b"StateModel", "statemodel"),
-                (b"Name", "icon"),
-            ] {
-                if let Some(v) = text_of(doc, &d, key) {
-                    let _ = write!(attrs, " {attr}=\"{}\"", esc(&v));
-                }
-            }
-            let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            let fl: Vec<&str> = FLAGS.iter().filter(|(b, _)| flags & b != 0).map(|(_, s)| *s).collect();
-            if !fl.is_empty() {
-                let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
-            }
-            if let Some(c) = hex(&nums_of(doc, d.get(b"C"))) {
-                let _ = write!(attrs, " color=\"{c}\"");
-            }
-            if let Some(c) = hex(&nums_of(doc, d.get(b"IC"))) {
-                let _ = write!(attrs, " interior-color=\"{c}\"");
-            }
-            if let Some(o) = d.get(b"CA").and_then(|o| doc.resolve(o).as_f64()) {
-                let _ = write!(attrs, " opacity=\"{}\"", n(o));
-            }
-            if let Some(w) = d.get(b"BS").and_then(|b| doc.resolve(b).as_dict().and_then(|b| b.get(b"W").and_then(Object::as_f64))) {
-                let _ = write!(attrs, " width=\"{}\"", n(w));
-            }
-            let quads = nums_of(doc, d.get(b"QuadPoints"));
-            if !quads.is_empty() {
-                let _ = write!(attrs, " coords=\"{}\"", quads.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-            }
-            let l = nums_of(doc, d.get(b"L"));
-            if l.len() == 4 {
-                let _ = write!(attrs, " start=\"{},{}\" end=\"{},{}\"", n(l[0]), n(l[1]), n(l[2]), n(l[3]));
-            }
-            if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
-                && le.len() == 2
-            {
-                let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
-                let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
-            }
-            // A callout: its leader path, text-box inset, intent and (single-name) line ending.
-            let cl = nums_of(doc, d.get(b"CL"));
-            if cl.len() == 4 || cl.len() == 6 {
-                let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-                let rd = nums_of(doc, d.get(b"RD"));
-                if rd.len() == 4 {
-                    let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-                }
-                if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
-                    let _ = write!(attrs, " intent=\"{}\"", esc(&it));
-                }
-                if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
-                    let _ = write!(attrs, " head=\"{}\"", esc(&le));
-                }
-            }
-            if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
-                let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
-            }
-            let _ = write!(out, "<{tag}{attrs}>");
-            if let Some(c) = text_of(doc, &d, b"Contents") {
-                let _ = write!(out, "<contents>{}</contents>", esc(&c));
-            }
-            if let Some(da) = text_of(doc, &d, b"DA") {
-                let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
-            }
-            let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-            if !ink.is_empty() {
-                out.push_str("<inklist>");
-                for g in ink {
-                    let v = nums_of(doc, Some(&g));
-                    let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
-                    let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
-                }
-                out.push_str("</inklist>");
-            }
-            // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
-            let vertices = nums_of(doc, d.get(b"Vertices"));
-            let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
-            if !pts.is_empty() {
-                let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
-            }
-            if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
-                let r = nums_of(doc, pd.get(b"Rect"));
-                if r.len() == 4 {
-                    let open = matches!(pd.get(b"Open"), Some(Object::Bool(true)));
-                    let _ = write!(
-                        out,
-                        "<popup page=\"{pi}\" rect=\"{},{},{},{}\" open=\"{}\"/>",
-                        n(r[0]),
-                        n(r[1]),
-                        n(r[2]),
-                        n(r[3]),
-                        if open { "yes" } else { "no" }
-                    );
-                }
-            }
-            let _ = writeln!(out, "</{tag}>");
+            annot_element(doc, &d, pi, &names, false, out);
         }
     }
 }
@@ -722,6 +812,51 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         bs.set(b"S".to_vec(), Object::name("S"));
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
+    let border_style = match node.attribute("style").map(str::to_ascii_lowercase).as_deref() {
+        Some("dash") => Some("D"),
+        Some("bevelled") => Some("B"),
+        Some("inset") => Some("I"),
+        Some("underline") => Some("U"),
+        _ => None,
+    };
+    if let Some(style) = border_style {
+        let mut bs = d.get(b"BS").and_then(|b| b.as_dict().cloned()).unwrap_or_else(|| {
+            let mut bs = Dict::new();
+            bs.set(b"W".to_vec(), Object::Real(1.0));
+            bs
+        });
+        bs.set(b"S".to_vec(), Object::name(style));
+        let dashes: Vec<f64> = node.attribute("dashes").map(csv).unwrap_or_default().into_iter().filter(|v| *v >= 0.0).collect();
+        if style == "D" && !dashes.is_empty() {
+            bs.set(b"D".to_vec(), arr(&dashes));
+        }
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    // Alignment: the `text-align` of `<defaultstyle>` (where the web viewer keeps it) wins; else the
+    // `justification` attribute (name or 0/1/2).
+    let align = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+        "left" | "0" => Some(0),
+        "center" | "centered" | "1" => Some(1),
+        "right" | "2" => Some(2),
+        _ => None,
+    };
+    let style_align = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        let css = c.text().unwrap_or("");
+        css.split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("text-align")).and_then(|(_, v)| align(v)))
+    });
+    if let Some(q) = style_align.or_else(|| node.attribute("justification").and_then(align)).filter(|q| *q != 0) {
+        d.set(b"Q".to_vec(), Object::Int(q));
+    }
+    // Text colour: the `TextColor` attribute, else the `color` of `<defaultstyle>`; the `/DA` colour
+    // stays the border colour, as in the web viewer.
+    let style_color = node.children().find(|c| c.has_tag_name("defaultstyle")).and_then(|c| {
+        c.text().unwrap_or("").split(';').find_map(|decl| decl.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("color")).and_then(|(_, v)| parse_hex(v)))
+    });
+    if node.has_tag_name("freetext")
+        && let Some(c) = node.attribute("TextColor").and_then(parse_hex).or(style_color)
+    {
+        d.set(pdfcraft_annot::appearance::TEXT_COLOR_KEY.to_vec(), arr(&c));
+    }
     if let Some(q) = node.attribute("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));
     }
@@ -854,6 +989,25 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
     Ok(r)
 }
 
+/// The pop-up window of an imported comment `r` on `page`, from its `<popup>` element.
+fn add_popup(doc: &mut Document, page: ObjRef, r: ObjRef, pop: roxmltree::Node) -> Result<(), DataError> {
+    let Some(rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4) else { return Ok(()) };
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Annot"));
+    p.set(b"Subtype".to_vec(), Object::name("Popup"));
+    p.set(b"Rect".to_vec(), arr(&rect));
+    p.set(b"Parent".to_vec(), Object::Ref(r));
+    p.set(b"Open".to_vec(), Object::Bool(pop.attribute("open") == Some("yes")));
+    let pr = doc.add(Object::Dict(p));
+    doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
+    doc.update_dict(page, |pd| {
+        if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
+            a.push(Object::Ref(pr));
+        }
+    })?;
+    Ok(())
+}
+
 fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -882,22 +1036,8 @@ fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
                 later.insert(r, irt.to_string());
             }
             // A pop-up window.
-            if let Some(pop) = node.children().find(|c| c.has_tag_name("popup"))
-                && let Some(rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
-            {
-                let mut p = Dict::new();
-                p.set(b"Type".to_vec(), Object::name("Annot"));
-                p.set(b"Subtype".to_vec(), Object::name("Popup"));
-                p.set(b"Rect".to_vec(), arr(&rect));
-                p.set(b"Parent".to_vec(), Object::Ref(r));
-                p.set(b"Open".to_vec(), Object::Bool(pop.attribute("open") == Some("yes")));
-                let pr = doc.add(Object::Dict(p));
-                doc.update_dict(r, |d| d.set(b"Popup".to_vec(), Object::Ref(pr)))?;
-                doc.update_dict(page, |pd| {
-                    if let Some(Object::Array(a)) = pd.get_mut(b"Annots") {
-                        a.push(Object::Ref(pr));
-                    }
-                })?;
+            if let Some(pop) = node.children().find(|c| c.has_tag_name("popup")) {
+                add_popup(doc, page, r, pop)?;
             }
             report.comments += 1;
         }

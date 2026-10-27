@@ -1596,7 +1596,8 @@ pub(crate) fn n(v: f64) -> String {
 /// plain `/Contents`, `/DA` and `/Q`, so viewers that edit rich text show the same thing.
 fn rich_text(d: &mut Dict) {
     let text = d.get(b"Contents").and_then(|c| c.as_string()).map(PdfString::to_text).unwrap_or_default();
-    let (col, size) = appearance::parse_da(d);
+    let (_, size) = appearance::parse_da(d);
+    let col = appearance::text_color(d);
     let hex = format!(
         "#{:02X}{:02X}{:02X}",
         (col[0].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -1661,10 +1662,22 @@ fn doomed_with(doc: &Document, list: &[Object], target: Option<ObjRef>) -> Vec<O
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    delete_with(doc, page, index, true)
+}
+
+/// [`delete_annotation`] without the Locked check: for a deletion another party already made
+/// (the annotation sync applies a remote delete whatever flags the local copy carries).
+pub fn delete_annotation_unchecked(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    delete_with(doc, page, index, false)
+}
+
+fn delete_with(doc: &mut Document, page: usize, index: usize, respect_lock: bool) -> Result<(), AnnotError> {
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    if let Some(r) = target.as_ref() {
+    if let Some(r) = target.as_ref()
+        && respect_lock
+    {
         unlocked(doc, r)?;
     }
     let doomed = doomed_with(doc, &list, target.as_ref());
@@ -1814,6 +1827,47 @@ pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -
 pub fn set_extra(doc: &mut Document, page: usize, index: usize, key: &str, value: &str) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     doc.update_dict(r, |d| d.set(key.as_bytes().to_vec(), PdfString::text(value)))?;
+    Ok(())
+}
+
+/// The private key of a sign box's role (the PPM host's `/PpmSignRole`).
+pub const SIGN_ROLE_KEY: &str = "PpmSignRole";
+
+const SIGN_BOX_TEXT: [f64; 3] = [1.0, 0.0, 0.0];
+
+/// A sign box the way the PPM web viewer draws one: a centred, black, 1 pt dashed (4,3) text box
+/// whose text and subject are `label`, with `role` kept in `/PpmSignRole`. `rect` is in user space.
+pub fn add_sign_box(doc: &mut Document, page: usize, rect: [f64; 4], role: &str, label: &str, author: &str, meta: &Meta) -> Result<usize, AnnotError> {
+    let shape = Shape::TextBox { rect, font_size: 12.0 };
+    let style = Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None };
+    let index = add_annotation(doc, &NewAnnotation { page, shape, style, contents: label.to_string(), author: author.to_string() }, meta)?;
+    let (_, r) = annot_ref(doc, page, index)?;
+    doc.update_dict(r, |d| {
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(1.0));
+        bs.set(b"S".to_vec(), Object::name("D"));
+        bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(3.0)]));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"Q".to_vec(), Object::Int(1));
+        d.set(b"Subj".to_vec(), PdfString::text(label));
+        // Red text in a black box, as the web viewer draws a sign field.
+        d.set(appearance::TEXT_COLOR_KEY.to_vec(), num_array(&SIGN_BOX_TEXT));
+        d.set(SIGN_ROLE_KEY.as_bytes().to_vec(), PdfString::text(role));
+        rich_text(d);
+    })?;
+    draw_appearance(doc, r)?;
+    Ok(index)
+}
+
+/// The private key holding the file a picture stamp was made from (a stream of the original
+/// PNG/JPEG bytes), so the annotation database sends it as it came instead of re-encoding.
+pub const PICTURE_SOURCE_KEY: &str = "PpmImageSrc";
+
+/// Keep `bytes`, the image file behind the picture stamp at `(page, index)`, with the annotation.
+pub fn set_picture_source(doc: &mut Document, page: usize, index: usize, bytes: &[u8]) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    let src = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), bytes.to_vec())));
+    doc.update_dict(r, |d| d.set(PICTURE_SOURCE_KEY.as_bytes().to_vec(), Object::Ref(src)))?;
     Ok(())
 }
 
@@ -2051,6 +2105,8 @@ pub fn set_style(
                 let (_, size) = appearance::parse_da(d);
                 let [r, g, b] = c.map(|x| x.clamp(0.0, 1.0));
                 d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+                // One colour again: the text follows the border.
+                d.remove(appearance::TEXT_COLOR_KEY);
                 rich_text(d);
             } else {
                 d.set(b"C".to_vec(), rgb(c));
@@ -2380,7 +2436,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let d = obj.as_dict()?;
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
-    let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
+    let color = if subtype == "FreeText" { Some(appearance::text_color(d)) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine")
         .then(|| d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0));
     Some(Props {

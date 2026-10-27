@@ -59,6 +59,9 @@ pub struct RenderConfig {
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
+    /// Replies (an annotation with `/IRT`, not `/RT /Group`) aren't drawn: they are in the
+    /// comments list only, as in the host's own viewer.
+    pub hide_replies: bool,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps.
     pub reject_oversize: bool,
@@ -73,6 +76,7 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
+            hide_replies: self.hide_replies,
             font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
@@ -3206,6 +3210,44 @@ trailer << /Root 1 0 R >>
         let hidden = render(true);
         assert_eq!(px(&hidden, 75, 25), vec![255, 255, 255, 255], "Hide all comments");
         assert_eq!(px(&hidden, 20, 80), vec![255, 0, 0, 255], "fields stay");
+    }
+
+    /// A reply (`/IRT`, `/RT` absent or `/R`) is not drawn when replies are hidden; its parent, an
+    /// annotation grouped with its parent (`/RT /Group`) and an annotation without `/IRT` still are.
+    #[test]
+    fn hiding_replies_keeps_what_is_not_a_reply() {
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [60 60 90 90] /AP << /N 8 0 R >> >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /IRT 4 0 R /Rect [10 60 40 90] /AP << /N 9 0 R >> >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /IRT 4 0 R /RT /R /Rect [10 10 40 40] /AP << /N 9 0 R >> >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /IRT 4 0 R /RT /Group /Rect [60 10 90 40] /AP << /N 10 0 R >> >> endobj
+8 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 24 >> stream
+0 1 0 rg 0 0 30 30 re f
+endstream endobj
+9 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 24 >> stream
+1 0 0 rg 0 0 30 30 re f
+endstream endobj
+10 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 30 30] /Length 24 >> stream
+0 0 1 rg 0 0 30 30 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let render = |hide_replies: bool| {
+            let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig { hide_replies, ..RenderConfig::default() });
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        let (red, green, blue, white) = (vec![255, 0, 0, 255], vec![0, 255, 0, 255], vec![0, 0, 255, 255], vec![255, 255, 255, 255]);
+        // Pixel rows run from the top: PDF y 75 is row 25, y 25 is row 75.
+        let shown = render(false);
+        assert_eq!((px(&shown, 25, 25), px(&shown, 25, 75)), (red.clone(), red), "replies are drawn as before");
+        let hidden = render(true);
+        assert_eq!(px(&hidden, 75, 25), green, "the parent stays");
+        assert_eq!(px(&hidden, 75, 75), blue, "a /RT /Group annotation stays");
+        assert_eq!((px(&hidden, 25, 25), px(&hidden, 25, 75)), (white.clone(), white), "replies are not drawn");
     }
 
     #[test]

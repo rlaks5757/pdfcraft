@@ -53,6 +53,7 @@ mod credits;
 mod crop;
 mod drag_pointer;
 mod export_ui;
+mod host_annots;
 mod host_compare;
 mod host_lock;
 mod host_stamp;
@@ -64,9 +65,11 @@ mod optimize_ui;
 mod search_ui;
 mod sign_ui;
 mod stamps_ui;
+pub use host_annots::{AnnotCommand, AnnotEvent, AnnotInbox, HostAnnotFn};
 pub use host_compare::{CompareCommand, CompareEvent, CompareInbox, HostCompareFn, MAX_COMPARE_BYTES};
 pub use host_lock::{HOST_LOCK, commands_manifest, open_scope, parse_mode, policy_overrides, with_policy};
-pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, StampCommand, StampEvent, StampInbox};
+pub use host_stamp::{HostStampFn, MAX_PNG_BYTES, SIGN_BOX_SIZE, StampCommand, StampEvent, StampInbox};
+pub use pdfcraft_engine::{AnnotChanges, RejectedAnnot, RemoteAnnot};
 pub use pdfcraft_engine::{EditClass, EditClasses, EditScope, Ownership};
 mod standards_ui;
 mod zoom_snap;
@@ -433,6 +436,9 @@ pub struct PasswordPrompt {
     stamp: Option<file_watch::Stamp>,
     pub input: String,
     pub error: Option<String>,
+    /// The rules the file was asked for under: the document is made with them once it is
+    /// unlocked, whatever the session's open rules are by then.
+    ownership: pdfcraft_engine::Ownership,
     /// A late startup file must stay in the background even after it is unlocked.
     activate: bool,
     /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
@@ -452,6 +458,8 @@ struct PendingOpen {
     name: String,
     path: Option<String>,
     stamp: Option<file_watch::Stamp>,
+    /// The session's open rules when the file was asked for (see [`PasswordPrompt::ownership`]).
+    ownership: pdfcraft_engine::Ownership,
     activate: bool,
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
@@ -646,6 +654,17 @@ pub struct PdfCraftApp {
     /// Stamp requests from the embedding page, and where to report them (web, see [`StampCommand`]).
     pub stamp_inbox: StampInbox,
     pub host_stamp: Option<HostStampFn>,
+    /// The embedding page's annotation messages, and where to report changes (web, see [`AnnotCommand`]).
+    pub annot_inbox: AnnotInbox,
+    pub host_annots: Option<HostAnnotFn>,
+    /// The selection last reported to the page (`None`: nothing reported yet).
+    annot_selected_sent: Option<Option<String>>,
+    /// The document the page's `annots-*` messages belong to: the last one opened with `annotSync`.
+    annot_target: Option<pdfcraft_engine::DocId>,
+    /// An `annotSync` file was taken but its document isn't here yet (a password is asked for).
+    annot_open_waiting: bool,
+    /// The number of the last `annots-changed` message sent for the shared document.
+    annot_seq: u64,
     /// The embedding page's compare request, and where to report it (web, see [`CompareCommand`]).
     pub compare_inbox: CompareInbox,
     pub host_compare: Option<HostCompareFn>,
@@ -1016,6 +1035,12 @@ impl PdfCraftApp {
             host_compare: None,
             compare_taken: false,
             host_stamp: None,
+            annot_inbox: Default::default(),
+            host_annots: None,
+            annot_selected_sent: None,
+            annot_target: None,
+            annot_open_waiting: false,
+            annot_seq: 0,
             armed_stamp: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1225,6 +1250,7 @@ impl PdfCraftApp {
             name: request.name,
             path: request.path,
             stamp: request.stamp,
+            ownership: self.session.open_ownership().clone(),
             activate: request.activate,
             after_open: request.after_open,
             recovered: request.recovered,
@@ -1263,6 +1289,14 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_pending_open(&mut self, pending: PendingOpen, kind: open_worker::ResultKind) {
+        // The document is made under the rules the file was asked for, not the ones of today.
+        let current = self.swap_open_rules(pending.ownership.clone());
+        self.finish_pending_open_under_rules(pending, kind);
+        self.session.set_open_ownership(current);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_pending_open_under_rules(&mut self, pending: PendingOpen, kind: open_worker::ResultKind) {
         match kind {
             open_worker::ResultKind::ReadFailed(reason) => {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &pending.name), ("e", &reason)]);
@@ -1313,6 +1347,7 @@ impl PdfCraftApp {
                         stamp: pending.stamp,
                         input: String::new(),
                         error: password_error,
+                        ownership: pending.ownership,
                         activate: pending.activate,
                         recovered: pending.recovered,
                         then: pending.then,
@@ -1322,6 +1357,13 @@ impl PdfCraftApp {
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
             },
         }
+    }
+
+    /// Make `rules` the ones new documents get; the rules that were are returned to put back.
+    fn swap_open_rules(&mut self, rules: pdfcraft_engine::Ownership) -> pdfcraft_engine::Ownership {
+        let prior = self.session.open_ownership().clone();
+        self.session.set_open_ownership(rules);
+        prior
     }
 
     fn try_open(
@@ -1347,6 +1389,7 @@ impl PdfCraftApp {
                     stamp,
                     input: String::new(),
                     error,
+                    ownership: self.session.open_ownership().clone(),
                     activate,
                     recovered: None,
                     then: None,
@@ -1588,7 +1631,13 @@ impl PdfCraftApp {
                 // its tab never reaches the host as if it were the host's document.
                 let parent = self.host_lock.then(|| self.session.get(doc).map(|d| d.ownership().clone())).flatten();
                 if let Some(own) = parent {
-                    self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, ..own });
+                    // The attachment is a file of its own: not in the host's annotation database, and with its own panel.
+                    self.session.set_open_ownership(pdfcraft_engine::Ownership {
+                        read_only: true,
+                        annot_sync: false,
+                        hide_comments_panel: false,
+                        ..own
+                    });
                 }
                 // The tab name later names files written from the tab (Split, Extract pages).
                 let opened = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes);
@@ -1663,6 +1712,14 @@ impl PdfCraftApp {
 
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
+        // The document is made under the rules the file was asked for, not the ones of today.
+        let Some(rules) = self.password_prompt.as_ref().map(|p| p.ownership.clone()) else { return };
+        let current = self.swap_open_rules(rules);
+        self.submit_password_under_rules(password);
+        self.session.set_open_ownership(current);
+    }
+
+    fn submit_password_under_rules(&mut self, password: Option<String>) {
         let Some(p) = self.password_prompt.take() else { return };
         let Some(pw) = password else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
@@ -2311,6 +2368,9 @@ impl PdfCraftApp {
     pub fn choose_right_panel(&mut self, panel: Option<RightPanel>) {
         if self.mode == Mode::Read {
             self.right_before_read = None;
+        }
+        if panel == Some(RightPanel::Comments) && self.comments_panel_hidden() {
+            return;
         }
         if panel == Some(RightPanel::Comments) {
             self.comments_panel_closed = false;
@@ -3157,15 +3217,39 @@ impl eframe::App for PdfCraftApp {
                     o.drain(..take).collect()
                 })
                 .unwrap_or_default();
-            for (name, bytes) in startup {
+            let mut queue = startup.into_iter();
+            while let Some((name, bytes)) = queue.next() {
+                let mut shares = false;
                 if let Some(ownership) = rules.pop_front() {
+                    shares = ownership.annot_sync;
                     self.session.set_open_ownership(ownership);
                 } else if self.host_lock {
                     self.session.set_open_ownership(host_lock::viewer_ownership());
+                } else {
+                    // Not the rules the file before it came with.
+                    self.session.set_open_ownership(Default::default());
                 }
                 let activate = !self.startup_superseded;
-                if let Err(e) = self.open_bytes_with_focus(&name, None, bytes, activate) {
+                let opened = self.open_bytes_with_focus(&name, None, bytes, activate);
+                if shares {
+                    self.annot_open_finished(opened.is_ok());
+                }
+                // The rules are for that file only (a prompt or the worker carries them on): a later
+                // open (a drop, an attachment) gets none.
+                self.session.set_open_ownership(if self.host_lock { host_lock::viewer_ownership() } else { Default::default() });
+                if let Err(e) = opened {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &e)]);
+                }
+                // One prompt at a time: the files after it wait, with their rules, for the answer.
+                if self.password_prompt.is_some() {
+                    let rest: Vec<_> = queue.by_ref().collect();
+                    if let Ok(mut q) = self.startup_inbox.lock() {
+                        q.splice(0..0, rest);
+                    }
+                    if let Ok(mut o) = self.ownership_inbox.lock() {
+                        o.splice(0..0, rules.drain(..));
+                    }
+                    break;
                 }
             }
         }
@@ -3194,6 +3278,10 @@ impl eframe::App for PdfCraftApp {
         }
         self.host_stamp_tick(ctx);
         self.host_compare_tick();
+        // The host hid this interface's comments panel: nothing opens it again.
+        if self.right == Some(RightPanel::Comments) && self.comments_panel_hidden() {
+            self.right = None;
+        }
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         craft_quit::on_close_request(ctx);
@@ -3330,6 +3418,7 @@ impl eframe::App for PdfCraftApp {
             }
         });
         self.process_pending_edits();
+        self.host_annots_tick();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);

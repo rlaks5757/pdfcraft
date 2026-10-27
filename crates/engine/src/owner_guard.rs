@@ -30,6 +30,10 @@ pub(crate) fn check(doc: &pdfcraft_cos::Document, edit: &Edit, own: &Ownership) 
     {
         return Err(EditError::HostViewerOnly);
     }
+    // The server refuses a reply to a reply, so a document that shares its annotations does too.
+    if own.annot_sync {
+        crate::annot_sync::check_reply_target(doc, edit)?;
+    }
     let Some(actor) = own.actor.as_deref() else { return Ok(()) };
     match edit {
         Edit::DeleteAnnotation { page, index } => owner::check_delete(doc, *page, *index, actor)?,
@@ -63,6 +67,7 @@ pub(crate) fn creates_comments(edit: &Edit) -> bool {
         Edit::AddMeasurement(_)
             | Edit::AddAnnotation(_)
             | Edit::AddCustomStamp { .. }
+            | Edit::AddSignBox { .. }
             | Edit::ReplyToAnnotation { .. }
             | Edit::SetAnnotationStatus { .. }
             | Edit::MarkAnnotation { .. }
@@ -112,6 +117,7 @@ fn work(edit: &Edit) -> Work {
     match edit {
         Edit::AddAnnotation(..)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddSignBox { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }

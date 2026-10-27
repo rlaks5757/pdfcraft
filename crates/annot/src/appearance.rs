@@ -186,7 +186,7 @@ pub fn cloud_path(pts: &[(f64, f64)], r: f64) -> String {
     c
 }
 
-fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
+pub(crate) fn nums(d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
     d.get(key)?.as_array()?.iter().map(|o| o.as_f64()).collect()
 }
 
@@ -235,6 +235,19 @@ fn rg(c: Rgb) -> String {
 
 fn rg_stroke(c: Rgb) -> String {
     format!("{} {} {} RG\n", n(c[0]), n(c[1]), n(c[2]))
+}
+
+/// The private key holding a text box's text colour when it differs from its border colour
+/// (the web viewer's `TextColor`; `/DA` then keeps the border colour, as it does there).
+pub const TEXT_COLOR_KEY: &[u8] = b"PpmTextColor";
+
+/// The colour a text box's text is drawn in: [`TEXT_COLOR_KEY`], else the `/DA` colour.
+pub fn text_color(d: &Dict) -> Rgb {
+    let own = d.get(TEXT_COLOR_KEY).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>());
+    match own.as_deref() {
+        Some([r, g, b]) => [r, g, b].map(|x| x.clamp(0.0, 1.0)),
+        _ => parse_da(d).0,
+    }
 }
 
 /// `/DA` of a text box: (text colour, font size). Defaults to black 12 pt.
@@ -739,7 +752,8 @@ pub fn build_with(d: &Dict, unicode: bool) -> Option<Stream> {
             }
         }
         b"FreeText" => {
-            let (text_color, size) = parse_da(d);
+            let (border_color, size) = parse_da(d);
+            let text_color = text_color(d);
             let bg = stroke;
             let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
             // A callout: the leader line (arrowhead at its first point), and the text box inside
@@ -778,7 +792,7 @@ pub fn build_with(d: &Dict, unicode: bool) -> Option<Stream> {
                 if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
                     return None;
                 }
-                c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(text_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
+                c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(border_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
                 for (i, p) in pts.iter().enumerate() {
                     c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
                 }
@@ -794,7 +808,7 @@ pub fn build_with(d: &Dict, unicode: bool) -> Option<Stream> {
                 let h = bw / 2.0;
                 c.push_str(&format!(
                     "{}{} w\n{}{} {} {} {} re S\n[] 0 d\n",
-                    rg_stroke(text_color),
+                    rg_stroke(border_color),
                     n(bw),
                     dash(d),
                     n(rect[0] + h),

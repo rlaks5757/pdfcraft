@@ -987,6 +987,28 @@ impl DocView {
         }
     }
 
+    /// The host's annotation messages changed `pages` (`None`: not known, so all of them): re-render
+    /// those, keeping the old rasters on screen until the new ones arrive.
+    pub fn annotations_changed_remotely(&mut self, pages: Option<&std::collections::BTreeSet<usize>>) {
+        let count = self.page_count;
+        match pages {
+            Some(pages) => pages.iter().filter(|p| **p < count).for_each(|p| self.page_changed(*p)),
+            None => (0..count).for_each(|p| self.page_changed(p)),
+        }
+    }
+
+    /// Is there a raster of `page`, a thumbnail or a tile?
+    #[cfg(test)]
+    pub(crate) fn has_raster(&self, page: usize) -> bool {
+        self.pages.contains_key(&page)
+    }
+
+    /// A raster of `page` that is out of date is on screen or waiting to be replaced.
+    #[cfg(test)]
+    pub(crate) fn page_is_stale(&self, page: usize) -> bool {
+        self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) || self.stale_thumbs.contains(&page) || self.stale_tiles.iter().any(|k| k.0 == page)
+    }
+
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else. Out-of-date tiles stay on screen until replacements arrive.
     pub fn page_changed(&mut self, page: usize) {
@@ -3112,13 +3134,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
-                        page: i,
-                        rect,
-                        name: hs.name.clone(),
-                        file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: hs.png.clone(), page: 0 },
-                        author: author.clone(),
-                        extra: Some(("PpmStamp".into(), hs.meta.clone())),
+                    view.pending_edit = Some(match &hs.sign_box {
+                        Some((role, label)) => pdfcraft_engine::Edit::AddSignBox {
+                            page: i,
+                            rect,
+                            role: role.clone(),
+                            label: label.clone(),
+                            author: author.clone(),
+                        },
+                        None => pdfcraft_engine::Edit::AddCustomStamp {
+                            page: i,
+                            rect,
+                            name: hs.name.clone(),
+                            file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: hs.png.clone(), page: 0 },
+                            author: author.clone(),
+                            extra: Some(("PpmStamp".into(), hs.meta.clone())),
+                        },
                     });
                     stamp_placed = true;
                 }

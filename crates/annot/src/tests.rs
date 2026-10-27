@@ -1634,6 +1634,33 @@ fn helv(doc: &Document, r: ObjRef) -> Object {
 }
 
 #[test]
+fn a_sign_box_is_a_centred_dashed_text_box_with_its_role() {
+    let mut doc = fixture();
+    let label = "reviewer 서명란";
+    let i = add_sign_box(&mut doc, 0, [20.0, 600.0, 200.0, 660.0], "reviewer", label, "Ada", &meta("sb")).unwrap();
+    let doc = reopen(&doc);
+    let d = list(&doc, 0)[i].clone();
+    assert_eq!(d.name(b"Subtype"), Some(&b"FreeText"[..]));
+    assert_eq!((text(&d, b"Contents"), text(&d, b"Subj"), text(&d, b"PpmSignRole")), (label.into(), label.into(), "reviewer".into()));
+    assert_eq!(d.int(b"Q"), Some(1));
+    let bs = d.get(b"BS").unwrap().as_dict().unwrap();
+    assert_eq!((bs.name(b"S"), appearance::nums(bs, b"D")), (Some(&b"D"[..]), Some(vec![4.0, 3.0])));
+    let content = ap_content(&doc, &d);
+    assert!(content.contains("[4 3] 0 d") && content.contains("0 0 0 RG") && content.contains("1 0 0 rg"), "black dashed border, red text: {content}");
+    assert!(d.get(b"C").is_none(), "no fill");
+    // The Korean face (when this build bundles one) draws the label, in the screen and in the file.
+    if pdfcraft_fonts::subset::face().is_some() {
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&d), None, "drawn, not marked as `?`");
+        assert!(!content.contains("(?"), "{content}");
+        let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().unwrap().get(b"Font").map(|f| doc.resolve(f)).unwrap().as_dict().unwrap().clone();
+        let font = doc.resolve(fonts.get(b"Helv").unwrap()).as_dict().unwrap().clone();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type0"[..]));
+    }
+}
+
+#[test]
 fn korean_text_boxes_are_sized_with_the_font_they_are_drawn_in() {
     let Some(face) = pdfcraft_fonts::subset::face() else { return };
     let text = "한글 테스트";

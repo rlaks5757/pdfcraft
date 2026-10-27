@@ -218,6 +218,8 @@ impl PdfCraftApp {
                     view.comments.drawings_refused();
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
+                // The sharing rules' refusals are said in the UI language; other engine errors stay as they are.
+                let message = crate::i18n::refusal(&message);
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
@@ -264,7 +266,8 @@ impl PdfCraftApp {
                     self.notify_fmt("Redid {label}", &[("label", &label)]);
                 }
             }
-            Err(e) => self.notify_error(e),
+            // The sharing rules' refusals are said in the UI language.
+            Err(e) => self.notify_error(crate::i18n::refusal(&e.to_string())),
         }
     }
 
@@ -501,7 +504,7 @@ impl PdfCraftApp {
         };
         // A host-armed stamp is only "placed" if the edit is accepted.
         let host_stamp = match &edit {
-            Edit::AddCustomStamp { page, extra: Some(_), .. } => Some(*page),
+            Edit::AddCustomStamp { page, extra: Some(_), .. } | Edit::AddSignBox { page, .. } => Some(*page),
             _ => None,
         };
         let accepted = self.apply_edit(edit.clone());
@@ -647,6 +650,9 @@ impl PdfCraftApp {
 
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
+        if self.active_shares_annotations() {
+            return false;
+        }
         match self.active {
             Some(i) => self.save_view(i, target),
             None => false,

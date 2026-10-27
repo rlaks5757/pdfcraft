@@ -349,6 +349,7 @@ mod tests {
             name: "waiting.pdf".into(),
             path: None,
             stamp: None,
+            ownership: Default::default(),
             activate: true,
             after_open: None,
             recovered: None,
