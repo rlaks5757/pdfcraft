@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Document, SaveOptions, write_full};
-use pdfcraft_edit::{EditError, flatten};
+use pdfcraft_edit::{EditError, flatten_export};
 use pdfcraft_xfdf::{ExportRequest, RemoteItem, apply_remote, export_positions, list_annotations, strip_positions};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -150,13 +150,13 @@ pub fn merge_pdf(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, String> {
 pub const FLATTEN_REFUSED: &str = "flatten refused: ";
 
 /// Bakes every comment and form field into the page content, as the /viewer export does with
-/// `FlattenAnnotations`. This goes to the crate function, not through the engine: the engine's
+/// `FlattenAnnotations` (NoView annotations and link borders included: `flatten_export`). This goes to the crate function, not through the engine: the engine's
 /// ownership guard protects other people's comments from a user's edit, while this runs on the
 /// server because the administrator set the integration to flatten its exports, whoever wrote them.
 pub fn flatten_pdf(pdf: Vec<u8>) -> Result<Vec<u8>, String> {
     let mut doc = open(pdf)?;
     let pages: Vec<usize> = (0..pdfcraft_model::pages(&doc).len()).collect();
-    match flatten(&mut doc, &pages, true, true) {
+    match flatten_export(&mut doc, &pages) {
         Ok(_) => {}
         // Characters the fonts can't draw would be `?` for good once flattened: the crate refuses
         // before changing anything, and the export must fail rather than ship them.

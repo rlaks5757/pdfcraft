@@ -6,7 +6,7 @@
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
 //! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
-//! form's field tree; a reply is not drawn at all (it is no ink of its own, as in other viewers).
+//! form's field tree.
 //! An annotation whose appearance cannot be drawn is not flattened: it stays
 //! as it is, so no comment or field value is lost with nothing in its place.
 
@@ -59,6 +59,53 @@ enum Which {
     Comments { comments: bool, fields: bool },
     /// Fill & Sign text, marks and signatures only.
     FillSign,
+    /// A server export that must look like PDFNet's `FlattenAnnotations`: every comment and field
+    /// like `Comments`, but also what a screen hides with NoView (it prints), a link's visible
+    /// border, and no refusal for an appearance the file already has (even one drawn with `?`).
+    Export,
+}
+
+impl Which {
+    /// The annotation flags that keep an annotation out of the page.
+    fn skipped(self) -> i64 {
+        if matches!(self, Which::Export) { HIDDEN } else { HIDDEN | NO_VIEW }
+    }
+}
+
+/// A link's border as page content, the way a flattening PDF library bakes it: inside the
+/// rectangle, `/BS` or `/Border` width (default 1), `/C` colour (default CMYK black), dashes kept.
+fn link_border(doc: &Document, d: &Dict) -> Option<String> {
+    let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4)?;
+    let bs = d.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    let border = nums(doc, d.get(b"Border")).filter(|b| b.len() >= 3);
+    let w = match (&bs, &border) {
+        (Some(b), _) => b.get(b"W").and_then(|w| doc.resolve(w).as_f64()).unwrap_or(1.0),
+        (None, Some(b)) => b[2],
+        (None, None) => 1.0,
+    };
+    if !w.is_finite() || w <= 0.0 {
+        return None;
+    }
+    let dash = match (&bs, d.get(b"Border").map(|b| doc.resolve(b))) {
+        (Some(b), _) if b.name(b"S") == Some(b"D") => nums(doc, b.get(b"D")).or(Some(vec![3.0])),
+        (None, Some(b)) => b.as_array().and_then(|a| a.get(3)).and_then(|x| nums(doc, Some(x))),
+        _ => None,
+    }
+    .filter(|a| !a.is_empty() && a.iter().all(|x| x.is_finite() && *x >= 0.0) && a.iter().any(|x| *x > 0.0));
+    let color = match nums(doc, d.get(b"C")).as_deref() {
+        Some([g]) => format!("{} G", n(*g)),
+        Some([r, g, b]) => format!("{} {} {} RG", n(*r), n(*g), n(*b)),
+        Some([c, m, y, k]) => format!("{} {} {} {} K", n(*c), n(*m), n(*y), n(*k)),
+        // No usable colour: PDFNet strokes with DeviceCMYK black (it renders as 35 31 32, not pure black).
+        _ => "0 0 0 1 K".to_string(),
+    };
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (bw, bh) = (x1 - x0 - w, y1 - y0 - w);
+    if bw <= 0.0 || bh <= 0.0 {
+        return None;
+    }
+    let dash = dash.map(|a| format!("[{}] 0 d ", a.iter().map(|x| n(*x)).collect::<Vec<_>>().join(" "))).unwrap_or_default();
+    Some(format!("q {color} {} w {dash}{} {} {} {} re S Q\n", n(w), n(x0 + w / 2.0), n(y0 + w / 2.0), n(bw), n(bh)))
 }
 
 fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
@@ -67,14 +114,17 @@ fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
         // Comments are what the comment list calls comments: links, pop-ups and the non-markup
         // multimedia and print-production annotations (3D, Screen, Movie, RichMedia,
         // PrinterMark, TrapNet, Watermark) are neither comments nor fields, and stay (#3087).
-        Which::Comments { comments, fields } => {
-            if subtype == b"Widget" {
-                fields
-            } else {
-                comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
-            }
-        }
+        Which::Comments { comments, fields } => selected_comment(subtype, comments, fields),
+        Which::Export => selected_comment(subtype, true, true),
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
+    }
+}
+
+fn selected_comment(subtype: &[u8], comments: bool, fields: bool) -> bool {
+    if subtype == b"Widget" {
+        fields
+    } else {
+        comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
     }
 }
 
@@ -98,6 +148,13 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
     flatten_which(doc, pages, Which::Comments { comments, fields })
 }
 
+/// Flatten every comment and form field the way a server export needs it to match PDFNet's
+/// `FlattenAnnotations` (see [`Which::Export`]). Links stay, with a visible border drawn into the
+/// page. Returns how many appearances were drawn.
+pub fn flatten_export(doc: &mut Document, pages: &[usize]) -> Result<usize, EditError> {
+    flatten_which(doc, pages, Which::Export)
+}
+
 /// Bake Fill & Sign text, marks and signatures into `pages` and remove those annotations.
 /// Other comments, links and form fields stay. Returns how many appearances were drawn.
 /// Does not modify the document when nothing matches.
@@ -116,11 +173,13 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
         for entry in &list {
             let Some(d) = doc.resolve(entry).as_dict().cloned() else { continue };
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 {
+            if !selected(doc, &d, which) || flags & which.skipped() != 0 {
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
-            let drawn = pdfcraft_fonts::undrawn_mark(&d);
+            // An export bakes an appearance the file already has, `?` included (PDFNet does); only one
+            // that would be built now, from text the standard fonts can't draw, is refused.
+            let drawn = if matches!(which, Which::Export) { None } else { pdfcraft_fonts::undrawn_mark(&d) };
             let would_draw = || (!widget && appearance(doc, &d).is_none()).then(|| pdfcraft_annot::appearance::undrawable_text(&d)).flatten();
             if let Some(c) = drawn.or_else(|| would_draw().map(|(_, c)| c)) {
                 return Some((i, widget, c));
@@ -175,7 +234,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 || appearance(doc, &d).is_some() {
+            if flags & which.skipped() != 0 || appearance(doc, &d).is_some() {
                 continue;
             }
             // A subtype this build cannot draw fails here and is kept below, so the comment is
@@ -188,18 +247,26 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             let Some(d) = obj.as_dict() else { continue };
             let subtype = d.name(b"Subtype").unwrap_or_default();
             let widget = subtype == b"Widget";
+            if matches!(which, Which::Export) && subtype == b"Link" {
+                let hidden = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & which.skipped() != 0;
+                if let Some(border) = (!hidden).then(|| link_border(doc, d)).flatten() {
+                    content.push_str(&border);
+                    drawn += 1;
+                }
+                continue;
+            }
             if !selected(doc, d, which) {
                 continue;
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            if flags & (HIDDEN | NO_VIEW) != 0 {
+            if flags & which.skipped() != 0 {
                 continue;
             }
             let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
             let mut drew = false;
-            // A reply (not a group member) is no ink of its own: viewers and PDFNet's flatten show
-            // only the comment it answers, and the reply goes with it below.
-            let reply = d.get(b"IRT").is_some() && d.name(b"RT") != Some(b"Group");
+            // An export draws no reply (not a group member): PDFNet's flatten shows only the comment it
+            // answers, and the reply goes with it below.
+            let reply = matches!(which, Which::Export) && d.get(b"IRT").is_some() && d.name(b"RT") != Some(b"Group");
             if let (Some(ap), Some(rect), false) = (appearance(doc, d), rect, reply) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
@@ -237,7 +304,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
                 }
             }
         }
-        if gone.is_empty() && gone_inline.is_empty() {
+        if gone.is_empty() && gone_inline.is_empty() && content.is_empty() {
             continue;
         }
         // Pop-ups and replies of what was flattened go too, except a reply that stayed because
@@ -286,7 +353,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
     }
     // A field whose widgets are on no page has nothing to draw, but flattening every field of the
     // document must still take it out of the form, or other software keeps seeing one (#1470).
-    let orphans = matches!(which, Which::Comments { fields: true, .. }) && (0..all.len()).all(|i| pages.contains(&i));
+    let orphans = matches!(which, Which::Comments { fields: true, .. } | Which::Export) && (0..all.len()).all(|i| pages.contains(&i));
     if !removed_widgets.is_empty() || orphans {
         let on_page: HashSet<ObjRef> = page_list(doc)
             .iter()

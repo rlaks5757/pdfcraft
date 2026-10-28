@@ -851,7 +851,7 @@ pub mod objects;
 pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
 
 mod flatten;
-pub use flatten::{flatten, flatten_fill_sign};
+pub use flatten::{flatten, flatten_export, flatten_fill_sign};
 pub mod images;
 pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre};
 pub mod bidi;
