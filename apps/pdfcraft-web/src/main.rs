@@ -188,9 +188,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   sign box (text `label`, dashed black border, `/PpmSignRole` = `role`) in the middle of the
 ///   page being read at once, selected; reported with `pdfcraft:stamp-placed` `{ id, page }`, or
 ///   `pdfcraft:stamp-failed` when it is refused. It is never armed, so there is nothing to cancel.
-/// - `pdfcraft:watermark` (from the parent): `{ text }` shows a diagonal watermark over each page
-///   on the screen only (WebViewer's `setWatermark({ diagonal })`: one 48 pt line in the middle of
-///   the page along its diagonal, `rgba(120, 120, 120, 0.3)`); it is never saved. A blank or
+/// - `pdfcraft:watermark` (from the parent): `{ text }` shows a diagonal watermark on each page
+///   on the screen, under its annotations (WebViewer's `setWatermark({ diagonal })`: one 48 pt line
+///   in the middle of the page along its diagonal, `rgba(120, 120, 120, 0.3)`). Like the host's own
+///   viewer, which has no print or image export, no output takes it: not the saved file, not an
+///   image export, not Print as Image. A blank or
 ///   missing `text` takes it away. It stays until changed, over documents opened later too.
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the

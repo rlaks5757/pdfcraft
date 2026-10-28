@@ -84,12 +84,17 @@ pub(crate) fn build(text: &str) -> Option<Arc<ScreenWatermark>> {
     let ascent = f64::from(faces.first()?.metrics(size, LocationRef::default()).ascent);
     let lines: Vec<&str> = text.split('\n').collect();
     let mut outline = BezPath::new();
+    let mut missing = 0usize;
     for (n, line) in lines.iter().enumerate() {
         // Each character from the first face that has it, laid out left to right.
         let mut glyphs = Vec::new();
         let mut width = 0.0f64;
         for c in line.chars() {
-            let Some((face, gid)) = faces.iter().find_map(|f| f.charmap().map(c).map(|g| (f, g))) else { continue };
+            let Some((face, gid)) = faces.iter().find_map(|f| f.charmap().map(c).map(|g| (f, g))) else {
+                // Whitespace and controls have no ink; anything else is a glyph the fonts lack.
+                missing += usize::from(!c.is_whitespace() && !c.is_control());
+                continue;
+            };
             let advance = f64::from(face.glyph_metrics(size, LocationRef::default()).advance_width(gid).unwrap_or(0.0));
             glyphs.push((face, gid, width));
             width += advance;
@@ -101,6 +106,12 @@ pub(crate) fn build(text: &str) -> Option<Arc<ScreenWatermark>> {
             // A glyph that fails to draw leaves at most a partial shape; nothing else is lost.
             let _ = glyph.draw(DrawSettings::unhinted(size, LocationRef::default()), &mut pen);
         }
+    }
+    if missing > 0 {
+        log::warn!("screen watermark: {missing} character(s) have no glyph in the interface fonts and are left out");
+    }
+    if outline.elements().is_empty() {
+        log::warn!("screen watermark: no character of the text has a glyph in the interface fonts; nothing is drawn");
     }
     (!outline.elements().is_empty()).then(|| Arc::new(ScreenWatermark { key: text.to_string(), outline, rgb: RGB, alpha: ALPHA }))
 }

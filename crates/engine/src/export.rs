@@ -31,10 +31,12 @@ impl Document {
     /// bytes, so they may carry missing comment appearances PdfCraft drew. Signature
     /// artwork stays original; viewer validation badges are not document content and
     /// do not enter image/text exports or Print as Image. Saving uses the working file.
+    /// The host's screen watermark is not carried either: the host's own viewer puts it on the
+    /// screen only (it has no print or image export), so no output of ours takes it.
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),
-            config: self.config.clone(),
+            config: pdfcraft_render::RenderConfig { watermark: None, ..self.config.clone() },
             pages: self.info.pages.len(),
             sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
         }

@@ -7634,3 +7634,28 @@ mod annot_sync {
         assert!(!s3.get(id3).unwrap().config.hide_replies);
     }
 }
+
+#[test]
+fn the_screen_watermark_is_not_in_image_exports_or_raster_prints() {
+    use kurbo::Shape;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let bytes = s.create_blank(200.0, 200.0, 1).unwrap();
+    let id = s.open("blank.pdf", None, bytes, None).unwrap();
+    let plain = export::Exporter::from_source(s.get(id).unwrap().export_source()).png(0, 72.0).unwrap();
+    let mark = Arc::new(pdfcraft_render::ScreenWatermark {
+        key: "m".into(),
+        outline: kurbo::Rect::new(-60.0, -60.0, 60.0, 60.0).to_path(0.1),
+        rgb: [0.0; 3],
+        alpha: 1.0,
+    });
+    assert!(s.set_watermark(id, Some(mark)));
+    assert_eq!(s.watermark_key(id), Some("m"));
+    // The screen takes it, the export source does not.
+    let on_screen = pixel(&s, id, 0, 100, 200);
+    assert_eq!(on_screen[..3], [0, 0, 0], "drawn on the screen: {on_screen:?}");
+    let src = s.get(id).unwrap().export_source();
+    assert!(src.config.watermark.is_none());
+    assert_eq!(export::Exporter::from_source(src).png(0, 72.0).unwrap(), plain);
+    assert!(s.set_watermark(id, None));
+    assert_eq!(s.watermark_key(id), None);
+}

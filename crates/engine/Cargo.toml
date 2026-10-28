@@ -53,3 +53,4 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 base64 = "0.22"
+kurbo = { workspace = true }

@@ -69,7 +69,8 @@ pub struct RenderConfig {
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
     /// A screen watermark baked into the page picture under the annotations, as the host's own
-    /// viewer puts it. Display only; the document never changes.
+    /// viewer puts it. Display only: the document never changes, and the engine leaves it out of
+    /// what an export or a print reads (`Document::export_source`).
     pub watermark: Option<Arc<ScreenWatermark>>,
 }
 

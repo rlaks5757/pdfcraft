@@ -4112,6 +4112,7 @@ dependencies = [
  "icu_properties",
  "idna",
  "image",
+ "kurbo 0.13.1",
  "pdfcraft-a11y",
  "pdfcraft-annot",
  "pdfcraft-audit",

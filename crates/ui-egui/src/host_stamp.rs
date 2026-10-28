@@ -479,7 +479,7 @@ mod flow_tests {
     }
 
     #[test]
-    fn the_watermark_is_screen_only_and_never_reaches_the_file() {
+    fn the_watermark_follows_every_document_and_never_reaches_the_file() {
         let (mut h, _) = app(true);
         let (_, doc) = h.state().active_ids().unwrap();
         let before = h.state().session.save_bytes(doc).unwrap();
@@ -487,8 +487,18 @@ mod flow_tests {
         h.run_steps(3);
         assert_eq!(h.state().screen_watermark.as_deref(), Some("기밀 WATERMARK"));
         assert_eq!(h.state().session.save_bytes(doc).unwrap(), before);
+        // The open document draws it, and so does one opened after the message.
+        assert_eq!(h.state().session.watermark_key(doc), Some("기밀 WATERMARK"));
+        let blank = h.state_mut().session.create_blank(200.0, 200.0, 1).unwrap();
+        h.state_mut().open_bytes("later.pdf", None, blank.as_ref().clone()).unwrap();
+        h.run_steps(3);
+        let keys: Vec<_> = h.state().views.iter().map(|v| h.state().session.watermark_key(v.id).map(str::to_string)).collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().all(|k| k.as_deref() == Some("기밀 WATERMARK")), "{keys:?}");
         send(&mut h, StampCommand::Watermark { text: Some("  ".into()) });
+        h.run_steps(3);
         assert_eq!(h.state().screen_watermark, None);
+        assert!(h.state().views.iter().all(|v| h.state().session.watermark_key(v.id).is_none()));
     }
 
     #[test]
