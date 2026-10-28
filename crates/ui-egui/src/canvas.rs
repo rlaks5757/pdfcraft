@@ -2813,6 +2813,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
+    let screen_watermark = app.screen_watermark.clone();
     // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
     // windows, so a comment under the pointer would otherwise float over the dialog.
     let page_covered = app.dialog.is_some()
@@ -3070,6 +3071,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
 
             // Comments: tools, selection, moving and resizing come before text selection.
+            if let Some(text) = screen_watermark.as_deref() {
+                // Over the page's picture, under the comment overlays; the width as shown (a turned view swaps the sides).
+                crate::watermark::paint(painter, r, if xf.rot % 180 == 0 { xf.pw } else { xf.ph }, text);
+            }
             let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
             if let QuickTool::Measure(measure_tool) = tool {
                 crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
@@ -3134,22 +3139,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         [(vx as f64 - hs.width / 2.0, vy as f64 - hs.height / 2.0), (vx as f64 + hs.width / 2.0, vy as f64 + hs.height / 2.0)];
                     let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
                     let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-                    view.pending_edit = Some(match &hs.sign_box {
-                        Some((role, label)) => pdfcraft_engine::Edit::AddSignBox {
-                            page: i,
-                            rect,
-                            role: role.clone(),
-                            label: label.clone(),
-                            author: author.clone(),
-                        },
-                        None => pdfcraft_engine::Edit::AddCustomStamp {
-                            page: i,
-                            rect,
-                            name: hs.name.clone(),
-                            file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: hs.png.clone(), page: 0 },
-                            author: author.clone(),
-                            extra: Some(("PpmStamp".into(), hs.meta.clone())),
-                        },
+                    view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
+                        page: i,
+                        rect,
+                        name: hs.name.clone(),
+                        file: pdfcraft_engine::MarkFile { name: "stamp.png".into(), bytes: hs.png.clone(), page: 0 },
+                        author: author.clone(),
+                        extra: Some(("PpmStamp".into(), hs.meta.clone())),
                     });
                     stamp_placed = true;
                 }

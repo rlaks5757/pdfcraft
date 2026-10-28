@@ -23,10 +23,28 @@ pub const MAX_PNG_BYTES: usize = MAX_STAMP_BYTES;
 /// What the host asks for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StampCommand {
-    Add { id: String, name: String, bytes: Vec<u8>, width: f64, height: f64, meta: String },
-    /// A sign box (`pdfcraft:sign-box-add`): a FreeText box of [`SIGN_BOX_SIZE`] carrying `role`.
-    AddSignBox { id: String, role: String, label: String },
-    Cancel { id: String },
+    Add {
+        id: String,
+        name: String,
+        bytes: Vec<u8>,
+        width: f64,
+        height: f64,
+        meta: String,
+    },
+    /// A sign box (`pdfcraft:sign-box-add`): a FreeText box of [`SIGN_BOX_SIZE`] carrying `role`,
+    /// put at once in the middle of the page being read and left selected.
+    AddSignBox {
+        id: String,
+        role: String,
+        label: String,
+    },
+    /// The screen watermark (`pdfcraft:watermark`): `None` or blank takes it away.
+    Watermark {
+        text: Option<String>,
+    },
+    Cancel {
+        id: String,
+    },
 }
 
 /// Width and height of a sign box on the page, in PDF points.
@@ -57,31 +75,29 @@ pub(crate) struct ArmedStamp {
     pub width: f64,
     pub height: f64,
     pub meta: String,
-    /// `(role, label)` when this places a sign box instead of a picture (`png` is then empty).
-    pub sign_box: Option<(String, String)>,
     /// The document that was showing when it was armed; another one cancels it.
     pub doc: Option<pdfcraft_engine::DocId>,
 }
 
-/// Check a sign box request before arming it: bounded text, nothing else to read.
-pub(crate) fn validate_sign_box(id: &str, role: &str, label: &str) -> Result<ArmedStamp, String> {
+/// Check a sign box request: bounded text, nothing else to read.
+pub(crate) fn validate_sign_box(id: &str, role: &str, label: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > MAX_ID_BYTES {
         return Err("the request id is missing or too long".into());
     }
     if role.trim().is_empty() || role.len() > MAX_ID_BYTES || label.trim().is_empty() || label.len() > MAX_META_BYTES {
         return Err("the sign box needs a role and a label of reasonable length".into());
     }
-    let (width, height) = SIGN_BOX_SIZE;
-    Ok(ArmedStamp {
-        id: id.into(),
-        name: label.chars().take(200).collect(),
-        png: Arc::new(Vec::new()),
-        width,
-        height,
-        meta: String::new(),
-        sign_box: Some((role.into(), label.into())),
-        doc: None,
-    })
+    Ok(())
+}
+
+/// The sign box's rectangle in user space: [`SIGN_BOX_SIZE`] in the middle of the page as shown
+/// (upright whatever the page's `/Rotate`), kept inside it when the page is smaller.
+pub(crate) fn sign_box_rect(page: &pdfcraft_render::PageInfo) -> [f64; 4] {
+    let (w, h) = SIGN_BOX_SIZE;
+    let (x, y) = (((f64::from(page.width) - w) / 2.0).max(0.0), ((f64::from(page.height) - h) / 2.0).max(0.0));
+    let corners = [(x, y), (x + w, y + h)].map(|(x, y)| page.view_to_user(x as f32, y as f32));
+    [corners[0][0].min(corners[1][0]), corners[0][1].min(corners[1][1]), corners[0][0].max(corners[1][0]), corners[0][1].max(corners[1][1])]
+        .map(f64::from)
 }
 
 /// Check a request before arming it: a readable PNG, a sane size, bounded text.
@@ -105,7 +121,7 @@ pub(crate) fn validate(id: &str, name: &str, bytes: Vec<u8>, width: f64, height:
         return Err(format!("the PNG is too large ({w} x {h} px)"));
     }
     let name = if name.trim().is_empty() { "Stamp".to_string() } else { name.trim().chars().take(200).collect() };
-    Ok(ArmedStamp { id: id.into(), name, png: Arc::new(bytes), width, height, meta: meta.into(), sign_box: None, doc: None })
+    Ok(ArmedStamp { id: id.into(), name, png: Arc::new(bytes), width, height, meta: meta.into(), doc: None })
 }
 
 impl PdfCraftApp {
@@ -122,6 +138,26 @@ impl PdfCraftApp {
                 self.quick_tool = QuickTool::Select;
             }
             self.emit_stamp(StampEvent::Cancelled { id: armed.id });
+        }
+    }
+
+    /// Put a sign box in the middle of the page being read and select it (the same edit as any
+    /// comment, so undo and saving are the usual). Returns the page, or why it was refused.
+    fn place_sign_box(&mut self, id: &str, role: String, label: String) -> Result<usize, String> {
+        validate_sign_box(id, &role, &label)?;
+        let (index, doc) = self.active_ids().ok_or("no document is open")?;
+        let state = self.session.get(doc).ok_or("no document is open")?;
+        if !state.allows_annotation() {
+            return Err("the document doesn't allow comments".into());
+        }
+        let page = self.views[index].current.min(state.info.pages.len().saturating_sub(1));
+        let rect = sign_box_rect(state.info.pages.get(page).ok_or("the document has no pages")?);
+        let author = self.comment_prefs.author.clone();
+        if self.apply_edit(pdfcraft_engine::Edit::AddSignBox { page, rect, role, label, author }) {
+            self.quick_tool = QuickTool::Select;
+            Ok(page)
+        } else {
+            Err(self.toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_else(|| "the sign box could not be placed".to_string()))
         }
     }
 
@@ -162,23 +198,12 @@ impl PdfCraftApp {
                 }
                 StampCommand::AddSignBox { id, role, label } => {
                     self.disarm_stamp();
-                    let doc = self.active_ids().map(|(_, d)| d);
-                    let allowed = doc.and_then(|d| self.session.get(d)).map(|d| d.allows_annotation());
-                    let armed = match (doc, allowed, validate_sign_box(&id, &role, &label)) {
-                        (None, _, _) => Err("no document is open".to_string()),
-                        (_, Some(false), _) => Err("the document doesn't allow comments".to_string()),
-                        (_, _, Err(e)) => Err(e),
-                        (doc, _, Ok(a)) => Ok(ArmedStamp { doc, ..a }),
-                    };
-                    match armed {
-                        Ok(a) => {
-                            self.armed_stamp = Some(a);
-                            self.quick_tool = QuickTool::HostStamp;
-                            self.emit_stamp(StampEvent::Armed { id });
-                        }
+                    match self.place_sign_box(&id, role, label) {
+                        Ok(page) => self.emit_stamp(StampEvent::Placed { id, page }),
                         Err(error) => self.emit_stamp(StampEvent::Failed { id, error }),
                     }
                 }
+                StampCommand::Watermark { text } => self.screen_watermark = crate::watermark::clean(text.as_deref()),
                 StampCommand::Cancel { id } => {
                     if self.armed_stamp.as_ref().is_some_and(|a| a.id == id) {
                         self.disarm_stamp();
@@ -188,7 +213,7 @@ impl PdfCraftApp {
         }
         let Some(armed) = self.armed_stamp.as_ref() else { return };
         // The click's edit may not have been applied yet: its outcome decides, not the tool.
-        let placing = self.views.iter().any(|v| matches!(v.pending_edit, Some(pdfcraft_engine::Edit::AddCustomStamp { extra: Some(_), .. } | pdfcraft_engine::Edit::AddSignBox { .. })));
+        let placing = self.views.iter().any(|v| matches!(v.pending_edit, Some(pdfcraft_engine::Edit::AddCustomStamp { extra: Some(_), .. })));
         if placing {
             return;
         }
@@ -225,14 +250,26 @@ mod tests {
     }
 
     #[test]
-    fn a_sign_box_request_is_armed_at_its_fixed_size_and_bad_ones_refused() {
-        let a = validate_sign_box("s1", "reviewer", "reviewer 서명란").unwrap();
-        assert_eq!((a.width, a.height), SIGN_BOX_SIZE);
-        assert_eq!(a.sign_box, Some(("reviewer".into(), "reviewer 서명란".into())));
+    fn bad_sign_box_requests_are_refused() {
+        assert!(validate_sign_box("s1", "reviewer", "reviewer 서명란").is_ok());
         assert!(validate_sign_box("", "reviewer", "x").is_err(), "empty id");
         assert!(validate_sign_box("s", " ", "x").is_err(), "empty role");
         assert!(validate_sign_box("s", "r", "").is_err(), "empty label");
         assert!(validate_sign_box("s", "r", &"x".repeat(MAX_META_BYTES + 1)).is_err(), "huge label");
+    }
+
+    fn page(width: f32, height: f32, rotation: u16, crop: [f32; 4]) -> pdfcraft_render::PageInfo {
+        pdfcraft_render::PageInfo { width, height, label: "1".into(), crop, rotation }
+    }
+
+    #[test]
+    fn the_sign_box_sits_in_the_middle_of_the_page_as_shown() {
+        // 200 x 300 pt: 180 x 60 in the middle, like /viewer's placeSignField.
+        assert_eq!(sign_box_rect(&page(200.0, 300.0, 0, [0.0, 0.0, 200.0, 300.0])), [10.0, 120.0, 190.0, 180.0]);
+        // Shown turned 90 degrees (300 x 200): upright as shown, so 60 wide and 180 tall in the file.
+        assert_eq!(sign_box_rect(&page(300.0, 200.0, 90, [0.0, 0.0, 200.0, 300.0])), [70.0, 60.0, 130.0, 240.0]);
+        // A page narrower than the box: the box starts at the page's edge.
+        assert_eq!(sign_box_rect(&page(100.0, 100.0, 0, [0.0, 0.0, 100.0, 100.0])), [0.0, 20.0, 180.0, 80.0]);
     }
 
     #[test]
@@ -395,27 +432,47 @@ mod flow_tests {
     }
 
     #[test]
-    fn a_sign_box_click_adds_a_role_box_and_reports_placed() {
+    fn a_sign_box_request_is_placed_at_once_selected_and_reported() {
         let (mut h, ev) = app(true);
         send(&mut h, StampCommand::AddSignBox { id: "sb".into(), role: "reviewer".into(), label: "reviewer 서명란".into() });
-        assert_eq!(h.state().quick_tool, QuickTool::HostStamp);
-        h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::AddSignBox {
-            page: 0,
-            rect: [10.0, 10.0, 190.0, 70.0],
-            role: "reviewer".into(),
-            label: "reviewer 서명란".into(),
-            author: "Ada".into(),
-        });
-        h.state_mut().quick_tool = QuickTool::Select;
-        h.run_steps(3);
-        assert_eq!(*ev.borrow(), vec![StampEvent::Armed { id: "sb".into() }, StampEvent::Placed { id: "sb".into(), page: 0 }]);
+        // No arming and no click: placed on the page being read, which is left on the Select tool.
+        assert_eq!(*ev.borrow(), vec![StampEvent::Placed { id: "sb".into(), page: 0 }]);
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        assert!(h.state().armed_stamp.is_none());
+        let (i, doc) = h.state().active_ids().unwrap();
+        let info = &h.state().session.get(doc).unwrap().info;
+        let note = info.annotations.iter().find(|a| a.page == 0 && !a.is_reply()).expect("the sign box");
+        assert_eq!(note.rect, [10.0, 120.0, 190.0, 180.0]);
+        assert_eq!(h.state().views[i].comments.selected, Some((0, note.index)));
         // The box is in the file with its role, and undo takes it away again (the usual edit flow).
-        let (_, doc) = h.state().active_ids().unwrap();
         let saved = h.state().session.save_bytes(doc).unwrap();
         assert!(saved.windows(11).any(|w| w == b"PpmSignRole"));
         assert!(h.state_mut().session.undo(doc).is_ok());
         let saved = h.state().session.save_bytes(doc).unwrap();
         assert!(!saved.windows(11).any(|w| w == b"PpmSignRole"));
+    }
+
+    #[test]
+    fn a_sign_box_request_is_refused_without_a_document_or_with_a_bad_role() {
+        let (mut h, ev) = app(false);
+        send(&mut h, StampCommand::AddSignBox { id: "a".into(), role: "r".into(), label: "r 서명란".into() });
+        let (mut h2, ev2) = app(true);
+        send(&mut h2, StampCommand::AddSignBox { id: "b".into(), role: " ".into(), label: "x".into() });
+        assert!(matches!(&ev.borrow()[..], [StampEvent::Failed { id, .. }] if id == "a"), "{:?}", ev.borrow());
+        assert!(matches!(&ev2.borrow()[..], [StampEvent::Failed { id, .. }] if id == "b"), "{:?}", ev2.borrow());
+    }
+
+    #[test]
+    fn the_watermark_is_screen_only_and_never_reaches_the_file() {
+        let (mut h, _) = app(true);
+        let (_, doc) = h.state().active_ids().unwrap();
+        let before = h.state().session.save_bytes(doc).unwrap();
+        send(&mut h, StampCommand::Watermark { text: Some("기밀 WATERMARK".into()) });
+        h.run_steps(3);
+        assert_eq!(h.state().screen_watermark.as_deref(), Some("기밀 WATERMARK"));
+        assert_eq!(h.state().session.save_bytes(doc).unwrap(), before);
+        send(&mut h, StampCommand::Watermark { text: Some("  ".into()) });
+        assert_eq!(h.state().screen_watermark, None);
     }
 
     #[test]

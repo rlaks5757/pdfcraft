@@ -195,6 +195,12 @@ impl PdfCraftApp {
                             view.comments.editing = Some((a.page, n, String::new()));
                         }
                     }
+                    Edit::AddSignBox { page, .. } => {
+                        // Select the new sign box (appended last among the page's comments).
+                        let newest = info.annotations.iter().filter(|x| x.page == page && !x.is_reply()).map(|x| x.index).max();
+                        view.comments.selected = newest.map(|n| (page, n));
+                        view.comments.reveal = true;
+                    }
                     Edit::DeleteAnnotation { .. } => {
                         view.comments.selected = reply_parent.as_ref().and_then(|p| find_after_delete(&info.annotations, p))
                     }
@@ -504,7 +510,7 @@ impl PdfCraftApp {
         };
         // A host-armed stamp is only "placed" if the edit is accepted.
         let host_stamp = match &edit {
-            Edit::AddCustomStamp { page, extra: Some(_), .. } | Edit::AddSignBox { page, .. } => Some(*page),
+            Edit::AddCustomStamp { page, extra: Some(_), .. } => Some(*page),
             _ => None,
         };
         let accepted = self.apply_edit(edit.clone());

@@ -184,9 +184,14 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
 ///   placement of a PNG stamp, `width` and `height` in PDF points, `meta` the text stored as the
 ///   stamp's `/PpmStamp`. `pdfcraft:stamp-cancel` `{ id }` withdraws it.
-/// - `pdfcraft:sign-box-add` (from the parent): `{ id, role, label }` arms one placement of a
-///   180 x 60 pt FreeText sign box (text `label`, dashed black border, `/PpmSignRole` = `role`);
-///   it is cancelled and reported with the same `pdfcraft:stamp-*` events and `stamp-cancel`.
+/// - `pdfcraft:sign-box-add` (from the parent): `{ id, role, label }` puts a 180 x 60 pt FreeText
+///   sign box (text `label`, dashed black border, `/PpmSignRole` = `role`) in the middle of the
+///   page being read at once, selected; reported with `pdfcraft:stamp-placed` `{ id, page }`, or
+///   `pdfcraft:stamp-failed` when it is refused. It is never armed, so there is nothing to cancel.
+/// - `pdfcraft:watermark` (from the parent): `{ text }` shows a diagonal watermark over each page
+///   on the screen only (WebViewer's `setWatermark({ diagonal })`: one 48 pt line in the middle of
+///   the page along its diagonal, `rgba(120, 120, 120, 0.3)`); it is never saved. A blank or
+///   missing `text` takes it away. It stays until changed, over documents opened later too.
 /// - `pdfcraft:stamp-armed` `{ id }`, `pdfcraft:stamp-placed` `{ id, page }`,
 ///   `pdfcraft:stamp-cancelled` `{ id }` and `pdfcraft:stamp-failed` `{ id, error }` (to the
 ///   parent) report how a stamp request went.
@@ -325,6 +330,15 @@ mod host {
                             }
                             Err(error) => bridge.post_stamp(&pdfcraft_ui_egui::StampEvent::Failed { id, error }),
                         }
+                        return;
+                    }
+                    Some("pdfcraft:watermark") => {
+                        // A text of the wrong type counts as none: the watermark goes, never a stale one stays.
+                        let text = string(&data, "text");
+                        if let Ok(mut q) = stamps.lock() {
+                            q.push(pdfcraft_ui_egui::StampCommand::Watermark { text });
+                        }
+                        ctx.request_repaint();
                         return;
                     }
                     Some("pdfcraft:stamp-cancel") => {
