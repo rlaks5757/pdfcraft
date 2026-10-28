@@ -4757,6 +4757,8 @@ name = "ppm-annot-node"
 version = "0.9.0"
 dependencies = [
  "pdfcraft-cos",
+ "pdfcraft-edit",
+ "pdfcraft-model",
  "pdfcraft-xfdf",
  "serde",
  "serde_json",

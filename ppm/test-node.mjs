@@ -104,4 +104,9 @@ const k = JSON.parse(m.list(merged)).find((e) => e.nm === 'k1');
 assert.ok(k && k.subtype === 'FreeText' && k.title === '홍길동' && k.exportable);
 assert.throws(() => m.merge(pdf, JSON.stringify([{ annotId: 'bad', authorId: 'u', xfdf: '<nope/>' }])), /bad/);
 
-console.log('ok: list/exportXfdf/strip/merge, 한글 서브셋 글꼴', largestStream(merged), 'bytes max stream');
+// 6. 평탄화: 주석(Square 등)은 페이지 내용이 되어 목록에서 빠지고 링크는 남는다
+const flat = JSON.parse(m.list(m.flatten(pdf))).map((e) => e.subtype);
+assert.deepEqual(flat, ['Link'], '주석은 굽고 링크만 남는다');
+assert.throws(() => m.flatten(new Uint8Array([1, 2, 3])), /can't be opened/);
+
+console.log('ok: list/exportXfdf/strip/merge/flatten, 한글 서브셋 글꼴', largestStream(merged), 'bytes max stream');

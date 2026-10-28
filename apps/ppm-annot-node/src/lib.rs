@@ -1,6 +1,6 @@
 //! The PPM server's view of a PDF's annotations, for Node (`wasm-bindgen --target nodejs`).
 //!
-//! Four functions, bytes as `Uint8Array` and everything else as JSON text. Pages are 1-based
+//! Five functions, bytes as `Uint8Array` and everything else as JSON text. Pages are 1-based
 //! everywhere here (as in the list); `index` is the entry's place in that page's `/Annots` array,
 //! every subtype counted, so annotations without `/NM` are addressed the same way.
 //!
@@ -8,6 +8,7 @@
 //! * `exportXfdf(pdf, [{page, index, name, inReplyTo}])` → `[{name, xfdf} | {name, error}]`
 //! * `strip(pdf, [{page, index}])` → PDF without those annotations and their pop-ups
 //! * `merge(pdf, [{annotId, authorId, xfdf}])` → PDF with them added, appearances drawn
+//! * `flatten(pdf)` → PDF with every comment and form field baked into the pages
 //!
 //! The logic lives in plain functions ([`list_json`] …) so that it is testable on the host; the
 //! `#[wasm_bindgen]` functions only convert errors.
@@ -15,6 +16,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Document, SaveOptions, write_full};
+use pdfcraft_edit::{EditError, flatten};
 use pdfcraft_xfdf::{ExportRequest, RemoteItem, apply_remote, export_positions, list_annotations, strip_positions};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -143,6 +145,27 @@ pub fn merge_pdf(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, String> {
     save(&doc)
 }
 
+/// Prefix of the error when flattening is refused for text the fonts can't draw (nothing is
+/// changed then); the caller tells this apart from a broken PDF by it.
+pub const FLATTEN_REFUSED: &str = "flatten refused: ";
+
+/// Bakes every comment and form field into the page content, as the /viewer export does with
+/// `FlattenAnnotations`. This goes to the crate function, not through the engine: the engine's
+/// ownership guard protects other people's comments from a user's edit, while this runs on the
+/// server because the administrator set the integration to flatten its exports, whoever wrote them.
+pub fn flatten_pdf(pdf: Vec<u8>) -> Result<Vec<u8>, String> {
+    let mut doc = open(pdf)?;
+    let pages: Vec<usize> = (0..pdfcraft_model::pages(&doc).len()).collect();
+    match flatten(&mut doc, &pages, true, true) {
+        Ok(_) => {}
+        // Characters the fonts can't draw would be `?` for good once flattened: the crate refuses
+        // before changing anything, and the export must fail rather than ship them.
+        Err(EditError::Invalid(why)) => return Err(format!("{FLATTEN_REFUSED}{why}")),
+        Err(e) => return Err(format!("the PDF can't be flattened: {e}")),
+    }
+    save(&doc)
+}
+
 #[wasm_bindgen]
 pub fn list(pdf: Vec<u8>) -> Result<String, JsError> {
     list_json(pdf).map_err(|e| JsError::new(&e))
@@ -163,6 +186,11 @@ pub fn merge(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, JsError> {
     merge_pdf(pdf, items).map_err(|e| JsError::new(&e))
 }
 
+#[wasm_bindgen(js_name = flatten)]
+pub fn flatten_bytes(pdf: Vec<u8>) -> Result<Vec<u8>, JsError> {
+    flatten_pdf(pdf).map_err(|e| JsError::new(&e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,11 +201,44 @@ mod tests {
         assert!(export_json(Vec::new(), "[]").is_err());
         assert!(strip_pdf(b"x".to_vec(), "not json").unwrap_err().contains("bad strip request"));
         assert!(merge_pdf(b"x".to_vec(), "{}").unwrap_err().contains("bad merge request"));
+        assert!(flatten_pdf(b"not a pdf".to_vec()).is_err());
     }
 
     #[test]
     fn nothing_to_do_returns_the_input() {
         assert_eq!(strip_pdf(b"anything".to_vec(), "[]").unwrap(), b"anything");
         assert_eq!(merge_pdf(b"anything".to_vec(), "[]").unwrap(), b"anything");
+    }
+
+    /// A one-page PDF whose /Annots hold a link and a square without an appearance.
+    fn sample() -> Vec<u8> {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Link /Rect [10 10 50 30] /Border [0 0 0] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [200 200 300 260] /C [1 0 0] /F 4 /BS << /W 2 >> >>",
+        ];
+        let mut out = String::from("%PDF-1.7\n");
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out += &format!("{} 0 obj\n{o}\nendobj\n", i + 1);
+        }
+        let xref = out.len();
+        out += &format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1);
+        for o in offs {
+            out += &format!("{o:010} 00000 n \n");
+        }
+        out += &format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1);
+        out.into_bytes()
+    }
+
+    #[test]
+    fn flatten_bakes_comments_and_keeps_links() {
+        let out = flatten_pdf(sample()).unwrap();
+        let list: Vec<serde_json::Value> = serde_json::from_str(&list_json(out).unwrap()).unwrap();
+        let kinds: Vec<&str> = list.iter().filter_map(|e| e["subtype"].as_str()).collect();
+        assert_eq!(kinds, ["Link"]);
     }
 }
