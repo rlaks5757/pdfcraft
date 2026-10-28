@@ -516,7 +516,7 @@ impl PdfCraftApp {
 fn ppm_strip(ui: &mut egui::Ui, rect: egui::Rect, t: &Tokens, c: &CompareState) -> Option<bool> {
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 4.0))));
     let mut ask = None;
-    let progress = c.overlay_job.as_ref().map(|j| j.progress());
+    let building = c.overlay_job.is_some();
     ui.horizontal_wrapped(|ui| {
         if widgets::pill_button(ui, tl!("Side by side"), !c.overlay_shown).clicked() && c.overlay_shown {
             ask = Some(false);
@@ -524,16 +524,8 @@ fn ppm_strip(ui: &mut egui::Ui, rect: egui::Rect, t: &Tokens, c: &CompareState) 
         if widgets::pill_button(ui, tl_ctx!(ppm::CTX, "Overlay"), c.overlay_shown).clicked() && !c.overlay_shown {
             ask = Some(true);
         }
-        if let Some((done, total)) = progress {
-            ui.label(
-                egui::RichText::new(crate::i18n::fmt(
-                    tl_ctx!(ppm::CTX, "Building the overlay ({done}/{total})"),
-                    &[("done", &done.to_string()), ("total", &total.to_string())],
-                ))
-                .small()
-                .color(t.text_muted),
-            );
-        } else if c.overlay_shown {
+        // While building, the host's status line says so (like the viewer's header); the strip stays quiet.
+        if c.overlay_shown && !building {
             for (colour, label) in [
                 (ppm::rgb(pdfcraft_engine::compare::OVERLAY_CURRENT), tl_ctx!(ppm::CTX, "Lines only in the current file")),
                 (ppm::rgb(pdfcraft_engine::compare::OVERLAY_CHOSEN), tl_ctx!(ppm::CTX, "Lines only in the chosen file")),
@@ -543,7 +535,7 @@ fn ppm_strip(ui: &mut egui::Ui, rect: egui::Rect, t: &Tokens, c: &CompareState) 
                 ui.painter().rect_filled(dot, egui::CornerRadius::same(2), colour);
                 ui.label(egui::RichText::new(label).small());
             }
-        } else {
+        } else if !c.overlay_shown {
             ui.label(
                 egui::RichText::new(tl_ctx!(ppm::CTX, "Red: words only in the current file or changed / Green: words only in the chosen file or changed"))
                     .small()

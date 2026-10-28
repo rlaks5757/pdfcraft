@@ -671,6 +671,8 @@ pub struct PdfCraftApp {
     pub host_compare: Option<HostCompareFn>,
     /// A compare request was taken; one frame compares once.
     compare_taken: bool,
+    /// PPM: the host's compare id and the (overlay shown, overlay building) last told to it.
+    compare_view_sent: Option<(String, (bool, bool))>,
     /// The stamp waiting for its one click (never stored in the settings).
     pub(crate) armed_stamp: Option<host_stamp::ArmedStamp>,
     /// The host's watermark text, drawn on each page's picture under its annotations, on the
@@ -1040,6 +1042,7 @@ impl PdfCraftApp {
             compare_inbox: Default::default(),
             host_compare: None,
             compare_taken: false,
+            compare_view_sent: None,
             host_stamp: None,
             annot_inbox: Default::default(),
             host_annots: None,

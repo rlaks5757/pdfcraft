@@ -2699,7 +2699,6 @@ compare viewer	Change	변화
 compare viewer	Old	오래된
 compare viewer	New	새로운
 compare viewer	Overlay	겹쳐 보기
-compare viewer	Building the overlay ({done}/{total})	겹쳐 보기 만드는 중 ({done}/{total})
 compare viewer	Lines only in the current file	기준에만 있는 선
 compare viewer	Lines only in the chosen file	비교에만 있는 선
 compare viewer	Same place	같은 곳

@@ -419,6 +419,12 @@ mod host {
                 E::Failed { id, error } => {
                     vec![("type", "pdfcraft:compare-failed".into()), ("id", id.as_str().into()), ("error", error.as_str().into())]
                 }
+                E::View { id, overlay, building } => vec![
+                    ("type", "pdfcraft:compare-view".into()),
+                    ("id", id.as_str().into()),
+                    ("view", if *overlay { "overlay" } else { "side" }.into()),
+                    ("building", JsValue::from_bool(*building)),
+                ],
             };
             if let Some(m) = message(&fields) {
                 let _ = self.post(&m, None);

@@ -2703,7 +2703,6 @@ compare viewer	Change	Pakeitimas
 compare viewer	Old	Senas
 compare viewer	New	Naujas
 compare viewer	Overlay	Sutapdinimas
-compare viewer	Building the overlay ({done}/{total})	Kuriamas sutapdinimas ({done}/{total})
 compare viewer	Lines only in the current file	Linijos tik dabartiniame faile
 compare viewer	Lines only in the chosen file	Linijos tik pasirinktame faile
 compare viewer	Same place	Ta pati vieta

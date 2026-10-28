@@ -2705,7 +2705,6 @@ compare viewer	Change	Thay đổi
 compare viewer	Old	Cũ
 compare viewer	New	Mới
 compare viewer	Overlay	Chồng lớp
-compare viewer	Building the overlay ({done}/{total})	Đang tạo bản chồng lớp ({done}/{total})
 compare viewer	Lines only in the current file	Nét chỉ có trong tệp hiện tại
 compare viewer	Lines only in the chosen file	Nét chỉ có trong tệp đã chọn
 compare viewer	Same place	Cùng vị trí

@@ -31,6 +31,10 @@ pub struct CompareCommand {
 pub enum CompareEvent {
     Done { id: String, replaced: usize, inserted: usize, deleted: usize, visual: usize },
     Failed { id: String, error: String },
+    /// PPM: which view the comparison shows (side by side or the overlay) and whether the overlay
+    /// is still being built; sent after `Done` and again whenever either changes, so the host can
+    /// word its status line like the viewer's.
+    View { id: String, overlay: bool, building: bool },
 }
 
 /// Requests from the host, drained every frame.
@@ -50,12 +54,28 @@ impl PdfCraftApp {
         }
     }
 
+    /// PPM: tell the host when the view or the overlay build changes.
+    fn report_compare_view(&mut self) {
+        let Some((id, sent)) = self.compare_view_sent.as_ref() else { return };
+        let Some(c) = self.compare.as_ref().filter(|c| c.ppm) else { return };
+        let now = (c.overlay_shown, c.overlay_job.is_some());
+        if now == *sent {
+            return;
+        }
+        let event = CompareEvent::View { id: id.clone(), overlay: now.0, building: now.1 };
+        self.emit_compare(event);
+        if let Some((_, sent)) = self.compare_view_sent.as_mut() {
+            *sent = now;
+        }
+    }
+
     fn fail_compare(&self, id: &str, error: &str) {
         self.emit_compare(CompareEvent::Failed { id: cut(id, MAX_ID_CHARS), error: cut(error, MAX_ERROR_CHARS) });
     }
 
     /// Once a frame: take the host's requests and run the first one.
     pub(crate) fn host_compare_tick(&mut self) {
+        self.report_compare_view();
         let commands: Vec<CompareCommand> = self.compare_inbox.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         for command in commands {
             if command.id.is_empty() || command.id.chars().count() > MAX_ID_CHARS {
@@ -66,7 +86,9 @@ impl PdfCraftApp {
                 self.compare_taken = true;
                 match self.start_host_compare(command.old, command.new, command.ownership) {
                     Ok((replaced, inserted, deleted, visual)) => {
-                        self.emit_compare(CompareEvent::Done { id: command.id, replaced, inserted, deleted, visual });
+                        self.emit_compare(CompareEvent::Done { id: command.id.clone(), replaced, inserted, deleted, visual });
+                        // The host starts from side by side, so only a change from that is told.
+                        self.compare_view_sent = Some((command.id, (false, false)));
                     }
                     Err(error) => self.fail_compare(&command.id, &error),
                 }
@@ -378,6 +400,31 @@ mod tests {
         h.state_mut().show_overlay(false);
         h.run_steps(3);
         h.get_by_label("Side by side");
+    }
+
+    #[test]
+    fn ppm_host_is_told_the_view_and_the_overlay_build_when_they_change() {
+        let events: Rc<RefCell<Vec<CompareEvent>>> = Rc::default();
+        let sink = events.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.host_lock = true;
+            app.host_save = Some(Box::new(|_, _, _| Ok(())));
+            app.host_compare = Some(Box::new(move |e| sink.borrow_mut().push(e.clone())));
+            app
+        });
+        h.run_steps(3);
+        send(&mut h, command("c1"));
+        h.run_steps(2);
+        assert_eq!(events.borrow().len(), 1, "only Done: side by side is where the host starts");
+        let view = |overlay, building| CompareEvent::View { id: "c1".into(), overlay, building };
+        h.state_mut().show_overlay(true);
+        h.run_steps(6);
+        h.state_mut().show_overlay(false);
+        h.run_steps(2);
+        let events = events.borrow();
+        assert_eq!(events[1..], [view(true, true), view(true, false), view(false, false)], "{events:?}");
     }
 
     #[test]
