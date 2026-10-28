@@ -6,7 +6,8 @@
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
 //! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
-//! form's field tree. An annotation whose appearance cannot be drawn is not flattened: it stays
+//! form's field tree; a reply is not drawn at all (it is no ink of its own, as in other viewers).
+//! An annotation whose appearance cannot be drawn is not flattened: it stays
 //! as it is, so no comment or field value is lost with nothing in its place.
 
 use std::collections::HashSet;
@@ -196,7 +197,10 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             }
             let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
             let mut drew = false;
-            if let (Some(ap), Some(rect)) = (appearance(doc, d), rect) {
+            // A reply (not a group member) is no ink of its own: viewers and PDFNet's flatten show
+            // only the comment it answers, and the reply goes with it below.
+            let reply = d.get(b"IRT").is_some() && d.name(b"RT") != Some(b"Group");
+            if let (Some(ap), Some(rect), false) = (appearance(doc, d), rect, reply) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
                     let name = xobject_name(&existing_xo, &xobjects, &mut name_n);

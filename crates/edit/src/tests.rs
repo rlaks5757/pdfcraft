@@ -364,6 +364,26 @@ fn flattening_keeps_an_undrawn_reply_to_a_flattened_comment() {
     assert_eq!(left, [6], "the undrawn reply stays; the comment and its pop-up are gone");
 }
 
+/// A reply that has an appearance is not drawn (it would sit on top of the comment it answers),
+/// and it goes away with that comment.
+#[test]
+fn flattening_does_not_draw_a_reply_but_removes_it_with_its_comment() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (note) /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 600 120 620] /Contents (reply) /IRT 5 0 R /AP << /N 7 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 20 >>\nstream\n1 0 0 rg 0 0 20 20 re f\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), 1, "only the comment is drawn");
+    let doc = reopen(&doc);
+    let p = &pdfcraft_model::pages(&doc)[0];
+    assert!(!p.dict.contains(b"Annots"), "the reply is gone with its comment");
+}
+
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
 /// appearance whose text Helvetica can't draw (another program's), and a comment or form field
 /// whose appearance PdfCraft drew with `?` (marked `PCUndrawn`). A comment another program drew
