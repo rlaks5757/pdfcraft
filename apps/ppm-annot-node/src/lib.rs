@@ -145,8 +145,8 @@ pub fn merge_pdf(pdf: Vec<u8>, items: &str) -> Result<Vec<u8>, String> {
     save(&doc)
 }
 
-/// Prefix of the error when flattening is refused for text the fonts can't draw (nothing is
-/// changed then); the caller tells this apart from a broken PDF by it.
+/// Prefix of the error when flattening is refused because the document has too many annotations
+/// (nothing is changed then); the caller tells this apart from a broken PDF by it.
 pub const FLATTEN_REFUSED: &str = "flatten refused: ";
 
 /// Bakes every comment and form field into the page content, as the /viewer export does with
@@ -158,8 +158,7 @@ pub fn flatten_pdf(pdf: Vec<u8>) -> Result<Vec<u8>, String> {
     let pages: Vec<usize> = (0..pdfcraft_model::pages(&doc).len()).collect();
     match flatten_export(&mut doc, &pages) {
         Ok(_) => {}
-        // Characters the fonts can't draw would be `?` for good once flattened: the crate refuses
-        // before changing anything, and the export must fail rather than ship them.
+        // The crate refuses a document over its annotation limit before changing anything.
         Err(EditError::Invalid(why)) => return Err(format!("{FLATTEN_REFUSED}{why}")),
         Err(e) => return Err(format!("the PDF can't be flattened: {e}")),
     }

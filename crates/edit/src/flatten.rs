@@ -6,11 +6,15 @@
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
 //! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
-//! form's field tree.
-//! An annotation whose appearance cannot be drawn is not flattened: it stays
+//! form's field tree. An annotation whose appearance cannot be drawn is not flattened: it stays
 //! as it is, so no comment or field value is lost with nothing in its place.
+//!
+//! [`flatten_export`] is the server export's variant, matching PDFNet's `FlattenAnnotations`:
+//! it also bakes what a screen hides with NoView, draws a link's border, never draws a reply on
+//! top of its comment, and bakes an appearance as the file has it (`?` included) instead of
+//! refusing. Its only refusal is a document with more annotations than [`EXPORT_MAX_ANNOTS`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -18,10 +22,25 @@ use crate::{EditError, check, n, page_list, place_tagged};
 
 const HIDDEN: i64 = 2;
 const NO_VIEW: i64 = 32;
+/// Most annotations (references de-duplicated) an export flattens in one document, and so most
+/// appearances and link borders it draws. A page's resource dictionary is a list, so the work
+/// would otherwise grow with the square of a hostile file's annotation count.
+const EXPORT_MAX_ANNOTS: usize = 20_000;
+/// Most entries of a link border's dash array that are drawn; a longer one is drawn solid (and
+/// is not read).
+const MAX_DASH: usize = 16;
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     let o = doc.resolve(o?);
     o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
+}
+
+/// `nums` for an array of at most `max` entries; a longer one (a hostile file can share one huge
+/// array between every link) is `None` without being read.
+fn short_nums(doc: &Document, o: Option<&Object>, max: usize) -> Option<Vec<f64>> {
+    let o = doc.resolve(o?);
+    let a = o.as_array().filter(|a| a.len() <= max)?;
+    a.iter().map(|x| doc.resolve(x).as_f64()).collect()
 }
 
 /// The appearance stream to draw for an annotation, if it has one.
@@ -61,7 +80,7 @@ enum Which {
     FillSign,
     /// A server export that must look like PDFNet's `FlattenAnnotations`: every comment and field
     /// like `Comments`, but also what a screen hides with NoView (it prints), a link's visible
-    /// border, and no refusal for an appearance the file already has (even one drawn with `?`).
+    /// border, and no refusal for text the appearance shows as `?` (it is baked as it is).
     Export,
 }
 
@@ -73,26 +92,28 @@ impl Which {
 }
 
 /// A link's border as page content, the way a flattening PDF library bakes it: inside the
-/// rectangle, `/BS` or `/Border` width (default 1), `/C` colour (default CMYK black), dashes kept.
+/// rectangle, `/BS` or `/Border` width (default 1), `/C` colour (default CMYK black), dashes kept
+/// (a dashed style without a dash array is solid, as in PDFNet).
 fn link_border(doc: &Document, d: &Dict) -> Option<String> {
-    let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4)?;
+    let rect = short_nums(doc, d.get(b"Rect"), 4).filter(|r| r.len() == 4)?;
     let bs = d.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
-    let border = nums(doc, d.get(b"Border")).filter(|b| b.len() >= 3);
+    // `/Border` may carry a dash array as its fourth entry, so only the width is read as a number.
+    let border = d.get(b"Border").map(|b| doc.resolve(b)).and_then(|b| b.as_array().filter(|a| (3..=4).contains(&a.len())).cloned());
     let w = match (&bs, &border) {
         (Some(b), _) => b.get(b"W").and_then(|w| doc.resolve(w).as_f64()).unwrap_or(1.0),
-        (None, Some(b)) => b[2],
+        (None, Some(b)) => doc.resolve(&b[2]).as_f64().unwrap_or(1.0),
         (None, None) => 1.0,
     };
     if !w.is_finite() || w <= 0.0 {
         return None;
     }
     let dash = match (&bs, d.get(b"Border").map(|b| doc.resolve(b))) {
-        (Some(b), _) if b.name(b"S") == Some(b"D") => nums(doc, b.get(b"D")).or(Some(vec![3.0])),
-        (None, Some(b)) => b.as_array().and_then(|a| a.get(3)).and_then(|x| nums(doc, Some(x))),
+        (Some(b), _) if b.name(b"S") == Some(b"D") => short_nums(doc, b.get(b"D"), MAX_DASH),
+        (None, Some(b)) => b.as_array().and_then(|a| a.get(3)).and_then(|x| short_nums(doc, Some(x), MAX_DASH)),
         _ => None,
     }
-    .filter(|a| !a.is_empty() && a.iter().all(|x| x.is_finite() && *x >= 0.0) && a.iter().any(|x| *x > 0.0));
-    let color = match nums(doc, d.get(b"C")).as_deref() {
+.filter(|a| !a.is_empty() && a.iter().all(|x| x.is_finite() && *x >= 0.0) && a.iter().any(|x| *x > 0.0));
+    let color = match short_nums(doc, d.get(b"C"), 4).as_deref() {
         Some([g]) => format!("{} G", n(*g)),
         Some([r, g, b]) => format!("{} {} {} RG", n(*r), n(*g), n(*b)),
         Some([c, m, y, k]) => format!("{} {} {} {} K", n(*c), n(*m), n(*y), n(*k)),
@@ -103,6 +124,10 @@ fn link_border(doc: &Document, d: &Dict) -> Option<String> {
     let (bw, bh) = (x1 - x0 - w, y1 - y0 - w);
     if bw <= 0.0 || bh <= 0.0 {
         return None;
+    }
+    // `/S /U` is a line along the bottom edge only (`/B` and `/I` look like solid, as PDFNet draws them).
+    if bs.as_ref().is_some_and(|b| b.name(b"S") == Some(b"U")) {
+        return Some(format!("q {color} {} w {} {} m {} {} l S Q\n", n(w), n(x0 + w / 2.0), n(y0 + w / 2.0), n(x1 - w / 2.0), n(y0 + w / 2.0)));
     }
     let dash = dash.map(|a| format!("[{}] 0 d ", a.iter().map(|x| n(*x)).collect::<Vec<_>>().join(" "))).unwrap_or_default();
     Some(format!("q {color} {} w {dash}{} {} {} {} re S Q\n", n(w), n(x0 + w / 2.0), n(y0 + w / 2.0), n(bw), n(bh)))
@@ -129,17 +154,25 @@ fn selected_comment(subtype: &[u8], comments: bool, fields: bool) -> bool {
 }
 
 /// An XObject name that is not already on the page, so a later flatten cannot replace `PCFl0`.
-fn xobject_name(existing: &Dict, pending: &Dict, n: &mut u32) -> String {
+fn xobject_name(existing: &HashSet<Vec<u8>>, n: &mut u32) -> String {
     loop {
         let name = format!("PCFl{n}");
-        if *n == u32::MAX {
-            return format!("PCFl{}", existing.len().saturating_add(pending.len()));
-        }
-        *n += 1;
-        if !existing.contains(name.as_bytes()) && !pending.contains(name.as_bytes()) {
+        *n = n.saturating_add(1);
+        if !existing.contains(name.as_bytes()) {
             return name;
         }
     }
+}
+
+/// The annotations of page `i`, each reference once for an export (a hostile file can repeat one
+/// 100,000 times).
+fn annot_list(doc: &Document, page: &pdfcraft_model::Page, which: Which) -> Option<Vec<Object>> {
+    let list = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned())?;
+    if !matches!(which, Which::Export) {
+        return Some(list);
+    }
+    let mut seen: HashSet<ObjRef> = HashSet::new();
+    Some(list.into_iter().filter(|e| e.as_ref().is_none_or(|r| seen.insert(r))).collect())
 }
 
 /// Flatten comments and/or form fields on `pages`. Returns how many annotations were merged
@@ -168,6 +201,10 @@ pub fn flatten_fill_sign(doc: &mut Document, pages: &[usize]) -> Result<usize, E
 /// an appearance whose text the standard fonts can't draw. Its page (0-based), whether it is a
 /// form field, and the character.
 fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], which: Which) -> Option<(usize, bool, char)> {
+    // An export bakes every appearance as it is, `?` included (PDFNet does).
+    if matches!(which, Which::Export) {
+        return None;
+    }
     for &i in pages {
         let list = all.get(i)?.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         for entry in &list {
@@ -177,9 +214,7 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
                 continue;
             }
             let widget = d.name(b"Subtype") == Some(b"Widget");
-            // An export bakes an appearance the file already has, `?` included (PDFNet does); only one
-            // that would be built now, from text the standard fonts can't draw, is refused.
-            let drawn = if matches!(which, Which::Export) { None } else { pdfcraft_fonts::undrawn_mark(&d) };
+            let drawn = pdfcraft_fonts::undrawn_mark(&d);
             let would_draw = || (!widget && appearance(doc, &d).is_none()).then(|| pdfcraft_annot::appearance::undrawable_text(&d)).flatten();
             if let Some(c) = drawn.or_else(|| would_draw().map(|(_, c)| c)) {
                 return Some((i, widget, c));
@@ -203,21 +238,35 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             u32::from(c)
         )));
     }
+    if matches!(which, Which::Export) {
+        // Stops at the first page over the limit: pages can share one huge `/Annots` array.
+        let mut total = 0usize;
+        for &i in pages {
+            total += annot_list(doc, &all[i], which).map_or(0, |l| l.len());
+            if total > EXPORT_MAX_ANNOTS {
+                return Err(EditError::Invalid(format!(
+                    "too many annotations to flatten (more than {EXPORT_MAX_ANNOTS} on the pages; nothing was flattened)"
+                )));
+            }
+        }
+    }
     let mut drawn = 0;
     let mut removed_widgets: HashSet<ObjRef> = HashSet::new();
     for &i in pages {
         let page = all[i].clone();
-        let annots_obj = page.dict.get(b"Annots").cloned();
-        let Some(list) = annots_obj.as_ref().map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()) else { continue };
+        let Some(list) = annot_list(doc, &page, which) else { continue };
         let mut content = String::new();
-        let mut xobjects = Dict::new();
+        // Appearance streams to draw, once each, under the names they are drawn with.
+        let mut xobjects: Vec<(String, ObjRef)> = Vec::new();
+        let mut names: HashMap<ObjRef, String> = HashMap::new();
         let mut name_n = 0u32;
-        let existing_xo = page
+        let existing_xo: HashSet<Vec<u8>> = page
             .dict
             .get(b"Resources")
             .map(|r| doc.resolve(r))
             .and_then(|r| r.as_dict().cloned())
             .and_then(|r| r.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()))
+            .map(|x| x.iter().map(|(k, _)| k.clone()).collect())
             .unwrap_or_default();
         let mut gone: HashSet<ObjRef> = HashSet::new();
         let mut gone_inline: HashSet<usize> = HashSet::new();
@@ -265,14 +314,22 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             let rect = nums(doc, d.get(b"Rect")).filter(|r| r.len() == 4).map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
             let mut drew = false;
             // An export draws no reply (not a group member): PDFNet's flatten shows only the comment it
-            // answers, and the reply goes with it below.
+            // answers, and the reply goes with it below. (A reply to a comment that is not flattened,
+            // a hidden one, is not drawn either, and stays on the page.)
             let reply = matches!(which, Which::Export) && d.get(b"IRT").is_some() && d.name(b"RT") != Some(b"Group");
             if let (Some(ap), Some(rect), false) = (appearance(doc, d), rect, reply) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
-                    let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
+                    let name = match names.get(&ap) {
+                        Some(name) => name.clone(),
+                        None => {
+                            let name = xobject_name(&existing_xo, &mut name_n);
+                            names.insert(ap, name.clone());
+                            xobjects.push((name.clone(), ap));
+                            name
+                        }
+                    };
                     content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
-                    xobjects.set(name.into_bytes(), Object::Ref(ap));
                     drawn += 1;
                     drew = true;
                 }
@@ -331,8 +388,8 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             // The page's own resources, with the appearances as XObjects.
             let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
             let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-            for (k, v) in xobjects.iter() {
-                xo.set(k.clone(), v.clone());
+            for (name, ap) in xobjects {
+                xo.set(name.into_bytes(), Object::Ref(ap));
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
