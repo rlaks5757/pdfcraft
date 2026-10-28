@@ -2,7 +2,9 @@
 //! drawn like WebViewer's `setWatermark({ diagonal })`. It lives on the screen only; nothing here
 //! reaches the document or a saved file.
 
-use egui::{Color32, FontId, Painter, Pos2, Rect, Vec2, vec2};
+use egui::emath::Rot2;
+use egui::epaint::{Mesh, Vertex};
+use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Vec2, vec2};
 
 /// The longest text the host may set, in characters.
 pub const MAX_TEXT_CHARS: usize = 200;
@@ -12,10 +14,13 @@ const FONT_UNITS: f32 = 48.0 * 4.0 / 3.0;
 const LINE_UNITS: f32 = 1.5 * 48.0;
 /// `rgba(120, 120, 120, 0.3)`.
 const COLOR: Color32 = Color32::from_rgba_premultiplied(36, 36, 36, 77);
-/// The font size is laid out in steps of 2^(1/16) (4.4%) within these limits, so a zoom does not
-/// put a new glyph size into the font atlas on every frame, and none is huge.
-const MIN_FONT: f32 = 4.0;
-const MAX_FONT: f32 = 512.0;
+/// Glyphs are laid out at a size in steps of 2^(1/4) between these limits (so a zoom does not put
+/// a new size into the font atlas on every frame, and none is huge), and the mesh is scaled to the
+/// exact size, which is [`FONT_UNITS`] times the zoom.
+const MIN_LAYOUT: f32 = 8.0;
+const MAX_LAYOUT: f32 = 256.0;
+/// Below this the text is not readable and nothing is drawn.
+const MIN_DRAWN: f32 = 2.0;
 
 /// Clean a text from the host: at most [`MAX_TEXT_CHARS`] characters, none for blank. `None` clears.
 pub(crate) fn clean(text: Option<&str>) -> Option<String> {
@@ -27,12 +32,15 @@ pub(crate) fn clean(text: Option<&str>) -> Option<String> {
 /// before rotation (WebViewer: `(n - lines / 2) * lineHeight`).
 pub(crate) fn plan(shown: Vec2, page_w: f32, lines: usize) -> (f32, f32, Vec<f32>) {
     let scale = shown.x / page_w.max(1.0);
-    let size = (FONT_UNITS * scale).clamp(MIN_FONT, MAX_FONT);
-    let size = (size.log2() * 16.0).round() / 16.0;
     // The page's own diagonal, counter-clockwise on screen.
     let angle = -(shown.y / shown.x.max(1.0)).atan();
     let tops = (0..lines).map(|n| (n as f32 - lines as f32 / 2.0) * LINE_UNITS * scale).collect();
-    (2f32.powf(size), angle, tops)
+    (FONT_UNITS * scale, angle, tops)
+}
+
+/// The size the glyphs are laid out at for a font of `size`: the next step up, within the limits.
+pub(crate) fn layout_size(size: f32) -> f32 {
+    2f32.powf(((size.max(1.0).log2() * 4.0).ceil() / 4.0).clamp(MIN_LAYOUT.log2(), MAX_LAYOUT.log2()))
 }
 
 /// Turn `local` (an offset from `centre`, before rotation) by `angle` radians clockwise around `centre`.
@@ -45,16 +53,35 @@ pub(crate) fn rotate_about(centre: Pos2, angle: f32, local: Vec2) -> Pos2 {
 pub(crate) fn paint(painter: &Painter, rect: Rect, page_w: f32, text: &str) {
     let lines: Vec<&str> = text.split('\n').collect();
     let (size, angle, tops) = plan(rect.size(), page_w, lines.len());
+    if !size.is_finite() || size < MIN_DRAWN {
+        return;
+    }
     // Past a page's edge nothing shows, as on WebViewer's page canvas.
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    let (laid, rot) = (layout_size(size), Rot2::from_angle(angle));
+    let k = size / laid;
+    let tex = painter.ctx().fonts(|f| f.font_image_size());
+    let uv = vec2(1.0 / tex[0] as f32, 1.0 / tex[1] as f32);
+    let mut mesh = Mesh::default();
     for (line, top) in lines.into_iter().zip(tops) {
         if line.is_empty() {
             continue;
         }
-        let galley = painter.layout_no_wrap(line.to_string(), FontId::proportional(size), COLOR);
-        let local = vec2(-galley.size().x / 2.0, top);
-        let pos = rotate_about(rect.center(), angle, local);
-        painter.add(egui::epaint::TextShape::new(pos, galley, COLOR).with_angle(angle));
+        let galley = painter.layout_no_wrap(line.to_string(), FontId::proportional(laid), COLOR);
+        // The line centred on the page centre with its top `top` above or below it, turned about the centre.
+        let origin = rotate_about(rect.center(), angle, vec2(-galley.size().x * k / 2.0, top));
+        for row in &galley.rows {
+            let first = mesh.vertices.len() as u32;
+            mesh.indices.extend(row.visuals.mesh.indices.iter().map(|i| i + first));
+            mesh.vertices.extend(row.visuals.mesh.vertices.iter().map(|v| Vertex {
+                pos: origin + rot * ((row.pos.to_vec2() + v.pos.to_vec2()) * k),
+                uv: (v.uv.to_vec2() * uv).to_pos2(),
+                color: if v.color == Color32::PLACEHOLDER { COLOR } else { v.color },
+            }));
+        }
+    }
+    if !mesh.is_empty() {
+        painter.add(Shape::mesh(mesh));
     }
 }
 
@@ -72,24 +99,27 @@ mod tests {
     }
 
     #[test]
-    fn the_text_follows_the_pages_diagonal_and_grows_with_the_zoom() {
-        // A 600 x 800 pt page at 100% and at 200%.
-        let (s1, a1, _) = plan(vec2(600.0, 800.0), 600.0, 1);
-        let (s2, a2, _) = plan(vec2(1200.0, 1600.0), 600.0, 1);
+    fn the_text_follows_the_pages_diagonal_and_grows_exactly_with_the_zoom() {
+        // A 600 x 800 pt page at 100%, 200% and 3200%: 48 pt is 64 page units, with no cap or rounding.
+        let size = |zoom: f32| plan(vec2(600.0 * zoom, 800.0 * zoom), 600.0, 1);
+        let (s1, a1, _) = size(1.0);
         assert!((a1 + (800.0f32 / 600.0).atan()).abs() < 1e-6, "{a1}");
-        assert_eq!(a1, a2);
-        // 48 pt is 64 page units; the size follows the zoom within one step (4.4%).
-        assert!((s1 / 64.0 - 1.0).abs() < 0.023, "{s1}");
-        assert!((s2 / 128.0 - 1.0).abs() < 0.023, "{s2}");
+        assert_eq!((s1, size(2.0).0, size(32.0).0), (64.0, 128.0, 2048.0));
+        assert_eq!(a1, size(32.0).1);
     }
 
     #[test]
-    fn the_size_stays_in_limits_and_in_steps() {
-        let (tiny, ..) = plan(vec2(10.0, 10.0), 600.0, 1);
-        let (huge, ..) = plan(vec2(60000.0, 80000.0), 600.0, 1);
-        assert!((tiny - MIN_FONT).abs() < 1e-3 && (huge - MAX_FONT).abs() < 1e-2, "{tiny} {huge}");
-        // Two zooms a hair apart share one size.
-        assert_eq!(plan(vec2(600.0, 800.0), 600.0, 1).0, plan(vec2(601.0, 801.3), 600.0, 1).0);
+    fn glyphs_are_laid_out_in_steps_within_limits_and_scaled_to_the_exact_size() {
+        assert_eq!(layout_size(64.0), 64.0);
+        assert_eq!(layout_size(1.0), MIN_LAYOUT);
+        assert_eq!(layout_size(2048.0), MAX_LAYOUT);
+        // Never smaller than asked (so it is only scaled down) and at most one step (19%) bigger.
+        for size in [9.0f32, 70.0, 99.0, 130.0, 250.0] {
+            let l = layout_size(size);
+            assert!(l >= size && l <= size * 2f32.powf(0.25) + 1e-3, "{size} -> {l}");
+        }
+        // Two zooms a hair apart share one laid out size.
+        assert_eq!(layout_size(65.0), layout_size(66.0));
     }
 
     #[test]
