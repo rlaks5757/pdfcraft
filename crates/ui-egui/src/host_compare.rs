@@ -381,6 +381,7 @@ mod tests {
     #[test]
     fn ppm_overlay_is_built_once_in_a_background_tab_and_the_halves_come_back() {
         let mut h = ppm_compared(1400.0);
+        let rules = h.state().session.open_ownership().clone();
         h.state_mut().show_overlay(true);
         h.run_steps(5);
         let s = h.state().compare.as_ref().unwrap();
@@ -391,6 +392,7 @@ mod tests {
         let d = h.state().session.get(doc).unwrap();
         assert_eq!((d.name.as_str(), d.info.pages.len()), ("compare.pdf", 1));
         assert!(d.ownership().read_only, "looked at only");
+        assert_eq!(*h.state().session.open_ownership(), rules, "later opens keep the rules they had");
         h.get_by_label("Lines only in the current file");
         h.state_mut().show_overlay(false);
         h.run_steps(3);
@@ -400,6 +402,22 @@ mod tests {
         h.state_mut().show_overlay(false);
         h.run_steps(3);
         h.get_by_label("Side by side");
+    }
+
+    #[test]
+    fn ppm_clicking_on_the_words_of_a_change_row_selects_it() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = ppm_compared(1400.0);
+        h.run_steps(2);
+        let rows: Vec<_> = h.get_all_by_label_contains("Change  ").collect();
+        assert!(rows.len() >= 2, "two changes, two rows");
+        rows[1].click();
+        h.run_steps(3);
+        assert_eq!(h.state().compare.as_ref().unwrap().selected, Some(1));
+        let rows: Vec<_> = h.get_all_by_label_contains("Change  ").collect();
+        rows[0].click();
+        h.run_steps(3);
+        assert_eq!(h.state().compare.as_ref().unwrap().selected, Some(0));
     }
 
     #[test]

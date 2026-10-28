@@ -570,38 +570,92 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
 
 /// Create image pages with embedded resolution or a fixed dpi (72 gives one point per pixel).
 pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Document, CreateError> {
-    if let ImageResolution::Dpi(dpi) = resolution
-        && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))
-    {
-        return Err(CreateError::Invalid("image DPI must be finite and between 1 and 1200".into()));
-    }
-    if images.is_empty() {
-        return Err(CreateError::Invalid("no images".into()));
-    }
-    let mut doc = Document::new_empty();
-    let mut profiles = Vec::new();
+    let mut pages = ImagePages::new(resolution)?;
+    // Every file is read before the first page is made, so a bad file fails the whole call.
     for img in images.iter().map(|(name, bytes)| embed(name, bytes)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
-        let dpi = match resolution {
-            ImageResolution::Embedded => img.dpi,
+        pages.push(img)?;
+    }
+    pages.finish(images.first().map(|(name, _)| name.as_str()))
+}
+
+/// Image pages made one at a time (see [`from_images_with_resolution`]), so a long job can embed
+/// a page, let its pixels go and do the next later.
+pub struct ImagePages {
+    doc: Document,
+    profiles: Vec<(Vec<u8>, ObjRef)>,
+    resolution: ImageResolution,
+    count: usize,
+}
+
+impl ImagePages {
+    pub fn new(resolution: ImageResolution) -> Result<Self, CreateError> {
+        if let ImageResolution::Dpi(dpi) = resolution
+            && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))
+        {
+            return Err(CreateError::Invalid("image DPI must be finite and between 1 and 1200".into()));
+        }
+        Ok(Self { doc: Document::new_empty(), profiles: Vec::new(), resolution, count: 0 })
+    }
+
+    /// A page from an 8-bit RGB PNG's pixels, given as the PNG's own zlib data (its IDAT chunks
+    /// joined, not interlaced). The PDF keeps that stream as it is, with the PNG predictor to undo
+    /// its row filters, so the page costs no decoding and no second compression.
+    pub fn add_png_data(&mut self, (w, h): (u32, u32), zlib: Vec<u8>) -> Result<(), CreateError> {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+        d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+        d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        d.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let mut parms = Dict::new();
+        parms.set(b"Predictor".to_vec(), Object::Int(15));
+        parms.set(b"Colors".to_vec(), Object::Int(3));
+        parms.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        parms.set(b"Columns".to_vec(), Object::Int(i64::from(w)));
+        d.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        let xr = self.doc.add(Object::Stream(Stream::from_raw(d, zlib)));
+        self.place(xr, (w, h), (72.0, 72.0))
+    }
+
+    fn push(&mut self, img: Embedded) -> Result<(), CreateError> {
+        let (px, dpi) = (img.px, img.dpi);
+        let xr = add_image(&mut self.doc, img, &mut self.profiles);
+        self.place(xr, px, dpi)
+    }
+
+    /// A page the size of the image at its (or the chosen) resolution, drawing the image.
+    fn place(&mut self, xr: ObjRef, px: (u32, u32), embedded_dpi: (f64, f64)) -> Result<(), CreateError> {
+        let dpi = match self.resolution {
+            ImageResolution::Embedded => embedded_dpi,
             ImageResolution::Dpi(dpi) => (dpi, dpi),
         };
-        let (mut w, mut h) = (img.px.0 as f64 * 72.0 / dpi.0, img.px.1 as f64 * 72.0 / dpi.1);
+        let (mut w, mut h) = (px.0 as f64 * 72.0 / dpi.0, px.1 as f64 * 72.0 / dpi.1);
         // Keep huge images within the largest page PDF allows.
         let k = (MAX_SIDE / w.max(h)).min(1.0);
         w *= k;
         h *= k;
-        let xr = add_image(&mut doc, img, &mut profiles);
         let mut xobj = Dict::new();
         xobj.set(b"Im0".to_vec(), Object::Ref(xr));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xobj));
         let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        add_page(&mut doc, w, h, res, Some(content))?;
+        add_page(&mut self.doc, w, h, res, Some(content))?;
+        self.count += 1;
+        Ok(())
     }
-    if let Some((name, _)) = images.first() {
-        set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));
+
+    /// The document; `title_from` is a file name whose stem becomes the title.
+    pub fn finish(mut self, title_from: Option<&str>) -> Result<Document, CreateError> {
+        if self.count == 0 {
+            return Err(CreateError::Invalid("no images".into()));
+        }
+        if let Some(name) = title_from {
+            set_title(&mut self.doc, name.rsplit_once('.').map_or(name, |(s, _)| s));
+        }
+        Ok(self.doc)
     }
-    Ok(doc)
 }
 
 // ── text ────────────────────────────────────────────────────────────────────────────────────

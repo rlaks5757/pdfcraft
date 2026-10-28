@@ -190,6 +190,28 @@ pub struct Overlay {
 /// Longest side, in pixels, an overlay page may have.
 const OVERLAY_MAX_SIDE: f32 = 3000.0;
 
+/// The zlib data of an 8-bit RGB PNG of opaque RGBA pixels: its IDAT chunks joined. A PDF image
+/// can hold that stream as it is (with the PNG predictor), so the page is compressed once.
+fn rgb_png_data(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let rgb: Vec<u8> = rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let mut png = Vec::new();
+    let mut enc = png::Encoder::new(&mut png, w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().and_then(|mut e| e.write_image_data(&rgb)).map_err(|e| e.to_string())?;
+    // Chunks after the 8-byte signature: length, type, data, CRC.
+    let (mut at, mut zlib) = (8usize, Vec::new());
+    while let Some(head) = png.get(at..at + 8) {
+        let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let body = png.get(at + 8..at + 8 + len).ok_or("a PNG chunk runs past the end")?;
+        if &head[4..8] == b"IDAT" {
+            zlib.extend_from_slice(body);
+        }
+        at += 12 + len;
+    }
+    if zlib.is_empty() { Err("the PNG has no image data".into()) } else { Ok(zlib) }
+}
+
 /// An overlay being built one page pair at a time, so a window can keep drawing (and the build
 /// can be dropped) between pages. It keeps the rendered files' bytes but not the session.
 pub struct OverlayJob {
@@ -200,8 +222,9 @@ pub struct OverlayJob {
     total: usize,
     current_pages: usize,
     chosen_pages: usize,
-    /// The finished pages as PNG files; each page's pixels are gone once it is encoded.
-    pages: Vec<(String, Vec<u8>)>,
+    /// The finished pages, each compressed into the PDF as soon as it is composed, so only one
+    /// page's pixels are alive at a time.
+    pages: pdfcraft_create::ImagePages,
     /// The composite's pixels, reused for every page.
     canvas: Vec<u8>,
 }
@@ -228,17 +251,19 @@ impl OverlayJob {
         }
         let (w, h) = (x.width.max(y.width), x.height.max(y.height));
         overlay_page_into(&mut self.canvas, (&x.rgba, x.width, x.height), (&y.rgba, y.width, y.height), w, h);
-        let png = crate::export::encode_png(w, h, &self.canvas).map_err(EditError::Invalid)?;
-        self.pages.push((format!("overlay-{}.png", self.next + 1), png));
+        // The canvas is opaque, so premultiplied or not it is the same pixels.
+        let zlib = rgb_png_data(&self.canvas, w, h).map_err(EditError::Invalid)?;
+        self.pages.add_png_data((w, h), zlib)?;
         self.next += 1;
         Ok(())
     }
 
-    /// The pages as one PDF that keeps the pages' size in points. The page files are let go.
+    /// The pages as one PDF that keeps the pages' size in points: only the page tree and the
+    /// file are made here, the pages were embedded as they were composed.
     pub fn finish(mut self, session: &Session) -> Result<Overlay, EditError> {
-        let pages = std::mem::take(&mut self.pages);
         self.canvas = Vec::new();
-        let pdf = session.create_from_images_with_resolution(&pages, ImageResolution::Dpi(f64::from(72.0 * self.scale)))?;
+        let doc = self.pages.finish(Some("overlay-1.png"))?;
+        let pdf = session.write_new(&doc)?;
         Ok(Overlay { pdf, current_pages: self.current_pages, chosen_pages: self.chosen_pages })
     }
 }
@@ -271,7 +296,7 @@ impl Session {
             total: n,
             current_pages: a.info.pages.len(),
             chosen_pages: b.info.pages.len(),
-            pages: Vec::with_capacity(n),
+            pages: pdfcraft_create::ImagePages::new(ImageResolution::Dpi(f64::from(72.0 * scale)))?,
             canvas: Vec::new(),
         })
     }

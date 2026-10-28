@@ -258,12 +258,12 @@ fn ppm_panel(ui: &mut egui::Ui, t: &Tokens, s: &CompareState) -> Option<PanelAct
                 } else {
                     String::new()
                 };
-                ui.add(egui::Label::new(egui::RichText::new(head).small().color(t.text_muted)).truncate());
-                ui.add(egui::Label::new(egui::RichText::new(format!("{}  {kind}", tl_ctx!(ppm::CTX, "Change"))).strong()).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(head).small().color(t.text_muted)).truncate().selectable(false));
+                ui.add(egui::Label::new(egui::RichText::new(format!("{}  {kind}", tl_ctx!(ppm::CTX, "Change"))).strong()).truncate().selectable(false));
                 // "Old" is the current file's side and "New" the chosen file's, as in the viewer.
                 let side = |ui: &mut egui::Ui, show: bool, mark: &str, label: &str, text: &str| {
                     let line = if show { format!("{label} {mark}{}: {text}", words(text)) } else { String::new() };
-                    ui.add(egui::Label::new(egui::RichText::new(line).small()).truncate());
+                    ui.add(egui::Label::new(egui::RichText::new(line).small()).truncate().selectable(false));
                 };
                 side(ui, ch.kind != Kind::Deleted, "-", tl_ctx!(ppm::CTX, "Old"), &ch.new.text);
                 side(ui, ch.kind != Kind::Inserted, "+", tl_ctx!(ppm::CTX, "New"), &ch.old.text);
@@ -475,12 +475,13 @@ impl PdfCraftApp {
         let built = job.finish(&self.session).map_err(|e| e.to_string());
         let outcome = built.and_then(|o| {
             // Looked at only: read-only and never synced, like the files it was made from.
+            // What later opens use, read before it is narrowed for this one.
+            let previous = self.session.open_ownership().clone();
             let own = self.session.get(new).map(|d| d.ownership().clone());
             if let Some(own) = own {
                 self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, annot_sync: false, hide_comments_panel: false, ..own });
             }
             let before = self.views.len();
-            let previous = self.session.open_ownership().clone();
             // The PDF is the only holder of its bytes here, so they move into the tab without a copy.
             let bytes = std::sync::Arc::try_unwrap(o.pdf).unwrap_or_else(|shared| (*shared).clone());
             let opened = self.open_bytes_with_focus("compare.pdf", None, bytes, false);
