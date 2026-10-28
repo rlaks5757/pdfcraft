@@ -589,6 +589,10 @@ pub(crate) fn with_overlay_view<R>(app: &mut PdfCraftApp, f: impl FnOnce(&mut Pd
         if let Some(c) = app.compare.as_mut() {
             c.overlay_view = Some(view);
         }
+    } else if let Some(c) = app.compare.as_mut() {
+        // `f` closed the overlay's document: the pane says it couldn't be built, not stay empty.
+        c.overlay = None;
+        c.overlay_failed = true;
     }
     Some(out)
 }

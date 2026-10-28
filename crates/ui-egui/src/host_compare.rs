@@ -441,13 +441,43 @@ mod tests {
             let a = h.state().active.expect("a tab stays active");
             assert!(a < tabs && h.state().views[a].id != doc, "next tab skips the overlay");
         }
-        h.state_mut().execute("view.next_tab");
         h.state_mut().active = active;
         h.run_steps(2);
         h.state_mut().compare_action(active.unwrap(), crate::compare_ui::PanelAction::Clear);
         h.run_steps(2);
         assert_eq!((h.state().views.len(), h.state().active), (tabs, active), "tabs and the active one are as before");
         assert!(h.state().compare.is_none() && h.state().session.get(doc).is_none(), "the overlay document is closed");
+    }
+
+    #[test]
+    fn ppm_closing_a_compared_tab_ends_the_comparison_and_its_shading_and_overlay() {
+        let mut h = ppm_compared(1400.0);
+        h.state_mut().show_overlay(true);
+        h.run_steps(6);
+        let (doc, _) = h.state().compare.as_ref().unwrap().overlay.clone().expect("the overlay was built");
+        let (old, new) = { let c = h.state().compare.as_ref().unwrap(); (c.old, c.new) };
+        assert!(h.state().views.iter().any(|v| v.id == new && !v.compare_marks.is_empty()), "the new file is shaded");
+        let at = h.state().views.iter().position(|v| v.id == old).unwrap();
+        h.state_mut().close_tab(at);
+        h.run_steps(2);
+        assert!(h.state().compare.is_none() && h.state().session.get(doc).is_none(), "the overlay document is closed");
+        assert!(h.state().views.iter().all(|v| v.compare_marks.is_empty()), "no shading is left with no way to clear it");
+        assert!(h.state().right.is_none());
+    }
+
+    #[test]
+    fn ppm_comparing_again_closes_the_overlay_of_the_comparison_before() {
+        let mut h = ppm_compared(1400.0);
+        h.state_mut().show_overlay(true);
+        h.run_steps(6);
+        let (doc, _) = h.state().compare.as_ref().unwrap().overlay.clone().expect("the overlay was built");
+        let tabs = h.state().views.len();
+        h.state_mut().run_compare();
+        h.run_steps(2);
+        let c = h.state().compare.as_ref().expect("a new comparison");
+        assert!(c.overlay.is_none() && c.overlay_view.is_none() && !c.overlay_shown, "a fresh state");
+        assert!(h.state().session.get(doc).is_none(), "the old overlay document is closed");
+        assert_eq!(h.state().views.len(), tabs);
     }
 
     #[test]

@@ -2051,8 +2051,15 @@ impl PdfCraftApp {
         self.forget_recovery(id);
         self.session.close(id);
         // A comparison needs both its files; its overlay document goes with it.
-        if self.compare.as_ref().is_some_and(|c| c.old == id || c.new == id) {
+        if let Some((old, new)) = self.compare.as_ref().filter(|c| c.old == id || c.new == id).map(|c| (c.old, c.new)) {
             self.end_compare();
+            // The shading of the file that stays goes too, like Clear: its button is gone with the comparison.
+            for view in self.views.iter_mut().filter(|v| v.id == old || v.id == new) {
+                view.compare_marks.clear();
+            }
+            if self.right == Some(RightPanel::Compare) {
+                self.right = None;
+            }
         }
         self.active = match self.active {
             _ if self.views.is_empty() => None,
@@ -3322,6 +3329,14 @@ impl eframe::App for PdfCraftApp {
         for (index, view) in self.views.iter_mut().enumerate() {
             view.objects.set_input_blocked(blocked || self.active != Some(index));
             if blocked || self.active != Some(index) {
+                view.auto_scroll.cancel();
+            }
+        }
+        // The compare overlay pane is no tab: it takes part while it is what the active tab shows.
+        let overlay_active = self.active.is_some_and(|i| compare_ui::overlay_shown_over(self, i));
+        if let Some(view) = self.compare.as_mut().and_then(|c| c.overlay_view.as_mut()) {
+            view.objects.set_input_blocked(blocked || !overlay_active);
+            if blocked || !overlay_active {
                 view.auto_scroll.cancel();
             }
         }
