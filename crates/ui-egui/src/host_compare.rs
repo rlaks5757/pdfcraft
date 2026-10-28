@@ -405,6 +405,25 @@ mod tests {
     }
 
     #[test]
+    fn ppm_overlay_pane_renders_its_pages_while_the_new_file_is_the_active_tab() {
+        let mut h = ppm_compared(1400.0);
+        h.state_mut().show_overlay(true);
+        h.run_steps(5);
+        let (doc, _) = h.state().compare.as_ref().unwrap().overlay.clone().expect("the overlay was built");
+        let active = h.state().active.unwrap();
+        assert_eq!(h.state().views[active].id, h.state().compare.as_ref().unwrap().new, "the compare tab is the new file's");
+        let pane = h.state().views.iter().position(|v| v.id == doc).unwrap();
+        for _ in 0..200 {
+            if h.state().views[pane].has_page_textures() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            h.run_steps(1);
+        }
+        assert!(h.state().views[pane].has_page_textures(), "the overlay pane got a rendered page, not \"Rendering...\" for ever");
+    }
+
+    #[test]
     fn ppm_clicking_on_the_words_of_a_change_row_selects_it() {
         use egui_kittest::kittest::Queryable;
         let mut h = ppm_compared(1400.0);

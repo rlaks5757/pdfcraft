@@ -3453,15 +3453,18 @@ impl PdfCraftApp {
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.
         let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
+        // The overlay pane drawn over the compared file's tab renders too.
+        let overlay = self.active.and_then(|i| compare_ui::overlay_pane(self, i));
         for (i, view) in self.views.iter_mut().enumerate() {
             if Some(i) != self.active
                 && Some(i) != partner
+                && Some(i) != overlay
                 && let Some(doc) = self.session.get(view.id)
             {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner) {
+        for i in self.active.into_iter().chain(partner).chain(overlay) {
             if let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {

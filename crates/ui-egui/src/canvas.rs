@@ -1625,6 +1625,12 @@ impl DocView {
         }
     }
 
+    /// Whether any page of this view has a texture (the page was rendered).
+    #[cfg(test)]
+    pub(crate) fn has_page_textures(&self) -> bool {
+        !self.pages.is_empty()
+    }
+
     /// Only the displayed document owns raster textures. Tabs keep their document and view
     /// state, but do not each retain a separate full application texture allowance.
     pub(crate) fn suspend_rendering(&mut self, pool: &RenderPool) {

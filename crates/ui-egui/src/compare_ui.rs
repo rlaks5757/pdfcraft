@@ -564,6 +564,15 @@ pub(crate) fn side_by_side(app: &PdfCraftApp, index: usize) -> Option<(usize, us
     (old != index).then_some((old, app.views.iter().position(|v| v.id == new.id)?))
 }
 
+/// PPM: the view index of the overlay document while the overlay is shown over the active tab
+/// (the new file's); that pane renders its pages like the active view does.
+pub(crate) fn overlay_pane(app: &PdfCraftApp, index: usize) -> Option<usize> {
+    let c = app.compare.as_ref().filter(|c| c.ppm && c.overlay_shown)?;
+    app.views.get(index).filter(|v| v.id == c.new)?;
+    let (doc, _) = c.overlay.as_ref()?;
+    app.views.iter().position(|v| v.id == *doc)
+}
+
 /// Side by side: the old file on the left, the new on the right, each a page view of its own
 /// with its shading, scrolled and zoomed together. The half the pointer is over leads; the
 /// other follows its zoom, layout and scroll offset.
