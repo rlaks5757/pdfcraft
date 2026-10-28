@@ -414,6 +414,8 @@ pub struct DocView {
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
+    /// How strongly the marks are shaded (the PPM build matches the viewer's 0.4).
+    pub compare_alpha: f32,
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
@@ -726,6 +728,7 @@ impl DocView {
             single_edges: None,
             flash: None,
             compare_marks: Vec::new(),
+            compare_alpha: 0.28,
             pages: HashMap::new(),
             errors: HashMap::new(),
             waiting_since: HashMap::new(),
@@ -3585,7 +3588,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             for (mp, mr, mc) in &view.compare_marks {
                 if *mp == i {
                     let sr = xf.user_rect(info, i, *mr).expand(1.5);
-                    painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(0.28));
+                    painter.rect_filled(sr, CornerRadius::same(2), mc.gamma_multiply(view.compare_alpha));
                 }
             }
             if let Some((fp, fr, t0)) = view.flash

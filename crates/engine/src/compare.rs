@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
 
-use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Shape};
+use crate::{DocId, Edit, EditError, ImageResolution, Markup, NewAnnotation, NoteIcon, Session, Shape};
 
 /// Acrobat's compare colours: replaced blue, inserted green, deleted red.
 pub fn colour(kind: Kind) -> crate::Rgb {
@@ -121,6 +121,104 @@ impl Session {
     }
 }
 
+/// Overlay colours (the viewer's visual diff): the current file's ink red, the chosen file's blue,
+/// ink in both gray.
+pub const OVERLAY_CURRENT: [u8; 3] = [255, 0, 0];
+pub const OVERLAY_CHOSEN: [u8; 3] = [0, 90, 255];
+pub const OVERLAY_SAME: [u8; 3] = [140, 140, 140];
+
+/// Below this ink (0 white .. 1 black) a pixel counts as paper, so page tints don't show.
+const INK_FLOOR: f32 = 0.12;
+
+/// How dark a pixel of a premultiplied RGBA rendering is, over white paper.
+fn ink(px: &[u8]) -> f32 {
+    let white = 255 - u32::from(px[3]);
+    let l = |c: u8| (u32::from(c) + white).min(255) as f32;
+    let lum = (0.299 * l(px[0]) + 0.587 * l(px[1]) + 0.114 * l(px[2])) / 255.0;
+    let ink = 1.0 - lum;
+    if ink < INK_FLOOR { 0.0 } else { ink }
+}
+
+/// One overlay page (opaque RGBA, `width` x `height`) from two renderings placed at the top-left
+/// corner (page origins align, nothing is stretched): ink only in `current` red, only in `chosen`
+/// blue, in both gray, each as dark as the ink was.
+pub fn overlay_page(current: (&[u8], u32, u32), chosen: (&[u8], u32, u32), width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![255u8; width as usize * height as usize * 4];
+    let at = |img: (&[u8], u32, u32), x: u32, y: u32| -> f32 {
+        if x >= img.1 || y >= img.2 {
+            return 0.0;
+        }
+        let i = (y as usize * img.1 as usize + x as usize) * 4;
+        img.0.get(i..i + 4).map_or(0.0, ink)
+    };
+    for y in 0..height {
+        for x in 0..width {
+            let (a, b) = (at(current, x, y), at(chosen, x, y));
+            if a == 0.0 && b == 0.0 {
+                continue;
+            }
+            let (rgb, k) = match (a > 0.0, b > 0.0) {
+                (true, true) => (OVERLAY_SAME, a.max(b)),
+                (true, false) => (OVERLAY_CURRENT, a),
+                _ => (OVERLAY_CHOSEN, b),
+            };
+            let o = (y as usize * width as usize + x as usize) * 4;
+            for (c, v) in rgb.iter().enumerate() {
+                out[o + c] = (255.0 - (255.0 - f32::from(*v)) * k).round() as u8;
+            }
+        }
+    }
+    out
+}
+
+/// The overlay of two documents as a PDF, one page per pair of pages.
+pub struct Overlay {
+    pub pdf: Arc<Vec<u8>>,
+    pub current_pages: usize,
+    pub chosen_pages: usize,
+}
+
+/// Longest side, in pixels, an overlay page may have.
+const OVERLAY_MAX_SIDE: f32 = 3000.0;
+
+impl Session {
+    /// Visual compare, overlaid: page n of `current` against page n of `chosen` (the shorter
+    /// file's pages), drawn at `dpi` (less when a page would pass [`OVERLAY_MAX_SIDE`] pixels)
+    /// into one PDF whose pages keep the pages' size in points.
+    pub fn compare_overlay(&self, current: DocId, chosen: DocId, dpi: f32) -> Result<Overlay, EditError> {
+        let a = self.get(current).ok_or(EditError::NoDocument)?;
+        let b = self.get(chosen).ok_or(EditError::NoDocument)?;
+        let n = a.info.pages.len().min(b.info.pages.len());
+        if n == 0 {
+            return Err(EditError::NoDocument);
+        }
+        let renderer = |d: &crate::Document| {
+            pdfcraft_render::PageRenderer::new(
+                d.bytes.clone(),
+                pdfcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
+            )
+        };
+        let (mut ra, mut rb) = (renderer(a), renderer(b));
+        // One scale for every page, so one dpi sizes them all back to points.
+        let longest = a.info.pages.iter().take(n).chain(b.info.pages.iter().take(n)).map(|p| p.width.max(p.height)).fold(1.0f32, f32::max);
+        let scale = (dpi.clamp(18.0, 150.0) / 72.0).min(OVERLAY_MAX_SIDE / longest).max(0.05);
+        let mut pages = Vec::with_capacity(n);
+        for page in 0..n {
+            let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
+            let (x, y) = (ra.render(req), rb.render(req));
+            if let Some(e) = x.error.as_ref().or(y.error.as_ref()) {
+                return Err(EditError::Invalid(e.to_string()));
+            }
+            let (w, h) = (x.width.max(y.width), x.height.max(y.height));
+            let rgba = overlay_page((&x.rgba, x.width, x.height), (&y.rgba, y.width, y.height), w, h);
+            let png = crate::export::encode_png(w, h, &rgba).map_err(EditError::Invalid)?;
+            pages.push((format!("overlay-{}.png", page + 1), png));
+        }
+        let pdf = self.create_from_images_with_resolution(&pages, ImageResolution::Dpi(f64::from(72.0 * scale)))?;
+        Ok(Overlay { pdf, current_pages: a.info.pages.len(), chosen_pages: b.info.pages.len() })
+    }
+}
+
 /// Export a PDF ▸ Word, PowerPoint, HTML or RTF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfficeFormat {
@@ -217,5 +315,67 @@ impl crate::Document {
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
         }
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    /// A 4x1 opaque strip: `ink` = black pixels, the rest white.
+    fn strip(black: &[usize]) -> Vec<u8> {
+        (0..4).flat_map(|i| if black.contains(&i) { [0, 0, 0, 255] } else { [255, 255, 255, 255] }).collect()
+    }
+
+    fn px(img: &[u8], i: usize) -> [u8; 3] {
+        [img[i * 4], img[i * 4 + 1], img[i * 4 + 2]]
+    }
+
+    #[test]
+    fn ink_only_in_the_current_file_is_red_only_in_the_chosen_is_blue_in_both_gray() {
+        let cur = strip(&[0, 1]);
+        let chosen = strip(&[1, 2]);
+        let out = overlay_page((&cur, 4, 1), (&chosen, 4, 1), 4, 1);
+        assert_eq!(px(&out, 0), OVERLAY_CURRENT, "only in the current file");
+        assert_eq!(px(&out, 1), OVERLAY_SAME, "in both");
+        assert_eq!(px(&out, 2), OVERLAY_CHOSEN, "only in the chosen file");
+        assert_eq!(px(&out, 3), [255, 255, 255], "paper stays white");
+        assert!(out.chunks(4).all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn a_lighter_ink_blends_toward_white_and_paper_tints_vanish() {
+        // 50% gray ink in the current file; a faint tint (below the floor) in the chosen one.
+        let cur = vec![128, 128, 128, 255, 255, 255, 255, 255];
+        let chosen = vec![255, 255, 255, 255, 240, 240, 240, 255];
+        let out = overlay_page((&cur, 2, 1), (&chosen, 2, 1), 2, 1);
+        let p = px(&out, 0);
+        assert!(p[0] == 255 && p[1] > 100 && p[1] < 160 && p[1] == p[2], "half-dark red: {p:?}");
+        assert_eq!(px(&out, 1), [255, 255, 255]);
+    }
+
+    #[test]
+    fn different_sizes_align_at_the_corner_and_the_canvas_covers_both() {
+        let small = strip(&[0]);
+        let big = vec![0, 0, 0, 255].repeat(8);
+        let out = overlay_page((&small, 4, 1), (&big, 4, 2), 4, 2);
+        assert_eq!(out.len(), 4 * 2 * 4);
+        assert_eq!(px(&out, 0), OVERLAY_SAME);
+        assert_eq!(px(&out, 1), OVERLAY_CHOSEN);
+        assert_eq!(px(&out, 4), OVERLAY_CHOSEN, "second row: only the taller file has ink");
+    }
+
+    #[test]
+    fn the_overlay_keeps_the_page_size_and_pairs_pages_up_to_the_shorter_file() {
+        let mut s = Session::new();
+        let pdf = |t: &str| s.create_from_text("t", t).unwrap();
+        let (pa, pb) = (pdf("Delivery within five days."), pdf("Delivery within three days."));
+        let a = s.open("a.pdf", None, pa, None).unwrap();
+        let b = s.open("b.pdf", None, pb, None).unwrap();
+        let o = s.compare_overlay(a, b, 96.0).unwrap();
+        assert_eq!((o.current_pages, o.chosen_pages), (1, 1));
+        let c = s.open("c.pdf", None, o.pdf.clone(), None).unwrap();
+        let (src, dst) = (&s.get(a).unwrap().info.pages[0], &s.get(c).unwrap().info.pages[0]);
+        assert!((src.width - dst.width).abs() < 1.0 && (src.height - dst.height).abs() < 1.0, "{} x {} vs {} x {}", src.width, src.height, dst.width, dst.height);
     }
 }

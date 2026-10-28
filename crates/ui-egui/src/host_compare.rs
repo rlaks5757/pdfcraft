@@ -308,6 +308,8 @@ mod tests {
     fn hosted_compare_panel_hides_marks_and_report() {
         let (mut h, _) = app(true);
         send(&mut h, command("c1"));
+        // The PPM panel is the viewer's change list; it has no Clear (the page closes the comparison).
+        #[cfg(not(feature = "host-lock"))]
         h.get_by_label("Clear");
         assert!(h.query_by_label("Mark as comments").is_none());
         assert!(h.query_by_label("Report…").is_none());
@@ -321,5 +323,60 @@ mod tests {
         send(&mut h, command("c1"));
         h.get_by_label("Mark as comments");
         h.get_by_label("Report…");
+    }
+
+    /// A PPM (host-lock) window of `width` points with the host's compare already run.
+    fn ppm_compared(width: f32) -> Harness<'static, PdfCraftApp> {
+        let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.host_lock = true;
+            app.host_save = Some(Box::new(|_, _, _| Ok(())));
+            app
+        });
+        h.run_steps(3);
+        send(&mut h, command("c1"));
+        h
+    }
+
+    #[test]
+    fn ppm_compare_shades_words_red_and_green_side_by_side_at_any_width() {
+        use crate::compare_ui::ppm;
+        let h = ppm_compared(700.0);
+        let s = h.state().compare.as_ref().unwrap();
+        assert!(s.ppm && s.side_by_side, "side by side even in a narrow window");
+        assert!(s.visual.is_empty(), "no visual marks: the viewer shows words only");
+        let (new_i, old_i) = (h.state().views.iter().position(|v| v.id == s.new).unwrap(), h.state().views.iter().position(|v| v.id == s.old).unwrap());
+        let (new_v, old_v) = (&h.state().views[new_i], &h.state().views[old_i]);
+        assert!(!new_v.compare_marks.is_empty() && new_v.compare_marks.iter().all(|m| m.2 == ppm::BASE), "the current file's words are red");
+        assert!(!old_v.compare_marks.is_empty() && old_v.compare_marks.iter().all(|m| m.2 == ppm::TARGET), "the chosen file's words are green");
+        assert_eq!((new_v.compare_alpha, old_v.compare_alpha), (ppm::MARK_ALPHA, ppm::MARK_ALPHA));
+        h.get_by_label("Change list");
+        h.get_by_label("2 differences");
+        h.get_by_label("Overlay");
+    }
+
+    #[test]
+    fn ppm_overlay_is_built_once_in_a_background_tab_and_the_halves_come_back() {
+        let mut h = ppm_compared(1400.0);
+        h.state_mut().show_overlay(true);
+        h.run_steps(5);
+        let s = h.state().compare.as_ref().unwrap();
+        assert!(s.overlay_shown && !s.overlay_pending && !s.overlay_failed);
+        let (doc, notice) = s.overlay.clone().expect("the overlay was built");
+        assert_eq!(notice, None, "equal page counts need no note");
+        assert_eq!(h.state().views.len(), 3, "old, new and the overlay");
+        let d = h.state().session.get(doc).unwrap();
+        assert_eq!((d.name.as_str(), d.info.pages.len()), ("compare.pdf", 1));
+        assert!(d.ownership().read_only, "looked at only");
+        h.get_by_label("Lines only in the current file");
+        h.state_mut().show_overlay(false);
+        h.run_steps(3);
+        h.state_mut().show_overlay(true);
+        h.run_steps(3);
+        assert_eq!(h.state().views.len(), 3, "built once");
+        h.state_mut().show_overlay(false);
+        h.run_steps(3);
+        h.get_by_label("Side by side");
     }
 }

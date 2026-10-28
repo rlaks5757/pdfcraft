@@ -2692,3 +2692,22 @@ theme	Appearance	Išvaizda
 	the document is read-only	dokumentas tik skaitomas
 	this change isn't available here: only comments can be made in this view	šis pakeitimas čia negalimas: šiame rodinyje galima kurti tik komentarus
 	a reply can't be replied to	į atsakymą atsakyti negalima
+# Compare screen of the PPM build (the web viewer's wording in Korean).
+compare viewer	Change list	Pakeitimų sąrašas
+compare viewer	{n} differences	Skirtumų: {n}
+compare viewer	Page {n}	{n} puslapis
+compare viewer	Delete	Pašalinti
+compare viewer	Insert	Įterpti
+compare viewer	Edit	Redaguoti
+compare viewer	Change	Pakeitimas
+compare viewer	Old	Senas
+compare viewer	New	Naujas
+compare viewer	Overlay	Sutapdinimas
+compare viewer	Building the overlay	Kuriamas sutapdinimas
+compare viewer	Lines only in the current file	Linijos tik dabartiniame faile
+compare viewer	Lines only in the chosen file	Linijos tik pasirinktame faile
+compare viewer	Same place	Ta pati vieta
+compare viewer	Red: words only in the current file or changed / Green: words only in the chosen file or changed	Raudona: žodžiai tik dabartiniame faile arba pakeisti / Žalia: žodžiai tik pasirinktame faile arba pakeisti
+compare viewer	Only words are shown. For pictures and drawings, use Overlay.	Rodomi tik žodžiai. Paveikslėlių ir brėžinių skirtumams naudokite sutapdinimą.
+compare viewer	Only the first {n} pages were compared (current {a}, chosen {b}).	Palyginta tik pirmieji {n} puslapiai (dabartinis: {a}, pasirinktas: {b}).
+compare viewer	Couldn't build the overlay.	Nepavyko sukurti sutapdinimo.

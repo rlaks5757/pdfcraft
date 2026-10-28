@@ -2694,3 +2694,22 @@ key	Space	Space
 	the document is read-only	tài liệu ở chế độ chỉ đọc
 	this change isn't available here: only comments can be made in this view	thay đổi này không khả dụng ở đây: ở chế độ xem này chỉ có thể tạo bình luận
 	a reply can't be replied to	không thể trả lời một phản hồi
+# Compare screen of the PPM build (the web viewer's wording in Korean).
+compare viewer	Change list	Danh sách thay đổi
+compare viewer	{n} differences	{n} khác biệt
+compare viewer	Page {n}	Trang {n}
+compare viewer	Delete	Xóa
+compare viewer	Insert	Chèn
+compare viewer	Edit	Sửa
+compare viewer	Change	Thay đổi
+compare viewer	Old	Cũ
+compare viewer	New	Mới
+compare viewer	Overlay	Chồng lớp
+compare viewer	Building the overlay	Đang tạo bản chồng lớp
+compare viewer	Lines only in the current file	Nét chỉ có trong tệp hiện tại
+compare viewer	Lines only in the chosen file	Nét chỉ có trong tệp đã chọn
+compare viewer	Same place	Cùng vị trí
+compare viewer	Red: words only in the current file or changed / Green: words only in the chosen file or changed	Đỏ: từ chỉ có trong tệp hiện tại hoặc đã thay đổi / Xanh lục: từ chỉ có trong tệp đã chọn hoặc đã thay đổi
+compare viewer	Only words are shown. For pictures and drawings, use Overlay.	Chỉ hiển thị chữ. Với hình ảnh và bản vẽ, hãy dùng chồng lớp.
+compare viewer	Only the first {n} pages were compared (current {a}, chosen {b}).	Chỉ so sánh {n} trang đầu (hiện tại {a}, đã chọn {b}).
+compare viewer	Couldn't build the overlay.	Không thể tạo bản chồng lớp.
