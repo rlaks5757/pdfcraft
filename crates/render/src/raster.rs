@@ -182,8 +182,9 @@ pub struct RenderRequest {
 }
 
 /// The tag bit of a print-preview raster. Such requests always render the document's true
-/// colours, ignoring `RenderConfig::reading_colors`: a preview's job is fidelity to the
-/// printout, and the print itself — imposed from the document — is never recoloured.
+/// colours, ignoring `RenderConfig::reading_colors`, and without the screen watermark
+/// (`RenderConfig::watermark`): a preview's job is fidelity to the printout, and the print
+/// itself — imposed from the document — is never recoloured or watermarked.
 pub const PRINT_TAG: u64 = 1 << 60;
 
 /// The reading colours a request renders with: print previews ([`PRINT_TAG`]) ignore the
@@ -326,6 +327,14 @@ fn render_page<'a>(
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
     }
+    // A print preview is the printout's picture, and the printout never carries the screen watermark.
+    let unmarked;
+    let settings = if req.tag & PRINT_TAG != 0 && settings.watermark.is_some() {
+        unmarked = InterpreterSettings { watermark: None, ..settings.clone() };
+        &unmarked
+    } else {
+        settings
+    };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let pages = pdf.pages();
         let page = pages.get(req.page).ok_or_else(|| format!("page {} does not exist", req.page + 1))?;
@@ -5970,6 +5979,34 @@ trailer << /Root 1 0 R >>
         let p = render("/AP << /N 6 0 R >>");
         assert_eq!(px(&p, 30, 50), vec![0, 0, 255, 255], "the appearance keeps its own colour");
         assert_eq!(px(&p, 90, 50), vec![0, 0, 0, 255], "outside the appearance's own drawing");
+    }
+
+    /// A print preview shows the printout, which has no screen watermark: the same document with
+    /// the watermark set renders it for the screen (tag 0) but not for a `PRINT_TAG` request.
+    #[test]
+    fn print_preview_requests_render_without_the_screen_watermark() {
+        use kurbo::Shape;
+        let pdf = Arc::new(
+            b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 50] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec(),
+        );
+        let mark = Arc::new(ScreenWatermark { key: "m".into(), outline: kurbo::Rect::new(-20.0, -10.0, 20.0, 10.0).to_path(0.1), rgb: [0.0; 3], alpha: 1.0 });
+        let request = |tag| RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag, preview: false };
+        let plain = PageRenderer::new(pdf.clone(), RenderConfig::default()).render(request(0));
+        let mut marked = PageRenderer::new(pdf.clone(), RenderConfig { watermark: Some(mark.clone()), ..Default::default() });
+        assert_ne!(marked.render(request(0)).rgba, plain.rgba, "the screen draws the watermark");
+        assert_eq!(marked.render(request(PRINT_TAG)).rgba, plain.rgba, "the print preview does not (inline renderer)");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pool = RenderPool::new(pdf, 1, RenderConfig { watermark: Some(mark), ..Default::default() });
+            pool.set_queue(vec![request(PRINT_TAG)]);
+            let worker = loop {
+                if let Some(p) = pool.try_recv() {
+                    break p;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            assert_eq!(worker.rgba, plain.rgba, "nor does a pool worker");
+        }
     }
 
     /// A print-preview request (`PRINT_TAG`) renders the document's true colours even though
