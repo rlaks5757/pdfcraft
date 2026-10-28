@@ -20,6 +20,7 @@ pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
     PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, pretty_date,
 };
+pub use hayro::hayro_interpret::ScreenWatermark;
 pub use pixels::Pixels;
 pub use raster::{
     MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,

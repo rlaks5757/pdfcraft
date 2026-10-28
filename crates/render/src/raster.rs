@@ -23,7 +23,7 @@ use work_queue::{ResultReceiver, WorkQueue};
 
 use hayro::hayro_interpret::font::{FontData, FontQuery};
 use hayro::hayro_interpret::hayro_cmap::CidFamily;
-use hayro::hayro_interpret::{InterpreterSettings, InterpreterWarning};
+use hayro::hayro_interpret::{InterpreterSettings, InterpreterWarning, ScreenWatermark};
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::AlphaColor;
 use hayro::vello_cpu::color::palette::css::WHITE;
@@ -68,6 +68,9 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// A screen watermark baked into the page picture under the annotations, as the host's own
+    /// viewer puts it. Display only; the document never changes.
+    pub watermark: Option<Arc<ScreenWatermark>>,
 }
 
 impl RenderConfig {
@@ -77,6 +80,7 @@ impl RenderConfig {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
             hide_replies: self.hide_replies,
+            watermark: self.watermark.clone(),
             font_resolver: Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query))),
             ..InterpreterSettings::default()
         }
@@ -3248,6 +3252,53 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(&hidden, 75, 25), green, "the parent stays");
         assert_eq!(px(&hidden, 75, 75), blue, "a /RT /Group annotation stays");
         assert_eq!((px(&hidden, 25, 25), px(&hidden, 25, 75)), (white.clone(), white), "replies are not drawn");
+    }
+
+    /// A screen watermark is drawn about the page centre on the page's picture and under the
+    /// annotations; without one the picture is as before, and a turned page keeps it centred.
+    #[test]
+    fn a_screen_watermark_lies_under_the_annotations() {
+        use kurbo::Shape;
+        let pdf = |rotate: u32| {
+            format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Rotate {rotate} /MediaBox [0 0 100 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [40 90 60 110] /AP << /N 5 0 R >> >> endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 24 >> stream
+0 1 0 rg 0 0 20 20 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+            )
+            .into_bytes()
+        };
+        let mark = Arc::new(ScreenWatermark {
+            key: "m".into(),
+            outline: kurbo::Rect::new(-30.0, -30.0, 30.0, 30.0).to_path(0.1),
+            rgb: [120.0 / 255.0; 3],
+            alpha: 0.3,
+        });
+        let render = |rotate: u32, watermark: Option<Arc<ScreenWatermark>>| {
+            let mut r = PageRenderer::new(Arc::new(pdf(rotate)), RenderConfig { watermark, ..RenderConfig::default() });
+            r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() })
+        };
+        let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        for rotate in [0, 90] {
+            let plain = render(rotate, None);
+            let (cx, cy) = (plain.width / 2, plain.height / 2);
+            // The annotation sits over the centre; a point 15 off it (inside the 60-point square) is the watermark's alone.
+            let (ax, ay) = if rotate == 0 { (cx, cy + 20) } else { (cx + 20, cy) };
+            assert_eq!(px(&plain, cx, cy), vec![0, 255, 0, 255], "rotate {rotate}: the annotation");
+            assert_eq!(px(&plain, ax, ay), vec![255, 255, 255, 255], "rotate {rotate}: nothing else");
+            let marked = render(rotate, Some(mark.clone()));
+            assert_eq!((marked.width, marked.height), (plain.width, plain.height));
+            assert_eq!(px(&marked, cx, cy), vec![0, 255, 0, 255], "rotate {rotate}: the annotation stays whole over the watermark");
+            let grey = px(&marked, ax, ay);
+            // 30 % of 120 over white.
+            assert!(grey[..3].iter().all(|&c| (c as i32 - 214).abs() <= 2) && grey[3] == 255, "rotate {rotate}: {grey:?}");
+        }
     }
 
     #[test]

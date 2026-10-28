@@ -673,8 +673,11 @@ pub struct PdfCraftApp {
     compare_taken: bool,
     /// The stamp waiting for its one click (never stored in the settings).
     pub(crate) armed_stamp: Option<host_stamp::ArmedStamp>,
-    /// The host's watermark text, drawn over each page on the screen only (`pdfcraft:watermark`).
+    /// The host's watermark text, drawn on each page's picture under its annotations, on the
+    /// screen only (`pdfcraft:watermark`).
     pub(crate) screen_watermark: Option<String>,
+    /// The outlines of [`Self::screen_watermark`], the renderer's form of it.
+    pub(crate) screen_watermark_outline: Option<std::sync::Arc<pdfcraft_render::ScreenWatermark>>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// A save waiting behind [`Dialog::OverwriteChanged`] (the web build has no files to check).
@@ -1046,6 +1049,7 @@ impl PdfCraftApp {
             annot_seq: 0,
             armed_stamp: None,
             screen_watermark: None,
+            screen_watermark_outline: None,
             close_request: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_overwrite: None,

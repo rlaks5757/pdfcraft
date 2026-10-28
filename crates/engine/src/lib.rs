@@ -202,7 +202,7 @@ fn record_link_scan() {
 }
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, ScreenWatermark, inspect};
 
 /// Who is editing, as the embedding page says (`pdfcraft:open` `actor` and `readOnly`).
 /// The default is no checking: anyone edits anything, as in a stand-alone PdfCraft.
@@ -5034,6 +5034,24 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
+    }
+
+    /// Set the screen watermark drawn under the document's annotations (`None` clears it).
+    /// Returns whether anything changed; callers must drop cached rasters for the document.
+    pub fn set_watermark(&mut self, id: DocId, watermark: Option<Arc<ScreenWatermark>>) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        if doc.config.watermark.as_ref().map(|w| &w.key) == watermark.as_ref().map(|w| &w.key) {
+            return false;
+        }
+        doc.config.watermark = watermark;
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.generation += 1;
+        true
+    }
+
+    /// The text of the screen watermark the document draws, if any.
+    pub fn watermark_key(&self, id: DocId) -> Option<&str> {
+        self.docs.iter().find(|d| d.id == id)?.config.watermark.as_ref().map(|w| w.key.as_str())
     }
 
     /// Set the document's reading colours (Acrobat's Replace Document Colors). Returns whether

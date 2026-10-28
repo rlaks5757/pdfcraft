@@ -161,6 +161,18 @@ impl PdfCraftApp {
         }
     }
 
+    /// Give every open document the watermark the host set (or none), redrawing those that differ.
+    /// A document opened after the message gets it here, in the frame it appears.
+    fn sync_watermark(&mut self) {
+        let key = self.screen_watermark_outline.as_ref().map(|w| w.key.as_str());
+        for index in 0..self.views.len() {
+            let id = self.views[index].id;
+            if self.session.watermark_key(id) != key && self.session.set_watermark(id, self.screen_watermark_outline.clone()) {
+                self.views[index].invalidate_content();
+            }
+        }
+    }
+
     /// Once a frame: take the host's requests, report placements, and notice when the user left.
     pub(crate) fn host_stamp_tick(&mut self, ctx: &egui::Context) {
         // First, how a click ended: a command that arrived since must not be taken for it.
@@ -203,7 +215,10 @@ impl PdfCraftApp {
                         Err(error) => self.emit_stamp(StampEvent::Failed { id, error }),
                     }
                 }
-                StampCommand::Watermark { text } => self.screen_watermark = crate::watermark::clean(text.as_deref()),
+                StampCommand::Watermark { text } => {
+                    self.screen_watermark = crate::watermark::clean(text.as_deref());
+                    self.screen_watermark_outline = self.screen_watermark.as_deref().and_then(crate::watermark::build);
+                }
                 StampCommand::Cancel { id } => {
                     if self.armed_stamp.as_ref().is_some_and(|a| a.id == id) {
                         self.disarm_stamp();
@@ -211,6 +226,7 @@ impl PdfCraftApp {
                 }
             }
         }
+        self.sync_watermark();
         let Some(armed) = self.armed_stamp.as_ref() else { return };
         // The click's edit may not have been applied yet: its outcome decides, not the tool.
         let placing = self.views.iter().any(|v| matches!(v.pending_edit, Some(pdfcraft_engine::Edit::AddCustomStamp { extra: Some(_), .. })));

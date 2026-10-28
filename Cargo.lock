@@ -4372,6 +4372,7 @@ dependencies = [
  "getrandom 0.4.3",
  "image",
  "js-sys",
+ "kurbo 0.13.1",
  "log",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

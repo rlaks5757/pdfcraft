@@ -2816,7 +2816,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
-    let screen_watermark = app.screen_watermark.clone();
     // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
     // windows, so a comment under the pointer would otherwise float over the dialog.
     let page_covered = app.dialog.is_some()
@@ -3074,10 +3073,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
 
             // Comments: tools, selection, moving and resizing come before text selection.
-            if let Some(text) = screen_watermark.as_deref() {
-                // Over the page's picture, under the comment overlays; the width as shown (a turned view swaps the sides).
-                crate::watermark::paint(painter, r, if xf.rot % 180 == 0 { xf.pw } else { xf.ph }, text);
-            }
             let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
             if let QuickTool::Measure(measure_tool) = tool {
                 crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);

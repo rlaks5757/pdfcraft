@@ -11,7 +11,7 @@ use crate::interpret::state::{TextStateFont, handle_gs};
 use crate::interpret::text::TextRenderingMode;
 use crate::pattern::{Pattern, ShadingPattern};
 use crate::shading::Shading;
-use crate::util::{OptionLog, RectExt};
+use crate::util::{OptionLog, RectExt, TransformExt};
 use crate::x_object::{
     FormXObject, ImageXObject, XObject, draw_form_xobject, draw_image_xobject, draw_xobject,
 };
@@ -44,6 +44,22 @@ pub type CMapResolverFn =
     Arc<dyn Fn(hayro_cmap::CMapName<'_>) -> Option<&'static [u8]> + Send + Sync>;
 /// A callback function for resolving warnings during interpretation.
 pub type WarningSinkFn = Arc<dyn Fn(InterpreterWarning) + Send + Sync>;
+
+/// PdfCraft patch (watermark): a screen watermark drawn into the page picture, after the page's
+/// own contents and before its annotations, as WebViewer's `setWatermark` puts it under the
+/// annotation layer. Display only; the document never changes.
+#[derive(Clone, Debug)]
+pub struct ScreenWatermark {
+    /// Identifies the text, so a document can tell whether it already draws this watermark.
+    pub key: String,
+    /// The outlines of the text, in points, y down, around the page centre (the origin), upright
+    /// as the page is shown. The page's own diagonal turns them, as in WebViewer.
+    pub outline: BezPath,
+    /// Fill colour, each channel 0..1.
+    pub rgb: [f32; 3],
+    /// Fill opacity, 0..1.
+    pub alpha: f32,
+}
 
 #[derive(Clone)]
 /// Settings that should be applied during the interpretation process.
@@ -112,6 +128,8 @@ pub struct InterpreterSettings {
     /// replied to, `/RT` absent or `/R`; a `/RT /Group` annotation is part of its parent, not a
     /// reply), so a reply is only in the comments list and not drawn over its parent.
     pub hide_replies: bool,
+    /// PdfCraft patch (watermark): drawn between the page's contents and its annotations.
+    pub watermark: Option<Arc<ScreenWatermark>>,
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
@@ -144,6 +162,7 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             hide_replies: false,
+            watermark: None,
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
@@ -176,6 +195,10 @@ pub fn interpret_page<'a>(
     // are decoded whole. Streamed content is only ever held a window at a time.
     crate::context::charge_content(content.materialized_len());
     interpret_content(&mut content, resources, context, device);
+
+    if let Some(watermark) = context.settings.watermark.clone() {
+        draw_watermark(page, &watermark, context, device);
+    }
 
     if context.settings.render_annotations
         && let Some(annot_arr) = page.raw().get::<Array<'_>>(ANNOTS)
@@ -294,6 +317,38 @@ pub fn interpret_page<'a>(
         }
         device.end_annotations();
     }
+}
+
+/// PdfCraft patch (watermark): the text along the page's own diagonal (`-atan(height / width)`
+/// of the page as shown) about its centre, filled once with the watermark's colour.
+fn draw_watermark<'a>(
+    page: &Page<'a>,
+    watermark: &ScreenWatermark,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    let (width, height) = page.render_dimensions();
+    let (width, height) = (width as f64, height as f64);
+    if !(width > 0.0 && height > 0.0) || watermark.outline.elements().is_empty() {
+        return;
+    }
+    // The text's frame (points, y down, upright as shown) to the page's user space.
+    let view_to_user = page.initial_transform(true).to_kurbo().inverse();
+    let place = view_to_user
+        * Affine::translate((width / 2.0, height / 2.0))
+        * Affine::rotate(-(height / width).atan());
+    context.save_state();
+    context.pre_concat_affine(place);
+    let state = &mut context.get_mut().graphics_state;
+    state.none_stroke_cs = ColorSpace::device_rgb();
+    state.non_stroke_color = smallvec![watermark.rgb[0], watermark.rgb[1], watermark.rgb[2]];
+    state.non_stroke_pattern = None;
+    state.non_stroke_alpha = watermark.alpha.clamp(0.0, 1.0);
+    state.soft_mask = None;
+    state.blend_mode = BlendMode::Normal;
+    *context.path_mut() = watermark.outline.clone();
+    fill_path(context, device, FillRule::NonZero);
+    context.restore_state(device);
 }
 
 /// PdfCraft patch: the normal appearance of a Highlight annotation that has none (ISO 32000-2
