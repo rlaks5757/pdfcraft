@@ -141,19 +141,23 @@ fn ink(px: &[u8]) -> f32 {
 
 /// One overlay page (opaque RGBA, `width` x `height`) from two renderings placed at the top-left
 /// corner (page origins align, nothing is stretched): ink only in `current` red, only in `chosen`
-/// blue, in both gray, each as dark as the ink was.
-pub fn overlay_page(current: (&[u8], u32, u32), chosen: (&[u8], u32, u32), width: u32, height: u32) -> Vec<u8> {
-    let mut out = vec![255u8; width as usize * height as usize * 4];
-    let at = |img: (&[u8], u32, u32), x: u32, y: u32| -> f32 {
-        if x >= img.1 || y >= img.2 {
-            return 0.0;
+/// blue, in both gray, each as dark as the ink was. `out` is reused from page to page.
+pub fn overlay_page_into(out: &mut Vec<u8>, current: (&[u8], u32, u32), chosen: (&[u8], u32, u32), width: u32, height: u32) {
+    out.clear();
+    out.resize(width as usize * height as usize * 4, 255);
+    fn row<'a>(img: (&'a [u8], u32, u32), y: u32) -> &'a [u8] {
+        if y >= img.2 {
+            return &[];
         }
-        let i = (y as usize * img.1 as usize + x as usize) * 4;
-        img.0.get(i..i + 4).map_or(0.0, ink)
-    };
+        let start = y as usize * img.1 as usize * 4;
+        img.0.get(start..start + img.1 as usize * 4).unwrap_or(&[])
+    }
     for y in 0..height {
-        for x in 0..width {
-            let (a, b) = (at(current, x, y), at(chosen, x, y));
+        let (ra, rb) = (row(current, y), row(chosen, y));
+        let line = &mut out[y as usize * width as usize * 4..(y as usize + 1) * width as usize * 4];
+        for x in 0..width as usize {
+            let ink_at = |r: &[u8]| r.get(x * 4..x * 4 + 4).map_or(0.0, ink);
+            let (a, b) = (ink_at(ra), ink_at(rb));
             if a == 0.0 && b == 0.0 {
                 continue;
             }
@@ -162,12 +166,17 @@ pub fn overlay_page(current: (&[u8], u32, u32), chosen: (&[u8], u32, u32), width
                 (true, false) => (OVERLAY_CURRENT, a),
                 _ => (OVERLAY_CHOSEN, b),
             };
-            let o = (y as usize * width as usize + x as usize) * 4;
             for (c, v) in rgb.iter().enumerate() {
-                out[o + c] = (255.0 - (255.0 - f32::from(*v)) * k).round() as u8;
+                line[x * 4 + c] = (255.0 - (255.0 - f32::from(*v)) * k).round() as u8;
             }
         }
     }
+}
+
+/// [`overlay_page_into`] into a new buffer.
+pub fn overlay_page(current: (&[u8], u32, u32), chosen: (&[u8], u32, u32), width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    overlay_page_into(&mut out, current, chosen, width, height);
     out
 }
 
@@ -181,11 +190,64 @@ pub struct Overlay {
 /// Longest side, in pixels, an overlay page may have.
 const OVERLAY_MAX_SIDE: f32 = 3000.0;
 
+/// An overlay being built one page pair at a time, so a window can keep drawing (and the build
+/// can be dropped) between pages. It keeps the rendered files' bytes but not the session.
+pub struct OverlayJob {
+    ra: pdfcraft_render::PageRenderer,
+    rb: pdfcraft_render::PageRenderer,
+    scale: f32,
+    next: usize,
+    total: usize,
+    current_pages: usize,
+    chosen_pages: usize,
+    /// The finished pages as PNG files; each page's pixels are gone once it is encoded.
+    pages: Vec<(String, Vec<u8>)>,
+    /// The composite's pixels, reused for every page.
+    canvas: Vec<u8>,
+}
+
+impl OverlayJob {
+    /// (pages done, pages in all).
+    pub fn progress(&self) -> (usize, usize) {
+        (self.next, self.total)
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.next >= self.total
+    }
+
+    /// Compose the next pair of pages.
+    pub fn step(&mut self) -> Result<(), EditError> {
+        if self.is_done() {
+            return Ok(());
+        }
+        let req = pdfcraft_render::RenderRequest { page: self.next, scale: self.scale, ..Default::default() };
+        let (x, y) = (self.ra.render(req), self.rb.render(req));
+        if let Some(e) = x.error.as_ref().or(y.error.as_ref()) {
+            return Err(EditError::Invalid(e.to_string()));
+        }
+        let (w, h) = (x.width.max(y.width), x.height.max(y.height));
+        overlay_page_into(&mut self.canvas, (&x.rgba, x.width, x.height), (&y.rgba, y.width, y.height), w, h);
+        let png = crate::export::encode_png(w, h, &self.canvas).map_err(EditError::Invalid)?;
+        self.pages.push((format!("overlay-{}.png", self.next + 1), png));
+        self.next += 1;
+        Ok(())
+    }
+
+    /// The pages as one PDF that keeps the pages' size in points. The page files are let go.
+    pub fn finish(mut self, session: &Session) -> Result<Overlay, EditError> {
+        let pages = std::mem::take(&mut self.pages);
+        self.canvas = Vec::new();
+        let pdf = session.create_from_images_with_resolution(&pages, ImageResolution::Dpi(f64::from(72.0 * self.scale)))?;
+        Ok(Overlay { pdf, current_pages: self.current_pages, chosen_pages: self.chosen_pages })
+    }
+}
+
 impl Session {
-    /// Visual compare, overlaid: page n of `current` against page n of `chosen` (the shorter
-    /// file's pages), drawn at `dpi` (less when a page would pass [`OVERLAY_MAX_SIDE`] pixels)
-    /// into one PDF whose pages keep the pages' size in points.
-    pub fn compare_overlay(&self, current: DocId, chosen: DocId, dpi: f32) -> Result<Overlay, EditError> {
+    /// Start a visual compare, overlaid: page n of `current` against page n of `chosen` (the
+    /// shorter file's pages), drawn at `dpi` (less when a page would pass [`OVERLAY_MAX_SIDE`]
+    /// pixels).
+    pub fn compare_overlay_job(&self, current: DocId, chosen: DocId, dpi: f32) -> Result<OverlayJob, EditError> {
         let a = self.get(current).ok_or(EditError::NoDocument)?;
         let b = self.get(chosen).ok_or(EditError::NoDocument)?;
         let n = a.info.pages.len().min(b.info.pages.len());
@@ -198,24 +260,29 @@ impl Session {
                 pdfcraft_render::RenderConfig { password: d.password.as_deref().map(Arc::from), ..Default::default() },
             )
         };
-        let (mut ra, mut rb) = (renderer(a), renderer(b));
         // One scale for every page, so one dpi sizes them all back to points.
         let longest = a.info.pages.iter().take(n).chain(b.info.pages.iter().take(n)).map(|p| p.width.max(p.height)).fold(1.0f32, f32::max);
         let scale = (dpi.clamp(18.0, 150.0) / 72.0).min(OVERLAY_MAX_SIDE / longest).max(0.05);
-        let mut pages = Vec::with_capacity(n);
-        for page in 0..n {
-            let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
-            let (x, y) = (ra.render(req), rb.render(req));
-            if let Some(e) = x.error.as_ref().or(y.error.as_ref()) {
-                return Err(EditError::Invalid(e.to_string()));
-            }
-            let (w, h) = (x.width.max(y.width), x.height.max(y.height));
-            let rgba = overlay_page((&x.rgba, x.width, x.height), (&y.rgba, y.width, y.height), w, h);
-            let png = crate::export::encode_png(w, h, &rgba).map_err(EditError::Invalid)?;
-            pages.push((format!("overlay-{}.png", page + 1), png));
+        Ok(OverlayJob {
+            ra: renderer(a),
+            rb: renderer(b),
+            scale,
+            next: 0,
+            total: n,
+            current_pages: a.info.pages.len(),
+            chosen_pages: b.info.pages.len(),
+            pages: Vec::with_capacity(n),
+            canvas: Vec::new(),
+        })
+    }
+
+    /// The whole overlay at once (see [`Session::compare_overlay_job`] to build it in steps).
+    pub fn compare_overlay(&self, current: DocId, chosen: DocId, dpi: f32) -> Result<Overlay, EditError> {
+        let mut job = self.compare_overlay_job(current, chosen, dpi)?;
+        while !job.is_done() {
+            job.step()?;
         }
-        let pdf = self.create_from_images_with_resolution(&pages, ImageResolution::Dpi(f64::from(72.0 * scale)))?;
-        Ok(Overlay { pdf, current_pages: a.info.pages.len(), chosen_pages: b.info.pages.len() })
+        job.finish(self)
     }
 }
 

@@ -362,7 +362,7 @@ mod tests {
         h.state_mut().show_overlay(true);
         h.run_steps(5);
         let s = h.state().compare.as_ref().unwrap();
-        assert!(s.overlay_shown && !s.overlay_pending && !s.overlay_failed);
+        assert!(s.overlay_shown && s.overlay_job.is_none() && !s.overlay_failed);
         let (doc, notice) = s.overlay.clone().expect("the overlay was built");
         assert_eq!(notice, None, "equal page counts need no note");
         assert_eq!(h.state().views.len(), 3, "old, new and the overlay");

@@ -28,8 +28,8 @@ pub struct CompareState {
     pub ppm: bool,
     /// PPM: the overlay is shown instead of the two halves.
     pub overlay_shown: bool,
-    /// PPM: the overlay was asked for and is built on the next frame, after the status showed.
-    pub overlay_pending: bool,
+    /// PPM: the overlay being built, one page pair a frame (dropping it cancels the build).
+    pub overlay_job: Option<pdfcraft_engine::compare::OverlayJob>,
     /// PPM: the overlay document (a background tab) and the note about unequal page counts.
     pub overlay: Option<(DocId, Option<String>)>,
     /// PPM: the overlay couldn't be built.
@@ -201,6 +201,19 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, state: &Option<CompareState>,
     action
 }
 
+/// One row of the PPM change list: page, kind and the two sides' words, one line each.
+const PPM_ROW_H: f32 = 76.0;
+/// The most changes the list shows.
+const PPM_ROWS_MAX: usize = 2000;
+
+/// The rows of equal height `row_h` that touch the clip rect between `clip_min` and `clip_max`,
+/// for a list whose first row starts at `top`.
+fn visible_rows(top: f32, clip_min: f32, clip_max: f32, row_h: f32, n: usize) -> std::ops::Range<usize> {
+    let first = (((clip_min - top) / row_h).floor().max(0.0) as usize).min(n);
+    let end = (((clip_max - top) / row_h).ceil().max(0.0) as usize).clamp(first, n);
+    first..end
+}
+
 /// The PPM panel: the viewer's change list, grouped by page. What only the current file has
 /// (the viewer's "base") is a deletion, what only the chosen file has an insertion.
 fn ppm_panel(ui: &mut egui::Ui, t: &Tokens, s: &CompareState) -> Option<PanelAction> {
@@ -213,47 +226,54 @@ fn ppm_panel(ui: &mut egui::Ui, t: &Tokens, s: &CompareState) -> Option<PanelAct
     }
     ui.separator();
     let words = |text: &str| text.split_whitespace().count().max(1);
-    let mut page = None;
-    for (i, ch) in c.changes.iter().enumerate().take(2000) {
-        if page != Some(ch.new.page) {
-            page = Some(ch.new.page);
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(crate::i18n::fmt(tl_ctx!(ppm::CTX, "Page {n}"), &[("n", &(ch.new.page + 1).to_string())]))
-                    .small()
-                    .color(t.text_muted),
-            );
+    // Every row is as tall as the others (long words are cut to one line), so only the rows in
+    // view are laid out: the rows above and below are plain space.
+    let n = c.changes.len().min(PPM_ROWS_MAX);
+    let width = ui.available_width();
+    let clip = ui.clip_rect();
+    let rows = visible_rows(ui.cursor().min.y, clip.min.y, clip.max.y, PPM_ROW_H, n);
+    ui.add_space(rows.start as f32 * PPM_ROW_H);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    for i in rows.clone() {
+        let ch = &c.changes[i];
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, PPM_ROW_H), egui::Sense::click());
+        let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(4.0)));
+        if s.selected == Some(i) {
+            ui.painter().rect_filled(rect, 4.0, t.selected);
         }
         let (kind, bar) = match ch.kind {
             Kind::Inserted => (tl_ctx!(ppm::CTX, "Delete"), ppm::BASE),
             Kind::Deleted => (tl_ctx!(ppm::CTX, "Insert"), ppm::TARGET),
             Kind::Replaced => (tl_ctx!(ppm::CTX, "Edit"), t.border),
         };
-        let fill = if s.selected == Some(i) { t.selected } else { Color32::TRANSPARENT };
-        let item = egui::Frame::new().fill(fill).corner_radius(4).inner_margin(4).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let (strip, _) = ui.allocate_exact_size(egui::vec2(4.0, 34.0), egui::Sense::hover());
-                ui.painter().rect_filled(strip, egui::CornerRadius::same(2), bar);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(tl_ctx!(ppm::CTX, "Change")).small().color(t.text_muted));
-                    ui.label(egui::RichText::new(kind).strong());
-                    // "Old" is the current file's side and "New" the chosen file's, as in the viewer.
-                    if ch.kind != Kind::Deleted {
-                        ui.label(egui::RichText::new(format!("{} -{}", tl_ctx!(ppm::CTX, "Old"), words(&ch.new.text))).small().color(t.text_muted));
-                        ui.label(&ch.new.text);
-                    }
-                    if ch.kind != Kind::Inserted {
-                        ui.label(egui::RichText::new(format!("{} +{}", tl_ctx!(ppm::CTX, "New"), words(&ch.old.text))).small().color(t.text_muted));
-                        ui.label(&ch.old.text);
-                    }
-                });
+        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min + egui::vec2(4.0, 4.0), egui::vec2(4.0, PPM_ROW_H - 8.0)), 2.0, bar);
+        row.horizontal(|ui| {
+            ui.add_space(10.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                // The page heads its first change.
+                let first = i == 0 || c.changes[i - 1].new.page != ch.new.page;
+                let head = if first {
+                    crate::i18n::fmt(tl_ctx!(ppm::CTX, "Page {n}"), &[("n", &(ch.new.page + 1).to_string())])
+                } else {
+                    String::new()
+                };
+                ui.add(egui::Label::new(egui::RichText::new(head).small().color(t.text_muted)).truncate());
+                ui.add(egui::Label::new(egui::RichText::new(format!("{}  {kind}", tl_ctx!(ppm::CTX, "Change"))).strong()).truncate());
+                // "Old" is the current file's side and "New" the chosen file's, as in the viewer.
+                let side = |ui: &mut egui::Ui, show: bool, mark: &str, label: &str, text: &str| {
+                    let line = if show { format!("{label} {mark}{}: {text}", words(text)) } else { String::new() };
+                    ui.add(egui::Label::new(egui::RichText::new(line).small()).truncate());
+                };
+                side(ui, ch.kind != Kind::Deleted, "-", tl_ctx!(ppm::CTX, "Old"), &ch.new.text);
+                side(ui, ch.kind != Kind::Inserted, "+", tl_ctx!(ppm::CTX, "New"), &ch.old.text);
             });
         });
-        if ui.interact(item.response.rect, ui.id().with(("compare-change", i)), egui::Sense::click()).clicked() {
+        if resp.clicked() {
             action = Some(PanelAction::Select(i));
         }
     }
+    ui.add_space(n.saturating_sub(rows.end) as f32 * PPM_ROW_H);
     action
 }
 
@@ -320,7 +340,7 @@ impl PdfCraftApp {
                     prev_scroll: [egui::Vec2::ZERO; 2],
                     ppm,
                     overlay_shown: false,
-                    overlay_pending: false,
+                    overlay_job: None,
                     overlay: None,
                     overlay_failed: false,
                 });
@@ -400,26 +420,59 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// PPM: show the overlay (built on the next frame the first time) or the two halves again.
+    /// PPM: show the overlay (its build starts the first time) or the two halves again, which
+    /// also cancels a build that is still going.
     pub(crate) fn show_overlay(&mut self, on: bool) {
         let Some(c) = self.compare.as_mut() else { return };
         c.overlay_shown = on;
-        if on && c.overlay.is_none() && !c.overlay_failed {
-            c.overlay_pending = true;
+        if !on {
+            c.overlay_job = None;
+            return;
+        }
+        if c.overlay.is_some() || c.overlay_failed || c.overlay_job.is_some() {
+            return;
+        }
+        match self.session.compare_overlay_job(c.new, c.old, ppm::OVERLAY_DPI) {
+            Ok(job) => c.overlay_job = Some(job),
+            Err(e) => {
+                c.overlay_failed = true;
+                self.notify_error(e);
+            }
+        }
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
+    }
+
+    /// PPM: one more page pair of the overlay a frame, so the window keeps drawing and the
+    /// build can be cancelled. The last step makes the PDF and opens it.
+    fn step_overlay(&mut self) {
+        let Some(c) = self.compare.as_mut() else { return };
+        let Some(job) = c.overlay_job.as_mut() else { return };
+        if let Err(e) = job.step() {
+            c.overlay_job = None;
+            c.overlay_failed = true;
+            self.notify_error(e);
+            return;
+        }
+        if !job.is_done() {
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint();
             }
+            return;
+        }
+        if let Some(job) = c.overlay_job.take() {
+            self.finish_overlay(job);
         }
     }
 
     /// PPM: the pages of both files laid over each other (the current file red, the chosen blue,
     /// the same gray) as a PDF in a background tab, built once. The current file is the viewer's
     /// base, so it is the red one.
-    fn build_overlay(&mut self) {
-        let Some(c) = self.compare.as_mut() else { return };
-        c.overlay_pending = false;
-        let (old, new) = (c.old, c.new);
-        let built = self.session.compare_overlay(new, old, ppm::OVERLAY_DPI).map_err(|e| e.to_string());
+    fn finish_overlay(&mut self, job: pdfcraft_engine::compare::OverlayJob) {
+        let Some(c) = self.compare.as_ref() else { return };
+        let new = c.new;
+        let built = job.finish(&self.session).map_err(|e| e.to_string());
         let outcome = built.and_then(|o| {
             // Looked at only: read-only and never synced, like the files it was made from.
             let own = self.session.get(new).map(|d| d.ownership().clone());
@@ -427,8 +480,11 @@ impl PdfCraftApp {
                 self.session.set_open_ownership(pdfcraft_engine::Ownership { read_only: true, annot_sync: false, hide_comments_panel: false, ..own });
             }
             let before = self.views.len();
-            let opened = self.open_bytes_with_focus("compare.pdf", None, o.pdf.to_vec(), false);
-            self.session.set_open_ownership(if self.host_lock { crate::host_lock::viewer_ownership() } else { Default::default() });
+            let previous = self.session.open_ownership().clone();
+            // The PDF is the only holder of its bytes here, so they move into the tab without a copy.
+            let bytes = std::sync::Arc::try_unwrap(o.pdf).unwrap_or_else(|shared| (*shared).clone());
+            let opened = self.open_bytes_with_focus("compare.pdf", None, bytes, false);
+            self.session.set_open_ownership(previous);
             opened?;
             if self.views.len() != before + 1 {
                 return Err("couldn't open the overlay".to_string());
@@ -460,7 +516,7 @@ impl PdfCraftApp {
 fn ppm_strip(ui: &mut egui::Ui, rect: egui::Rect, t: &Tokens, c: &CompareState) -> Option<bool> {
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 4.0))));
     let mut ask = None;
-    let busy = c.overlay_shown && c.overlay_pending;
+    let progress = c.overlay_job.as_ref().map(|j| j.progress());
     ui.horizontal_wrapped(|ui| {
         if widgets::pill_button(ui, tl!("Side by side"), !c.overlay_shown).clicked() && c.overlay_shown {
             ask = Some(false);
@@ -468,8 +524,15 @@ fn ppm_strip(ui: &mut egui::Ui, rect: egui::Rect, t: &Tokens, c: &CompareState) 
         if widgets::pill_button(ui, tl_ctx!(ppm::CTX, "Overlay"), c.overlay_shown).clicked() && !c.overlay_shown {
             ask = Some(true);
         }
-        if busy {
-            ui.label(egui::RichText::new(tl_ctx!(ppm::CTX, "Building the overlay")).small().color(t.text_muted));
+        if let Some((done, total)) = progress {
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt(
+                    tl_ctx!(ppm::CTX, "Building the overlay ({done}/{total})"),
+                    &[("done", &done.to_string()), ("total", &total.to_string())],
+                ))
+                .small()
+                .color(t.text_muted),
+            );
         } else if c.overlay_shown {
             for (colour, label) in [
                 (ppm::rgb(pdfcraft_engine::compare::OVERLAY_CURRENT), tl_ctx!(ppm::CTX, "Lines only in the current file")),
@@ -516,10 +579,8 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
     let mut rect = ui.available_rect_before_wrap();
     let ppm_on = app.compare.as_ref().is_some_and(|c| c.ppm);
     if ppm_on {
-        // The overlay asked for on the last frame is built now, after its status was shown.
-        if app.compare.as_ref().is_some_and(|c| c.overlay_pending) {
-            app.build_overlay();
-        }
+        // A page pair of the overlay a frame; the status below shows how far it got.
+        app.step_overlay();
         let strip = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), ppm::STRIP_H));
         ui.painter().rect_filled(strip, 0.0, t.panel);
         if let Some(ask) = app.compare.as_ref().and_then(|c| ppm_strip(ui, strip, &t, c)) {
@@ -612,5 +673,22 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
             ui.ctx().request_repaint();
         }
         c.prev_scroll = offsets;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_rows;
+
+    #[test]
+    fn only_the_rows_in_view_are_laid_out() {
+        // 2000 rows of 10 starting at y = 100; a clip of 300..360 shows rows 20..26.
+        assert_eq!(visible_rows(100.0, 300.0, 360.0, 10.0, 2000), 20..26);
+        // The list scrolled so its top is above the clip.
+        assert_eq!(visible_rows(-500.0, 0.0, 40.0, 10.0, 2000), 50..54);
+        // Before the first row, and past the last.
+        assert_eq!(visible_rows(100.0, 0.0, 120.0, 10.0, 2000), 0..2);
+        assert_eq!(visible_rows(0.0, 100_000.0, 100_100.0, 10.0, 5), 5..5);
+        assert_eq!(visible_rows(0.0, 0.0, 100.0, 10.0, 0), 0..0);
     }
 }
