@@ -507,7 +507,7 @@ fn export_flattening_counts_repeated_references_once_and_limits_the_work() {
     let mut repeated = build_with("5 0 R ".repeat(50_000));
     assert_eq!(flatten_export(&mut repeated, &[0]).unwrap(), 1, "one appearance, drawn once");
     let mut many = build_with(
-        (0..30_000).map(|i| format!("<< /Type /Annot /Subtype /Link /Rect [{i} 0 {} 10] >> ", i + 5)).collect::<String>(),
+        "<< /Subtype /Link /Rect [0 0 5 5] >> ".repeat(500_001),
     );
     let before = write_incremental(&many, &SaveOptions::default()).unwrap();
     let err = flatten_export(&mut many, &[0]).unwrap_err().to_string();

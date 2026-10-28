@@ -258,6 +258,7 @@ impl<'a> Lexer<'a> {
 
     fn dict_body(&mut self, depth: usize) -> Result<Dict, CosError> {
         let mut d = Dict::new();
+        let mut index = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -273,11 +274,11 @@ impl<'a> Lexer<'a> {
                     // A key directly followed by `>>` has no value: treat as null. (A following
                     // `/` is a name *value*, so it cannot signal a missing value.)
                     if self.peek() == Some(b'>') && self.data.get(self.pos + 1) == Some(&b'>') {
-                        d.set(key, Object::Null);
+                        d.set_indexed(&mut index, key, Object::Null);
                         continue;
                     }
                     let value = self.object_depth(depth + 1)?;
-                    d.set(key, value);
+                    d.set_indexed(&mut index, key, value);
                 }
                 Some(_) => {
                     // Tolerate garbage between entries (seen in damaged files): skip a token.

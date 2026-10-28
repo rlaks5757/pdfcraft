@@ -23,16 +23,18 @@ use crate::{EditError, check, n, page_list, place_tagged};
 const HIDDEN: i64 = 2;
 const NO_VIEW: i64 = 32;
 /// Most annotations (references de-duplicated) an export flattens in one document, and so most
-/// appearances and link borders it draws. A page's resource dictionary is a list, so the work
-/// would otherwise grow with the square of a hostile file's annotation count.
-const EXPORT_MAX_ANNOTS: usize = 20_000;
+/// appearances and link borders it draws. The work is linear in the count (500,000 distinct
+/// annotations took about 17 s and 1.2 GB), so this only stops a file built to exhaust memory.
+const EXPORT_MAX_ANNOTS: usize = 500_000;
+/// Most XObject names, summed over the pages flattened, that are read from the pages' resources.
+const EXPORT_MAX_RESOURCES: usize = 2_000_000;
 /// Most entries of a link border's dash array that are drawn; a longer one is drawn solid (and
 /// is not read).
 const MAX_DASH: usize = 16;
 
+/// A rectangle, box or matrix: at most six numbers (a longer array is not read; see `short_nums`).
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
-    let o = doc.resolve(o?);
-    o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
+    short_nums(doc, o, 6)
 }
 
 /// `nums` for an array of at most `max` entries; a longer one (a hostile file can share one huge
@@ -251,6 +253,7 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
         }
     }
     let mut drawn = 0;
+    let mut copied = 0usize;
     let mut removed_widgets: HashSet<ObjRef> = HashSet::new();
     for &i in pages {
         let page = all[i].clone();
@@ -268,6 +271,13 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             .and_then(|r| r.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()))
             .map(|x| x.iter().map(|(k, _)| k.clone()).collect())
             .unwrap_or_default();
+        // Pages can share one huge resource dictionary, which is copied for every page drawn on.
+        copied += existing_xo.len();
+        if matches!(which, Which::Export) && copied > EXPORT_MAX_RESOURCES {
+            return Err(EditError::Invalid(format!(
+                "too many page resources to flatten (more than {EXPORT_MAX_RESOURCES} names copied; the document may be partly flattened)"
+            )));
+        }
         let mut gone: HashSet<ObjRef> = HashSet::new();
         let mut gone_inline: HashSet<usize> = HashSet::new();
         // Selected, but nothing was drawn for it: it stays, pop-up and reply handling included.
@@ -388,16 +398,20 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             // The page's own resources, with the appearances as XObjects.
             let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
             let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            // The names are new (`xobject_name` skipped the page's own), so they are appended.
             for (name, ap) in xobjects {
-                xo.set(name.into_bytes(), Object::Ref(ap));
+                xo.insert_new(name.into_bytes(), Object::Ref(ap));
             }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
+            // The page as it is now (only its resources changed), without rebuilding the whole page
+            // tree for every page.
+            let mut updated = page.clone();
+            updated.dict.set(b"Resources".to_vec(), Object::Dict(res.clone()));
             doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
-            let page = page_list(doc)[i].clone();
-            place_tagged(doc, &page, "Flattened", content.into_bytes(), false)?;
+            place_tagged(doc, &updated, "Flattened", content.into_bytes(), false)?;
         }
-        let page_now = page_list(doc)[i].clone();
-        match page_now.dict.get(b"Annots").and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
+        let annots_now = doc.get(page.obj).as_dict().and_then(|d| d.get(b"Annots").cloned());
+        match annots_now.as_ref().and_then(|a| a.as_ref()).filter(|r| doc.get(*r).as_array().is_some()) {
             Some(r) => doc.set(r, Object::Array(kept)),
             None => doc.update_dict(page.obj, |d| {
                 if kept.is_empty() {
@@ -432,22 +446,33 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
     let mut af_dict = doc.resolve(&af).as_dict().cloned().unwrap_or_default();
     let fields = af_dict.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     // Returns whether the node survives.
-    fn keep(doc: &mut Document, r: ObjRef, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>, depth: usize) -> bool {
+    // `memo` judges a node once: a hostile field tree can point at the same kids twice at every
+    // level, which would otherwise be walked 2^depth times. A node being judged counts as kept, so a cycle ends.
+    fn keep(doc: &mut Document, r: ObjRef, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>, depth: usize, memo: &mut HashMap<ObjRef, bool>) -> bool {
         if widgets.contains(&r) || depth > 64 {
             return depth > 64;
         }
-        let Some(d) = doc.get(r).as_dict().cloned() else { return true };
-        let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) else {
-            return on_page.is_none_or(|p| p.contains(&r));
-        };
-        let survivors: Vec<Object> =
-            kids.iter().filter(|k| k.as_ref().is_none_or(|kr| keep(doc, kr, widgets, on_page, depth + 1))).cloned().collect();
-        if survivors.len() != kids.len() {
-            let _ = doc.update_dict(r, |d| d.set(b"Kids".to_vec(), Object::Array(survivors.clone())));
+        if let Some(&kept) = memo.get(&r) {
+            return kept;
         }
-        !survivors.is_empty()
+        memo.insert(r, true);
+        let Some(d) = doc.get(r).as_dict().cloned() else { return true };
+        let kept = match d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
+            None => on_page.is_none_or(|p| p.contains(&r)),
+            Some(kids) => {
+                let survivors: Vec<Object> =
+                    kids.iter().filter(|k| k.as_ref().is_none_or(|kr| keep(doc, kr, widgets, on_page, depth + 1, memo))).cloned().collect();
+                if survivors.len() != kids.len() {
+                    let _ = doc.update_dict(r, |d| d.set(b"Kids".to_vec(), Object::Array(survivors.clone())));
+                }
+                !survivors.is_empty()
+            }
+        };
+        memo.insert(r, kept);
+        kept
     }
-    let survivors: Vec<Object> = fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, 0))).cloned().collect();
+    let mut memo = HashMap::new();
+    let survivors: Vec<Object> = fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, 0, &mut memo))).cloned().collect();
     if survivors.len() == fields.len() && widgets.is_empty() {
         return Ok(()); // only looked for fields on no page, and there were none
     }

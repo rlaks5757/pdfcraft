@@ -105,6 +105,28 @@ impl Dict {
         }
     }
 
+    /// `set` for a dictionary read entry by entry: past 32 entries a key index is kept in `index`
+    /// (start it as `None`), so a dictionary with many thousands of keys is read in linear time.
+    pub(crate) fn set_indexed(&mut self, index: &mut Option<std::collections::HashMap<Name, usize>>, key: Name, value: Object) {
+        if index.is_none() && self.entries.len() >= 32 {
+            *index = Some(self.entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).collect());
+        }
+        let Some(index) = index else { return self.set(key, value) };
+        match index.get(&key) {
+            Some(&i) => self.entries[i].1 = value,
+            None => {
+                index.insert(key.clone(), self.entries.len());
+                self.entries.push((key, value));
+            }
+        }
+    }
+
+    /// Append a key the caller knows is not in the dictionary (`set` scans every entry to find out,
+    /// which adds up when thousands of keys are added to a large dictionary).
+    pub fn insert_new(&mut self, key: impl Into<Name>, value: impl Into<Object>) {
+        self.entries.push((key.into(), value.into()));
+    }
+
     pub fn remove(&mut self, key: &[u8]) -> Option<Object> {
         let i = self.entries.iter().position(|(k, _)| k == key)?;
         Some(self.entries.remove(i).1)
@@ -142,8 +164,9 @@ impl Dict {
 impl FromIterator<(Name, Object)> for Dict {
     fn from_iter<T: IntoIterator<Item = (Name, Object)>>(iter: T) -> Self {
         let mut d = Dict::new();
+        let mut index = None;
         for (k, v) in iter {
-            d.set(k, v);
+            d.set_indexed(&mut index, k, v);
         }
         d
     }
