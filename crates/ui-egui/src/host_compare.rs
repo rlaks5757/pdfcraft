@@ -379,4 +379,36 @@ mod tests {
         h.run_steps(3);
         h.get_by_label("Side by side");
     }
+
+    #[test]
+    fn ppm_overlay_builds_a_page_a_frame_and_going_back_cancels_it() {
+        let mut h = ppm_compared(1400.0);
+        h.state_mut().show_overlay(true);
+        let job = h.state().compare.as_ref().unwrap().overlay_job.as_ref().map(|j| j.progress());
+        assert_eq!(job, Some((0, 1)), "started, nothing composed yet");
+        h.state_mut().show_overlay(false);
+        h.run_steps(4);
+        let s = h.state().compare.as_ref().unwrap();
+        assert!(s.overlay_job.is_none() && s.overlay.is_none() && !s.overlay_shown, "cancelled");
+        assert_eq!(h.state().views.len(), 2, "no overlay tab");
+    }
+
+    #[test]
+    fn the_screen_watermark_covers_both_compared_files_and_the_overlay_but_no_file() {
+        use crate::host_stamp::StampCommand;
+        let mut h = ppm_compared(1400.0);
+        let saved = |h: &Harness<'static, PdfCraftApp>| -> Vec<std::sync::Arc<Vec<u8>>> {
+            h.state().views.iter().map(|v| h.state().session.save_bytes(v.id).unwrap()).collect()
+        };
+        let before = saved(&h);
+        h.state().stamp_inbox.lock().unwrap().push(StampCommand::Watermark { text: Some("CONFIDENTIAL".into()) });
+        h.state_mut().show_overlay(true);
+        h.run_steps(6);
+        let state = h.state();
+        assert_eq!(state.views.len(), 3, "old, new and the overlay");
+        for v in &state.views {
+            assert_eq!(state.session.watermark_key(v.id), Some("CONFIDENTIAL"), "{}", state.session.get(v.id).unwrap().name);
+        }
+        assert_eq!(saved(&h)[..2], before[..2], "no file takes it");
+    }
 }
