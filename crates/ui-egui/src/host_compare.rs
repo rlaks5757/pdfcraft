@@ -133,7 +133,7 @@ impl PdfCraftApp {
         for view in &self.views[before..] {
             self.session.set_hide_replies(view.id, true);
         }
-        self.compare = None;
+        self.end_compare();
         self.compare_old = Some(self.views[before].id);
         self.run_compare();
         let Some(s) = self.compare.as_ref() else { return Err("the comparison failed".into()) };
@@ -388,7 +388,7 @@ mod tests {
         assert!(s.overlay_shown && s.overlay_job.is_none() && !s.overlay_failed);
         let (doc, notice) = s.overlay.clone().expect("the overlay was built");
         assert_eq!(notice, None, "equal page counts need no note");
-        assert_eq!(h.state().views.len(), 3, "old, new and the overlay");
+        assert_eq!(h.state().views.len(), 2, "old and new: the overlay is no tab");
         let d = h.state().session.get(doc).unwrap();
         assert_eq!((d.name.as_str(), d.info.pages.len()), ("compare.pdf", 1));
         assert!(d.ownership().read_only, "looked at only");
@@ -398,7 +398,7 @@ mod tests {
         h.run_steps(3);
         h.state_mut().show_overlay(true);
         h.run_steps(3);
-        assert_eq!(h.state().views.len(), 3, "built once");
+        assert_eq!(h.state().views.len(), 2, "built once, still no tab");
         h.state_mut().show_overlay(false);
         h.run_steps(3);
         h.get_by_label("Side by side");
@@ -412,15 +412,42 @@ mod tests {
         let (doc, _) = h.state().compare.as_ref().unwrap().overlay.clone().expect("the overlay was built");
         let active = h.state().active.unwrap();
         assert_eq!(h.state().views[active].id, h.state().compare.as_ref().unwrap().new, "the compare tab is the new file's");
-        let pane = h.state().views.iter().position(|v| v.id == doc).unwrap();
+        let pane_ready = |h: &Harness<'static, PdfCraftApp>| h.state().compare.as_ref().unwrap().overlay_view.as_ref().is_some_and(|v| v.id == doc && v.has_page_textures());
         for _ in 0..200 {
-            if h.state().views[pane].has_page_textures() {
+            if pane_ready(&h) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
             h.run_steps(1);
         }
-        assert!(h.state().views[pane].has_page_textures(), "the overlay pane got a rendered page, not \"Rendering...\" for ever");
+        assert!(pane_ready(&h), "the overlay pane got a rendered page, not \"Rendering...\" for ever");
+    }
+
+    /// The overlay is a document and a view only for its pane: no tab, no tab to switch to.
+    #[test]
+    fn ppm_overlay_is_no_tab_and_leaves_with_the_comparison() {
+        let mut h = ppm_compared(1400.0);
+        let (tabs, active) = (h.state().views.len(), h.state().active);
+        h.state_mut().show_overlay(true);
+        h.run_steps(6);
+        let (doc, _) = h.state().compare.as_ref().unwrap().overlay.clone().expect("the overlay was built");
+        assert!(h.state().compare.as_ref().unwrap().overlay_view.is_some());
+        assert_eq!(h.state().views.len(), tabs, "no tab was added");
+        assert!(h.query_by_label_contains("compare.pdf").is_none(), "not on the tab strip");
+        assert!((0..h.state().views.len()).all(|i| crate::canvas::tab_label(h.state(), i).as_deref() != Some("compare.pdf")));
+        for _ in 0..4 {
+            h.state_mut().execute("view.next_tab");
+            h.run_steps(2);
+            let a = h.state().active.expect("a tab stays active");
+            assert!(a < tabs && h.state().views[a].id != doc, "next tab skips the overlay");
+        }
+        h.state_mut().execute("view.next_tab");
+        h.state_mut().active = active;
+        h.run_steps(2);
+        h.state_mut().compare_action(active.unwrap(), crate::compare_ui::PanelAction::Clear);
+        h.run_steps(2);
+        assert_eq!((h.state().views.len(), h.state().active), (tabs, active), "tabs and the active one are as before");
+        assert!(h.state().compare.is_none() && h.state().session.get(doc).is_none(), "the overlay document is closed");
     }
 
     #[test]
@@ -489,9 +516,10 @@ mod tests {
         h.state_mut().show_overlay(true);
         h.run_steps(6);
         let state = h.state();
-        assert_eq!(state.views.len(), 3, "old, new and the overlay");
-        for v in &state.views {
-            assert_eq!(state.session.watermark_key(v.id), Some("CONFIDENTIAL"), "{}", state.session.get(v.id).unwrap().name);
+        assert_eq!(state.views.len(), 2, "old and new; the overlay is no tab");
+        let (overlay, _) = state.compare.as_ref().unwrap().overlay.clone().unwrap();
+        for id in state.views.iter().map(|v| v.id).chain([overlay]) {
+            assert_eq!(state.session.watermark_key(id), Some("CONFIDENTIAL"), "{}", state.session.get(id).unwrap().name);
         }
         assert_eq!(saved(&h)[..2], before[..2], "no file takes it");
     }

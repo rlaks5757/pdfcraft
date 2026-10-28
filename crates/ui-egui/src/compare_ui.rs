@@ -32,6 +32,9 @@ pub struct CompareState {
     pub overlay_job: Option<pdfcraft_engine::compare::OverlayJob>,
     /// PPM: the overlay document (a background tab) and the note about unequal page counts.
     pub overlay: Option<(DocId, Option<String>)>,
+    /// PPM: the overlay's page view. It is no tab: the view is kept here and only stands in the
+    /// app's views for the moment the overlay pane is drawn or rendered (see [`with_overlay_view`]).
+    pub overlay_view: Option<crate::canvas::DocView>,
     /// PPM: the overlay couldn't be built.
     pub overlay_failed: bool,
 }
@@ -329,6 +332,7 @@ impl PdfCraftApp {
                 // Side by side when the old version is open in a tab and the window has the room.
                 // The PPM build always does, whatever the width (the viewer has no such limit).
                 let side_by_side = self.views.iter().any(|v| v.id == old) && (ppm || self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0));
+                self.end_compare();
                 self.compare = Some(crate::compare_ui::CompareState {
                     old,
                     new,
@@ -342,6 +346,7 @@ impl PdfCraftApp {
                     overlay_shown: false,
                     overlay_job: None,
                     overlay: None,
+                    overlay_view: None,
                     overlay_failed: false,
                 });
                 self.right = Some(RightPanel::Compare);
@@ -368,13 +373,14 @@ impl PdfCraftApp {
                 let page = ch.new.page;
                 let old_target = (ch.old.page, ch.old.rects.first().copied().or(ch.old.near).unwrap_or_default());
                 // The overlay has the pages only, so it goes to the page.
-                let overlay_doc = s.overlay.as_ref().filter(|_| s.overlay_shown).map(|(d, _)| *d);
+                if s.overlay_shown
+                    && let Some(v) = s.overlay_view.as_mut()
+                {
+                    v.go_to_page(page);
+                }
                 let v = &mut self.views[index];
                 v.go_to_page(page);
                 v.flash = Some((page, rect.map(|x| x as f32), 0.0));
-                if let Some(oi) = overlay_doc.and_then(|d| self.views.iter().position(|v| v.id == d)) {
-                    self.views[oi].go_to_page(page);
-                }
                 // The old file's half jumps to its side of the change too.
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
                     let v = &mut self.views[oi];
@@ -408,7 +414,7 @@ impl PdfCraftApp {
                 Err(e) => self.notify_error(e),
             },
             PanelAction::Clear => {
-                self.compare = None;
+                self.end_compare();
                 self.views[index].compare_marks.clear();
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
                     self.views[oi].compare_marks.clear();
@@ -490,7 +496,9 @@ impl PdfCraftApp {
             if self.views.len() != before + 1 {
                 return Err("couldn't open the overlay".to_string());
             }
-            let id = self.views[before].id;
+            // The overlay is no tab of the window: its view leaves the tab list at once.
+            let Some(view) = self.views.pop() else { return Err("couldn't open the overlay".to_string()) };
+            let id = view.id;
             self.session.set_hide_replies(id, true);
             let notice = (o.current_pages != o.chosen_pages).then(|| {
                 crate::i18n::fmt(
@@ -498,11 +506,14 @@ impl PdfCraftApp {
                     &[("n", &o.current_pages.min(o.chosen_pages).to_string()), ("a", &o.current_pages.to_string()), ("b", &o.chosen_pages.to_string())],
                 )
             });
-            Ok((id, notice))
+            Ok((id, notice, view))
         });
         if let Some(c) = self.compare.as_mut() {
             match outcome {
-                Ok(o) => c.overlay = Some(o),
+                Ok((id, notice, view)) => {
+                    c.overlay = Some((id, notice));
+                    c.overlay_view = Some(view);
+                }
                 Err(e) => {
                     c.overlay_failed = true;
                     self.notify_error(e);
@@ -564,13 +575,40 @@ pub(crate) fn side_by_side(app: &PdfCraftApp, index: usize) -> Option<(usize, us
     (old != index).then_some((old, app.views.iter().position(|v| v.id == new.id)?))
 }
 
-/// PPM: the view index of the overlay document while the overlay is shown over the active tab
-/// (the new file's); that pane renders its pages like the active view does.
-pub(crate) fn overlay_pane(app: &PdfCraftApp, index: usize) -> Option<usize> {
-    let c = app.compare.as_ref().filter(|c| c.ppm && c.overlay_shown)?;
-    app.views.get(index).filter(|v| v.id == c.new)?;
-    let (doc, _) = c.overlay.as_ref()?;
-    app.views.iter().position(|v| v.id == *doc)
+/// PPM: run `f` with the overlay's view standing in the app's views (last, so no tab index
+/// moves) and put it back after. The overlay is no tab: this is the only time its view is in the
+/// list, and `f` gets its index. None when there is no overlay view to show.
+pub(crate) fn with_overlay_view<R>(app: &mut PdfCraftApp, f: impl FnOnce(&mut PdfCraftApp, usize) -> R) -> Option<R> {
+    let view = app.compare.as_mut()?.overlay_view.take()?;
+    let id = view.id;
+    app.views.push(view);
+    let out = f(app, app.views.len() - 1);
+    // `f` leaves the views as it found them; look for the view anyway rather than trust that.
+    if let Some(at) = app.views.iter().rposition(|v| v.id == id) {
+        let view = app.views.remove(at);
+        if let Some(c) = app.compare.as_mut() {
+            c.overlay_view = Some(view);
+        }
+    }
+    Some(out)
+}
+
+/// PPM: whether the overlay is what the active tab (the compared file's) shows now.
+pub(crate) fn overlay_shown_over(app: &PdfCraftApp, index: usize) -> bool {
+    app.compare.as_ref().is_some_and(|c| c.ppm && c.overlay_shown && app.views.get(index).is_some_and(|v| v.id == c.new))
+}
+
+impl PdfCraftApp {
+    /// Drop the comparison. The PPM overlay document (kept only for its pane) is closed with it.
+    pub(crate) fn end_compare(&mut self) {
+        if let Some(c) = self.compare.take()
+            && let Some((id, _)) = c.overlay
+        {
+            drop(c.overlay_view);
+            self.forget_recovery(id);
+            self.session.close(id);
+        }
+    }
 }
 
 /// Side by side: the old file on the left, the new on the right, each a page view of its own
@@ -591,17 +629,11 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
         rect.min.y += ppm::STRIP_H;
         if let Some(c) = app.compare.as_ref().filter(|c| c.overlay_shown) {
             let body = rect;
-            let view = c.overlay.as_ref().and_then(|(d, _)| app.views.iter().position(|v| v.id == *d));
-            match view {
-                Some(index) => {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("compare-overlay"));
-                    child.set_clip_rect(body);
-                    crate::canvas::document_area(app, index, &mut child);
-                }
-                None if c.overlay_failed => {
-                    ui.put(body, egui::Label::new(egui::RichText::new(tl_ctx!(ppm::CTX, "Couldn't build the overlay.")).color(t.text_muted)));
-                }
-                None => {}
+            let failed = c.overlay_failed;
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("compare-overlay"));
+            child.set_clip_rect(body);
+            if with_overlay_view(app, |app, index| crate::canvas::document_area(app, index, &mut child)).is_none() && failed {
+                ui.put(body, egui::Label::new(egui::RichText::new(tl_ctx!(ppm::CTX, "Couldn't build the overlay.")).color(t.text_muted)));
             }
             return;
         }

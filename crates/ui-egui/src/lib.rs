@@ -2050,6 +2050,10 @@ impl PdfCraftApp {
         }
         self.forget_recovery(id);
         self.session.close(id);
+        // A comparison needs both its files; its overlay document goes with it.
+        if self.compare.as_ref().is_some_and(|c| c.old == id || c.new == id) {
+            self.end_compare();
+        }
         self.active = match self.active {
             _ if self.views.is_empty() => None,
             Some(a) if a > index => Some(a - 1),
@@ -3453,23 +3457,33 @@ impl PdfCraftApp {
         // three cache limits apply to the application, regardless of how many tabs are open.
         // Side by side: the comparison's old file renders alongside the active one.
         let partner = self.active.and_then(|i| compare_ui::side_by_side(self, i)).map(|(old, _)| old);
-        // The overlay pane drawn over the compared file's tab renders too.
-        let overlay = self.active.and_then(|i| compare_ui::overlay_pane(self, i));
         for (i, view) in self.views.iter_mut().enumerate() {
             if Some(i) != self.active
                 && Some(i) != partner
-                && Some(i) != overlay
                 && let Some(doc) = self.session.get(view.id)
             {
                 view.suspend_rendering(&doc.renderer);
             }
         }
-        for i in self.active.into_iter().chain(partner).chain(overlay) {
+        for i in self.active.into_iter().chain(partner) {
             if let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {
                 view.finish_render_frame(ctx, &doc.info, &doc.renderer);
             }
         }
+        // The overlay pane (no tab) renders while it is drawn over the compared file's tab and
+        // lets go of its textures otherwise, like a hidden tab.
+        let shown = self.active.is_some_and(|i| compare_ui::overlay_shown_over(self, i));
+        compare_ui::with_overlay_view(self, |app, index| {
+            let Some(view) = app.views.get_mut(index) else { return };
+            if let Some(doc) = app.session.get(view.id) {
+                if shown {
+                    view.finish_render_frame(ctx, &doc.info, &doc.renderer);
+                } else {
+                    view.suspend_rendering(&doc.renderer);
+                }
+            }
+        });
     }
 }

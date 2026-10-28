@@ -171,6 +171,13 @@ impl PdfCraftApp {
                 self.views[index].invalidate_content();
             }
         }
+        // The compare overlay is no tab but is drawn like one.
+        if let Some(view) = self.compare.as_mut().and_then(|c| c.overlay_view.as_mut())
+            && self.session.watermark_key(view.id) != key
+            && self.session.set_watermark(view.id, self.screen_watermark_outline.clone())
+        {
+            view.invalidate_content();
+        }
     }
 
     /// Once a frame: take the host's requests, report placements, and notice when the user left.
