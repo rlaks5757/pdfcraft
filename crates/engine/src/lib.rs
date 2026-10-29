@@ -386,8 +386,17 @@ struct Editor {
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh
     /// that may change annotations; see [`AppearanceCache`].
     appearances: AppearanceCache,
+    /// The page tree as opened ([`page_layout`]); [`Session::pages_changed`] compares with it.
+    opened_pages: Vec<(pdfcraft_cos::ObjRef, i64)>,
     /// The text blocks last computed for one page, reused while the document is unchanged.
     text_blocks: TextBlocksCache,
+}
+
+/// Each page's object and effective rotation in order: what a deleted, moved, inserted, copied,
+/// replaced or rotated page changes, and a comment's page number and place with it.
+fn page_layout(cos: &pdfcraft_cos::Document) -> Vec<(pdfcraft_cos::ObjRef, i64)> {
+    let rotation = |p: &pdfcraft_model::Page| p.dict.get(b"Rotate").and_then(|r| cos.resolve(r).as_f64()).map_or(0, |r| (r as i64).rem_euclid(360));
+    pdfcraft_model::pages(cos).iter().map(|p| (p.obj, rotation(p))).collect()
 }
 
 /// One page's text blocks ([`pdfcraft_edit::text_blocks`]) and the document state they were read
@@ -3761,6 +3770,7 @@ impl Session {
                 let saved = cos.bytes().clone();
                 (
                     Some(Editor {
+                        opened_pages: page_layout(&cos),
                         cos,
                         saved,
                         saved_keys: keys.clone(),
@@ -4312,6 +4322,14 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         Ok(())
+    }
+
+    /// Whether the pages differ from the file as opened: one was deleted, moved, inserted, copied,
+    /// replaced or rotated, and not put back. Saving does not reset it, so it stays true until
+    /// the file is opened again. Comments kept elsewhere by page number no longer match then.
+    pub fn pages_changed(&self, id: DocId) -> bool {
+        let Some(editor) = self.get(id).and_then(|d| d.editor.as_ref()) else { return false };
+        page_layout(&editor.cos) != editor.opened_pages
     }
 
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,

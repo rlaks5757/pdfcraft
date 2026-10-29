@@ -720,7 +720,7 @@ impl PdfCraftApp {
             // the browser downloads them.
             let to_host = self.host_save.is_some();
             let delivered = match &self.host_save {
-                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
+                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As), self.session.pages_changed(id)),
                 None => download(&["file.save_as"], &name, &bytes),
             };
             match delivered {

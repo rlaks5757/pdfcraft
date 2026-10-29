@@ -179,8 +179,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 ///   after the user applies, undoes or redoes an edit: the difference, by `/NM`, of the annotations
 ///   the `actor` owns (`seq` counts the messages from 1 for each document opened; `page` counts from 1 like the server's, `type` is the annotation's subject or XFDF tag, at most 100 characters). Stamps count too.
 ///   `pdfcraft:annots-selected` `{ annotId | null }` when the selection on the canvas changes.
-/// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
-///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
+/// - `pdfcraft:save` (to the parent): `{ name, saveAs, pagesChanged, bytes }` when the user saves;
+///   `bytes` is a transferred `ArrayBuffer`. `pagesChanged` is `true` when the pages differ from
+///   the file as `pdfcraft:open` gave it (a page was deleted, moved, inserted, copied, replaced or
+///   rotated and not put back; saving doesn't reset it), so comments the parent keeps by page
+///   number may no longer fit. The parent stores the file (and reports its own errors).
 /// - `pdfcraft:stamp-add` (from the parent): `{ id, name, bytes, width, height, meta }` arms one
 ///   placement of a PNG stamp, `width` and `height` in PDF points, `meta` the text stored as the
 ///   stamp's `/PpmStamp`. `pdfcraft:stamp-cancel` `{ id }` withdraws it.
@@ -464,11 +467,16 @@ mod host {
 
         pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
             let bridge = self.clone();
-            Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+            Box::new(move |name: &str, bytes: &[u8], save_as: bool, pages_changed: bool| {
                 let buffer = js_sys::Uint8Array::from(bytes).buffer();
-                let m =
-                    message(&[("type", "pdfcraft:save".into()), ("name", name.into()), ("saveAs", save_as.into()), ("bytes", buffer.clone().into())])
-                        .ok_or_else(|| "couldn't build the message".to_string())?;
+                let m = message(&[
+                    ("type", "pdfcraft:save".into()),
+                    ("name", name.into()),
+                    ("saveAs", save_as.into()),
+                    ("pagesChanged", pages_changed.into()),
+                    ("bytes", buffer.clone().into()),
+                ])
+                .ok_or_else(|| "couldn't build the message".to_string())?;
                 bridge.post(&m, Some(&buffer))
             })
         }
