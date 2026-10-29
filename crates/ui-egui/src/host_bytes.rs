@@ -203,4 +203,47 @@ mod tests {
         ask(&mut h, "v", BytesPurpose::Save);
         assert!(matches!(&replies.borrow()[0], BytesReply::Bytes { pages_changed: false, .. }));
     }
+
+    /// What `pdfcraft:save` carries as `pagesChanged` after `edit`s on a builder's document.
+    fn save_flag(edits: &[Edit]) -> Vec<bool> {
+        let flags: Rc<RefCell<Vec<bool>>> = Rc::default();
+        let sink = flags.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.session.set_open_ownership(Ownership { scope: EditScope::All, ..Default::default() });
+            app.open_bytes("a.pdf", None, pdf()).unwrap();
+            app.host_save = Some(Box::new(move |_, _, _, changed| {
+                sink.borrow_mut().push(changed);
+                Ok(())
+            }));
+            app
+        });
+        h.run_steps(3);
+        for e in edits {
+            assert!(h.state_mut().apply_edit(e.clone()));
+        }
+        let (_, id) = h.state().active_ids().unwrap();
+        let bytes = h.state().session.save_bytes(id).unwrap();
+        assert_eq!(h.state().deliver_to_host(id, "a.pdf", &bytes, false), Some(Ok(())));
+        let flags = flags.borrow().clone();
+        flags
+    }
+
+    #[test]
+    fn pdfcraft_save_carries_pages_changed() {
+        let rotate = Edit::RotatePages { pages: vec![0], degrees: 90 };
+        let back = Edit::RotatePages { pages: vec![0], degrees: 270 };
+        assert_eq!(save_flag(&[]), [false]);
+        assert_eq!(save_flag(std::slice::from_ref(&rotate)), [true], "rotated");
+        assert_eq!(save_flag(&[Edit::DeletePages { pages: vec![0] }]), [true], "deleted");
+        assert_eq!(save_flag(&[rotate, back]), [false], "put back as it was");
+        let comment = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            shape: pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 60.0, 60.0] },
+            style: pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: None },
+            contents: "note".into(),
+            author: "A".into(),
+        });
+        assert_eq!(save_flag(&[comment]), [false], "a comment is no page change");
+    }
 }

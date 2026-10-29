@@ -654,6 +654,14 @@ impl PdfCraftApp {
             || v.line_editor.as_ref().map_or_else(|| false, |ed| ed.has_unsaved_text())
     }
 
+    /// Hands saved bytes to the embedding page with whether the pages differ from the file as
+    /// opened; `None` when no page asked for saves.
+    // Called by the web build's save and by tests.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn deliver_to_host(&self, id: pdfcraft_engine::DocId, name: &str, bytes: &[u8], save_as: bool) -> Option<Result<(), String>> {
+        self.host_save.as_ref().map(|save| save(name, bytes, save_as, self.session.pages_changed(id)))
+    }
+
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
         if self.active_shares_annotations() {
@@ -719,8 +727,8 @@ impl PdfCraftApp {
             // An embedding page that asked for saves (`?host=parent`) gets the bytes; otherwise
             // the browser downloads them.
             let to_host = self.host_save.is_some();
-            let delivered = match &self.host_save {
-                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As), self.session.pages_changed(id)),
+            let delivered = match self.deliver_to_host(id, &name, &bytes, matches!(target, SaveTarget::As)) {
+                Some(result) => result,
                 None => download(&["file.save_as"], &name, &bytes),
             };
             match delivered {
