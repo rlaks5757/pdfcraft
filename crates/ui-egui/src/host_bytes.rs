@@ -103,7 +103,9 @@ impl PdfCraftApp {
                 return failed("the document can't be changed");
             }
         }
-        let bytes = match self.session.save_bytes(doc) {
+        // Only a save is kept by the host; a check or preview leaves the document as it is.
+        let saved = if purpose == BytesPurpose::Save { self.save_bytes_for_host(doc) } else { self.session.save_bytes(doc) };
+        let bytes = match saved {
             Ok(b) => b,
             Err(e) => return failed(&e.to_string()),
         };
@@ -148,13 +150,17 @@ mod tests {
     type Replies = Rc<RefCell<Vec<BytesReply>>>;
 
     fn app(scope: EditScope, with_doc: bool) -> (Harness<'static, PdfCraftApp>, Replies) {
+        app_with(scope, with_doc.then(pdf))
+    }
+
+    fn app_with(scope: EditScope, doc: Option<Vec<u8>>) -> (Harness<'static, PdfCraftApp>, Replies) {
         let replies: Replies = Rc::default();
         let sink = replies.clone();
         let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_| {
             let mut app = PdfCraftApp::new();
             app.session.set_open_ownership(Ownership { scope, ..Default::default() });
-            if with_doc {
-                app.open_bytes("a.pdf", None, pdf()).unwrap();
+            if let Some(bytes) = doc.clone() {
+                app.open_bytes("a.pdf", None, bytes).unwrap();
             }
             app.host_bytes = Some(Box::new(move |r| {
                 sink.borrow_mut().push(r.clone());
@@ -311,5 +317,58 @@ mod tests {
         assert!(h.state_mut().apply_edit(crop));
         ask(&mut h, "c", BytesPurpose::Check);
         assert!(matches!(&replies.borrow()[0], BytesReply::Bytes { pages_changed: true, .. }));
+    }
+
+    /// One page with two comments that have no `/NM`.
+    fn pdf_with_unnamed_comments() -> Vec<u8> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Square /Rect [10 10 60 60] /C [1 0 0] /F 4 >>",
+            "<< /Type /Annot /Subtype /Square /Rect [70 10 120 60] /C [0 0 1] /F 4 >>",
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        out
+    }
+
+    /// The `/NM` values of the bytes in a reply.
+    fn names_in(reply: &BytesReply) -> Vec<String> {
+        let BytesReply::Bytes { bytes, .. } = reply else { panic!("not bytes") };
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        text.split("/NM (").skip(1).filter_map(|t| t.split(')').next()).map(String::from).collect()
+    }
+
+    #[test]
+    fn a_builder_save_names_unnamed_comments_but_a_viewer_save_and_a_check_do_not() {
+        let (mut h, replies) = app_with(EditScope::All, Some(pdf_with_unnamed_comments()));
+        ask(&mut h, "c", BytesPurpose::Check);
+        ask(&mut h, "p", BytesPurpose::Preview);
+        ask(&mut h, "s1", BytesPurpose::Save);
+        ask(&mut h, "s2", BytesPurpose::Save);
+        let r = replies.borrow();
+        assert!(names_in(&r[0]).is_empty() && names_in(&r[1]).is_empty(), "a check or preview leaves the document as it is");
+        let first = names_in(&r[2]);
+        assert_eq!(first.len(), 2);
+        assert_ne!(first[0], first[1]);
+        assert_eq!(names_in(&r[3]), first, "stored: the next save repeats them");
+        assert!(matches!(&r[2], BytesReply::Bytes { pages_changed: false, .. }), "naming is no page change");
+        drop(r);
+        let (_, doc) = h.state().active_ids().unwrap();
+        assert!(!h.state().session.get(doc).unwrap().dirty);
+        let (mut h, replies) = app_with(EditScope::Viewer, Some(pdf_with_unnamed_comments()));
+        ask(&mut h, "v", BytesPurpose::Save);
+        assert!(names_in(&replies.borrow()[0]).is_empty(), "a viewer's comments are left alone");
     }
 }

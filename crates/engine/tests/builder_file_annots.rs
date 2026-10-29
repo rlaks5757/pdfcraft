@@ -154,3 +154,53 @@ fn pages_changed_tells_a_page_structure_change_from_a_comment_edit() {
     s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     assert!(s.pages_changed(id));
 }
+
+/// One page: Square "keep" with a name, Text and its reply (IRT) without one, and a Popup.
+fn unnamed_sample() -> Arc<Vec<u8>> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [200 200 300 260] /C [1 0 0] /NM (keep) /F 4 >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] /Contents (note) /Name /Comment /F 4 >>",
+        "<< /Type /Annot /Subtype /Text /Rect [100 700 120 720] /Contents (reply) /IRT 5 0 R /RT /R /F 4 /Name /Comment >>",
+        "<< /Type /Annot /Subtype /Popup /Rect [300 700 400 760] /Parent 5 0 R >>",
+    ];
+    let mut out = String::from("%PDF-1.7\n");
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out += &format!("{} 0 obj\n{o}\nendobj\n", i + 1);
+    }
+    let xref = out.len();
+    out += &format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1);
+    for o in &offs {
+        out += &format!("{o:010} 00000 n \n");
+    }
+    out += &format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1);
+    Arc::new(out.into_bytes())
+}
+
+#[test]
+fn a_builder_save_names_the_unnamed_comments_once_and_changes_nothing_else() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    s.set_open_ownership(Ownership { actor: None, scope: EditScope::All, ..Default::default() });
+    let id = s.open("a.pdf", None, unnamed_sample(), None).expect("opens");
+    // The plain save leaves them as they are.
+    assert_eq!(names(&s, id), ["1:Square:keep", "1:Text:-", "1:Text:-", "1:Popup:-"]);
+    let first = s.save_bytes_named(id).unwrap();
+    let listed: Vec<_> = list_annotations(&Document::open(first.clone()).unwrap()).into_iter().map(|e| (e.subtype, e.nm, e.irt)).collect();
+    assert_eq!(listed[0].1.as_deref(), Some("keep"), "a name it has stays");
+    let (note, reply) = (listed[1].1.clone().expect("named"), listed[2].1.clone().expect("named"));
+    assert!(note != reply && note != "keep" && reply != "keep", "{note} {reply}");
+    assert_eq!(listed[2].2, Some((0, 1)), "the reply still points at its comment");
+    assert_eq!(listed[3].1, None, "a popup is no comment of its own");
+    // Not an edit: nothing unsaved, no page change, and the working document is untouched.
+    assert!(!s.get(id).unwrap().dirty && !s.pages_changed(id));
+    assert_eq!(names(&s, id), ["1:Square:keep", "1:Text:-", "1:Text:-", "1:Popup:-"]);
+    // Once stored the names are the file's own: the next save repeats them.
+    s.mark_saved(id, first, None).unwrap();
+    let second = s.save_bytes_named(id).unwrap();
+    let again: Vec<_> = list_annotations(&Document::open(second).unwrap()).into_iter().map(|e| e.nm).collect();
+    assert_eq!(again, [Some("keep".into()), Some(note), Some(reply), None]);
+}

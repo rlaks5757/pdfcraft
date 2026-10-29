@@ -668,6 +668,16 @@ impl PdfCraftApp {
         self.session.get(id).is_some_and(|d| d.ownership().scope == pdfcraft_engine::EditScope::All) && self.session.pages_changed(id)
     }
 
+    /// The bytes of a save handed to the host. A builder's document gets an `/NM` on every comment
+    /// that has none (the host keeps comments by it); a viewer's stays exactly as it is.
+    pub(crate) fn save_bytes_for_host(&self, id: pdfcraft_engine::DocId) -> Result<std::sync::Arc<Vec<u8>>, pdfcraft_engine::EditError> {
+        if self.session.get(id).is_some_and(|d| d.ownership().scope == pdfcraft_engine::EditScope::All) {
+            self.session.save_bytes_named(id)
+        } else {
+            self.session.save_bytes(id)
+        }
+    }
+
     /// Save the active document. Returns `true` if it was written.
     pub fn save_active(&mut self, target: SaveTarget) -> bool {
         if self.active_shares_annotations() {
@@ -723,7 +733,8 @@ impl PdfCraftApp {
             if !self.flatten_fill_sign_for_save(id) {
                 return false;
             }
-            let bytes = match self.session.save_bytes(id) {
+            let saved = if self.host_save.is_some() { self.save_bytes_for_host(id) } else { self.session.save_bytes(id) };
+            let bytes = match saved {
                 Ok(b) => b,
                 Err(e) => {
                     self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
