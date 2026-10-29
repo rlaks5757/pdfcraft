@@ -141,9 +141,16 @@ fn pages_changed_tells_a_page_structure_change_from_a_comment_edit() {
         s.undo(id).unwrap();
         assert!(!s.pages_changed(id), "{label} undone");
     }
-    // Saving does not reset it: the parent's comments still go by the file as opened.
+    // A crop shows another area: comments by place no longer fit either.
+    let crop = Edit::SetPageBox { pages: vec![0], which: pdfcraft_engine::PageBox::Crop, spec: pdfcraft_engine::BoxSpec::Margins([10.0, 10.0, 10.0, 10.0]) };
+    s.apply(id, crop).unwrap();
+    assert!(s.pages_changed(id), "crop");
+    // Stored, the pages are measured from that file: false until they change again.
     s.apply(id, Edit::DeletePages { pages: vec![2] }).unwrap();
+    assert!(s.pages_changed(id));
     let bytes = s.save_bytes(id).unwrap();
     s.mark_saved(id, bytes, None).unwrap();
+    assert!(!s.pages_changed(id));
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
     assert!(s.pages_changed(id));
 }

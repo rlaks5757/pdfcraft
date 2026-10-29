@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use pdfcraft_engine::{DocId, EditScope};
+use pdfcraft_engine::DocId;
 
 use crate::PdfCraftApp;
 
@@ -51,7 +51,7 @@ pub type BytesInbox = Arc<std::sync::Mutex<Vec<BytesRequest>>>;
 pub enum BytesReply {
     /// `pages_changed` is only ever `true` for a builder's document (see `Session::pages_changed`).
     Bytes { id: String, purpose: BytesPurpose, name: String, bytes: Arc<Vec<u8>>, pages_changed: bool },
-    /// `reason`: `not-ready` (no document is open), `edit-pending` or an error text.
+    /// `reason`: `not-ready` (no document is open), `edit-pending`, `saving is not allowed` or an error text.
     Failed { id: String, purpose: BytesPurpose, reason: String },
 }
 
@@ -90,6 +90,11 @@ impl PdfCraftApp {
         let failed = |reason: &str| (BytesReply::Failed { id: id.clone(), purpose, reason: reason.to_string() }, None);
         let Some((_, doc)) = self.active_ids() else { return failed("not-ready") };
         if purpose == BytesPurpose::Save {
+            // Save in here refuses these too: the page keeps the annotations itself, or the host
+            // turned saving off. Nothing is marked saved then.
+            if self.active_shares_annotations() || !self.host_allows("file.save") {
+                return failed("saving is not allowed");
+            }
             // What is typed in a field is saved with the document, as for Save in here.
             if !self.commit_typing_in(doc) {
                 return failed("edit-pending");
@@ -103,7 +108,7 @@ impl PdfCraftApp {
             Err(e) => return failed(&e.to_string()),
         };
         let Some(d) = self.session.get(doc) else { return failed("not-ready") };
-        let pages_changed = d.ownership().scope == EditScope::All && self.session.pages_changed(doc);
+        let pages_changed = self.pages_changed_for_host(doc);
         let reply = BytesReply::Bytes { id: id.clone(), purpose, name: d.name.clone(), bytes: bytes.clone(), pages_changed };
         (reply, (purpose == BytesPurpose::Save).then_some((doc, bytes)))
     }
@@ -113,7 +118,7 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use egui_kittest::Harness;
-    use pdfcraft_engine::{Edit, Ownership};
+    use pdfcraft_engine::{Edit, EditScope, Ownership};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -179,9 +184,9 @@ mod tests {
         ask(&mut h, "r2", BytesPurpose::Save);
         assert!(matches!(&replies.borrow()[1], BytesReply::Bytes { id, pages_changed: true, .. } if id == "r2"));
         assert!(!h.state().session.get(doc).unwrap().dirty, "a delivered save counts as saved");
-        // It stays true after the save: the page's comments still go by the file as opened.
+        // Stored: the pages are now measured from that file.
         ask(&mut h, "r3", BytesPurpose::Check);
-        assert!(matches!(&replies.borrow()[2], BytesReply::Bytes { purpose: BytesPurpose::Check, pages_changed: true, .. }));
+        assert!(matches!(&replies.borrow()[2], BytesReply::Bytes { purpose: BytesPurpose::Check, pages_changed: false, .. }));
     }
 
     #[test]
@@ -245,5 +250,66 @@ mod tests {
             author: "A".into(),
         });
         assert_eq!(save_flag(&[comment]), [false], "a comment is no page change");
+    }
+
+    #[test]
+    fn a_save_request_is_refused_where_save_is_and_marks_nothing_saved() {
+        // The page keeps the annotations (annotSync): the file isn't saved from here.
+        let replies: Replies = Rc::default();
+        let sink = replies.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.session.set_open_ownership(Ownership { actor: Some("u".into()), annot_sync: true, scope: EditScope::All, ..Default::default() });
+            app.open_bytes("a.pdf", None, pdf()).unwrap();
+            app.host_bytes = Some(Box::new(move |r| {
+                sink.borrow_mut().push(r.clone());
+                Ok(())
+            }));
+            app.host_save = Some(Box::new(|_, _, _, _| Ok(())));
+            app
+        });
+        h.run_steps(3);
+        assert!(h.state().active_shares_annotations());
+        h.state_mut().session.set_open_ownership(Ownership::default());
+        ask(&mut h, "s", BytesPurpose::Save);
+        assert!(matches!(&replies.borrow()[0], BytesReply::Failed { reason, .. } if reason == "saving is not allowed"));
+        // The host turned file.save off for this document.
+        let (mut h, replies) = app(EditScope::All, true);
+        h.state_mut().host_lock = true;
+        let (_, doc2) = h.state().active_ids().unwrap();
+        assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        let own = Ownership { scope: EditScope::All, overrides: vec![("file.save".into(), false)], ..Default::default() };
+        h.state_mut().session.set_ownership(own);
+        ask(&mut h, "t", BytesPurpose::Save);
+        assert!(matches!(&replies.borrow()[0], BytesReply::Failed { reason, .. } if reason == "saving is not allowed"));
+        assert!(h.state().session.get(doc2).unwrap().dirty, "refused: not marked saved");
+    }
+
+    #[test]
+    fn pages_changed_is_measured_from_the_last_delivered_save() {
+        let (mut h, replies) = app(EditScope::All, true);
+        let rotate = |degrees| Edit::RotatePages { pages: vec![0], degrees };
+        assert!(h.state_mut().apply_edit(rotate(90)));
+        ask(&mut h, "1", BytesPurpose::Save);
+        // Stored: with no page change since, the next save is false.
+        ask(&mut h, "2", BytesPurpose::Save);
+        // Rotated again after the store: true again, though the file as opened differs from it too.
+        assert!(h.state_mut().apply_edit(rotate(270)));
+        ask(&mut h, "3", BytesPurpose::Save);
+        // A check does not store anything.
+        assert!(h.state_mut().apply_edit(rotate(90)));
+        ask(&mut h, "4", BytesPurpose::Check);
+        ask(&mut h, "5", BytesPurpose::Check);
+        let flags: Vec<bool> = replies.borrow().iter().map(|r| matches!(r, BytesReply::Bytes { pages_changed: true, .. })).collect();
+        assert_eq!(flags, [true, false, true, true, true]);
+    }
+
+    #[test]
+    fn cropping_a_page_counts_as_a_page_change() {
+        let (mut h, replies) = app(EditScope::All, true);
+        let crop = Edit::SetPageBox { pages: vec![0], which: pdfcraft_engine::PageBox::Crop, spec: pdfcraft_engine::BoxSpec::Margins([10.0, 20.0, 30.0, 40.0]) };
+        assert!(h.state_mut().apply_edit(crop));
+        ask(&mut h, "c", BytesPurpose::Check);
+        assert!(matches!(&replies.borrow()[0], BytesReply::Bytes { pages_changed: true, .. }));
     }
 }

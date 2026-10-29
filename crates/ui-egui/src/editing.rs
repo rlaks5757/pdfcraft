@@ -659,7 +659,13 @@ impl PdfCraftApp {
     // Called by the web build's save and by tests.
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn deliver_to_host(&self, id: pdfcraft_engine::DocId, name: &str, bytes: &[u8], save_as: bool) -> Option<Result<(), String>> {
-        self.host_save.as_ref().map(|save| save(name, bytes, save_as, self.session.pages_changed(id)))
+        self.host_save.as_ref().map(|save| save(name, bytes, save_as, self.pages_changed_for_host(id)))
+    }
+
+    /// The `pagesChanged` the host is told: only a builder's document reports it (a viewer's pages
+    /// stay as they are), for both `pdfcraft:save` and `pdfcraft:bytes`.
+    pub(crate) fn pages_changed_for_host(&self, id: pdfcraft_engine::DocId) -> bool {
+        self.session.get(id).is_some_and(|d| d.ownership().scope == pdfcraft_engine::EditScope::All) && self.session.pages_changed(id)
     }
 
     /// Save the active document. Returns `true` if it was written.

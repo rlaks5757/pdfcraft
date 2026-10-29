@@ -386,17 +386,27 @@ struct Editor {
     /// runs (content edits leave every annotation dictionary alone). Cleared on any refresh
     /// that may change annotations; see [`AppearanceCache`].
     appearances: AppearanceCache,
-    /// The page tree as opened ([`page_layout`]); [`Session::pages_changed`] compares with it.
-    opened_pages: Vec<(pdfcraft_cos::ObjRef, i64)>,
+    /// The page tree as opened or last stored ([`page_layout`], reset by [`Session::mark_saved`]);
+    /// [`Session::pages_changed`] compares with it.
+    stored_pages: Vec<PageLayout>,
     /// The text blocks last computed for one page, reused while the document is unchanged.
     text_blocks: TextBlocksCache,
 }
 
-/// Each page's object and effective rotation in order: what a deleted, moved, inserted, copied,
-/// replaced or rotated page changes, and a comment's page number and place with it.
-fn page_layout(cos: &pdfcraft_cos::Document) -> Vec<(pdfcraft_cos::ObjRef, i64)> {
+/// A page as far as comments kept by page number care: which page it is, how it is turned and
+/// the area that shows (crop box clipped to the media box).
+#[derive(Clone, Debug, PartialEq)]
+struct PageLayout {
+    obj: pdfcraft_cos::ObjRef,
+    rotation: i64,
+    visible: [f64; 4],
+}
+
+/// Every page in order: what a deleted, moved, inserted, copied, replaced, rotated or cropped page
+/// changes, and a comment's page number and place with it.
+fn page_layout(cos: &pdfcraft_cos::Document) -> Vec<PageLayout> {
     let rotation = |p: &pdfcraft_model::Page| p.dict.get(b"Rotate").and_then(|r| cos.resolve(r).as_f64()).map_or(0, |r| (r as i64).rem_euclid(360));
-    pdfcraft_model::pages(cos).iter().map(|p| (p.obj, rotation(p))).collect()
+    pdfcraft_model::pages(cos).iter().map(|p| PageLayout { obj: p.obj, rotation: rotation(p), visible: p.crop(cos) }).collect()
 }
 
 /// One page's text blocks ([`pdfcraft_edit::text_blocks`]) and the document state they were read
@@ -3770,7 +3780,7 @@ impl Session {
                 let saved = cos.bytes().clone();
                 (
                     Some(Editor {
-                        opened_pages: page_layout(&cos),
+                        stored_pages: page_layout(&cos),
                         cos,
                         saved,
                         saved_keys: keys.clone(),
@@ -4324,12 +4334,12 @@ impl Session {
         Ok(())
     }
 
-    /// Whether the pages differ from the file as opened: one was deleted, moved, inserted, copied,
-    /// replaced or rotated, and not put back. Saving does not reset it, so it stays true until
-    /// the file is opened again. Comments kept elsewhere by page number no longer match then.
+    /// Whether the pages differ from the file as opened or as last stored ([`Self::mark_saved`]):
+    /// one was deleted, moved, inserted, copied, replaced, rotated or cropped, and not put back.
+    /// Comments kept elsewhere by page number no longer match then.
     pub fn pages_changed(&self, id: DocId) -> bool {
         let Some(editor) = self.get(id).and_then(|d| d.editor.as_ref()) else { return false };
-        page_layout(&editor.cos) != editor.opened_pages
+        page_layout(&editor.cos) != editor.stored_pages
     }
 
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
@@ -4399,6 +4409,8 @@ impl Session {
             editor.saved = bytes;
             editor.saved_keys = keys;
             editor.unsaved_file = false;
+            // What was stored is the new reference for the pages.
+            editor.stored_pages = page_layout(&editor.cos);
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
